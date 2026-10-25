@@ -24,7 +24,6 @@ use crate::herdr::{
 };
 use crate::herdr_notifications::post_herdr_lazycat_notification;
 use crate::lightos::{self, AdminInfo};
-use crate::lightos_admin;
 use crate::notifications::{get_notifications, post_notification_dismiss, post_notification_read};
 use crate::plugin::http::pomodoro::{
     get_pomodoro_state, post_notification_action, post_pomodoro_dismiss, post_pomodoro_start,
@@ -69,6 +68,9 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .route("/fonts/{*path}", get(frontend_font))
         .route("/sounds/{*path}", get(sound_file))
         .route("/api/instances", get(list_instances))
+        .route("/api/catflap/{app}/instances/{vm}/sessions", post(crate::catflap_terminal::create).layer(DefaultBodyLimit::max(1024)))
+        .route("/api/catflap/{app}/sessions/{session}", delete(crate::catflap_terminal::close))
+        .route("/api/catflap/{app}/sessions/{session}/ws", get(crate::catflap_terminal::attach))
         .route("/api/runtime", get(runtime_info))
         .route("/api/agent/update", get(crate::agent_updates::get_update).post(crate::agent_updates::post_update))
         .route("/api/sounds", get(list_sounds))
@@ -222,16 +224,35 @@ async fn lightos_admin_info() -> Result<Json<AdminInfo>, (StatusCode, String)> {
 async fn list_instances(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-) -> Result<Json<Vec<Instance>>, (StatusCode, String)> {
-    let mut instances = if lightos_features_enabled() {
-        lightos_admin::list_visible_instances(&headers)
+) -> Result<(HeaderMap, Json<Vec<Instance>>), (StatusCode, String)> {
+    let discovery = if lightos_features_enabled() {
+        crate::instance_discovery::discover(&headers)
             .await
             .map_err(|error| (error.status, error.message))?
     } else {
-        Vec::new()
+        crate::instance_discovery::Discovery::default()
     };
+    let mut response_headers = HeaderMap::new();
+    if !discovery.warnings.is_empty() {
+        let warnings = serde_json::to_string(&discovery.warnings).map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid discovery warnings".to_owned(),
+            )
+        })?;
+        response_headers.insert(
+            "x-neko-discovery-warnings",
+            warnings.parse().map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "invalid discovery warnings".to_owned(),
+                )
+            })?,
+        );
+    }
+    let mut instances = discovery.instances;
     let mut ssh_instances = list_profile_instances(&state.database())
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
     instances.append(&mut ssh_instances);
-    Ok(Json(instances))
+    Ok((response_headers, Json(instances)))
 }

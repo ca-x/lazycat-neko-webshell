@@ -22,6 +22,7 @@ service CapabilityService {
 message ListInstancesRequest {}
 
 message ListInstancesResponse {
+  repeated string discovery_warnings = 2;
   repeated Instance instances = 1;
 }
 
@@ -33,6 +34,11 @@ message Instance {
   InstanceKind kind = 5;
   string platform = 6;
   string owner_user_id = 7;
+  repeated string sources = 8;
+  string username = 9;
+  string target_id = 10;
+  bool terminal_available = 11;
+  string provider_app_id = 12;
 }
 
 enum InstanceKind {
@@ -40,6 +46,7 @@ enum InstanceKind {
   INSTANCE_KIND_LIGHTOS = 1;
   INSTANCE_KIND_REMOTE_CLIENT = 2;
   INSTANCE_KIND_SSH = 3;
+  INSTANCE_KIND_SMOLVM = 4;
 }
 
 message GetProviderRequest {}

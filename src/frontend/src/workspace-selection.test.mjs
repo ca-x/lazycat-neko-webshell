@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  instanceSelector,
+  isRunningInstance,
   forgetRememberedWorkspace,
   lastTabStorageKey,
   rememberSelector,
@@ -39,4 +41,10 @@ test("clears selection only when the selected workspace is empty and no tab rema
   assert.equal(shouldClearWorkspaceSelection("client:pc", "client:pc", 1, false), false);
   assert.equal(shouldClearWorkspaceSelection("client:pc", "client:other", 0, false), false);
   assert.equal(shouldClearWorkspaceSelection("client:pc", "client:pc", 0, true), false);
+});
+
+test("MicroVM identities cannot become selectors or auto-selected terminal targets", () => {
+  const vm = { kind: 4, status: "running", targetId: "12345678-1234-4234-8234-123456789abc", selector: "forged@owner", terminalAvailable: true };
+  assert.equal(instanceSelector(vm), "");
+  assert.equal(isRunningInstance(vm), false);
 });

@@ -173,18 +173,20 @@ impl CapabilityService for CapabilityServiceImpl {
         ctx: RequestContext,
         _request: ServiceRequest<'_, ListInstancesRequest>,
     ) -> ServiceResult<ListInstancesResponse> {
-        let mut instances = if lightos_features_enabled() {
-            lightos_admin::list_visible_instances(ctx.headers())
+        let discovery = if lightos_features_enabled() {
+            crate::instance_discovery::discover(ctx.headers())
                 .await
                 .map_err(lightos_admin_connect_error)?
         } else {
-            Vec::new()
+            crate::instance_discovery::Discovery::default()
         };
+        let mut instances = discovery.instances;
         let mut ssh_instances = ssh_backend::list_profile_instances(&self.state.database())
             .map_err(|err| ConnectError::internal(err.to_string()))?;
         instances.append(&mut ssh_instances);
         ConnectResponse::ok(ListInstancesResponse {
             instances,
+            discovery_warnings: discovery.warnings,
             ..Default::default()
         })
     }

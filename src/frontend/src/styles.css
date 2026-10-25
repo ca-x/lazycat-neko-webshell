@@ -4757,3 +4757,10 @@ output {
     animation: none;
   }
 }
+
+.instance-source-dots { display: inline-flex; gap: 3px; margin-inline-end: 6px; vertical-align: middle; }
+.instance-source-dots:empty { display: none; }
+.instance-source-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.instance-source-lightos { background: #60a5fa; }
+.instance-source-catflap { background: #fb923c; }
+.instance-discovery-warning { padding: 8px; font-size: 12px; overflow-wrap: anywhere; color: var(--muted); }

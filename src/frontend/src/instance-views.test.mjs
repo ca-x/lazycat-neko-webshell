@@ -40,3 +40,12 @@ test("presents remote platform metadata and keeps offline devices disabled", () 
     running: false,
   });
 });
+
+test("MicroVM has its own group and cannot connect through an existing terminal transport", () => {
+  const vm = instance({ selector: "", ownerDeployId: "", kind: 4, targetId: "12345678-1234-4234-8234-123456789abc", terminalAvailable: false });
+  assert.deepEqual(groupInstances([vm, instance()]).map((group) => group.id), ["lightos", "smolvm"]);
+  assert.equal(instanceRowPresentation(vm).running, false);
+  assert.equal(instanceRowPresentation({ ...vm, selector: "forged@owner", terminalAvailable: true }).running, false);
+  assert.equal(instanceRowPresentation(instance({ terminalAvailable: false })).running, false);
+  assert.equal(instanceRowPresentation(instance()).running, true);
+});

@@ -1,0 +1,12 @@
+.microvm-terminal-dialog { width: min(1000px, calc(100vw - 32px)); height: min(740px, calc(100dvh - 32px)); max-width: none; max-height: none; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-lg, 12px); background: var(--surface); color: var(--text); overflow: hidden; }
+.microvm-terminal-dialog[open] { display: flex; flex-direction: column; }
+.microvm-terminal-dialog::backdrop { background: var(--overlay-scrim, #0008); }
+.microvm-terminal-dialog > header, .microvm-terminal-dialog > footer { padding: 10px 14px; display: flex; gap: 12px; align-items: center; justify-content: space-between; flex: none; }
+.microvm-terminal-dialog > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.microvm-terminal-dialog > footer { border-top: 1px solid var(--line); flex-wrap: wrap; font-size: 12px; }
+.microvm-terminal-dialog > footer > div { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.microvm-terminal-dialog [role="status"] { overflow-wrap: anywhere; }
+.microvm-terminal-dialog button { border: 1px solid var(--line); background: var(--surface-raised); color: var(--text); border-radius: var(--radius-sm, 6px); padding: 7px 10px; font: inherit; cursor: pointer; }
+.microvm-terminal-dialog button:disabled { opacity: .5; cursor: default; }
+.microvm-terminal-mount { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+@media (max-width: 600px) { .microvm-terminal-dialog { width: 100vw; height: 100dvh; margin: 0; border-radius: 0; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); } }

@@ -1,3 +1,4 @@
+import { isMicroVm, instanceTerminalAllowed } from "./instance-target.ts";
 import type { Instance } from "./gen/lazycat/webshell/v1/capability_pb";
 import { isRemoteClientSelector } from "./remote-client-terminal.ts";
 
@@ -25,6 +26,7 @@ export function shouldClearWorkspaceSelection(
 }
 
 export function instanceSelector(instance: Instance | undefined): string {
+  if (isMicroVm(instance)) return "";
   const explicit = normalizeSelector(instance?.selector);
   if (explicit) return explicit;
   const name = normalizeSelector(instance?.name);
@@ -35,6 +37,7 @@ export function instanceSelector(instance: Instance | undefined): string {
 export function isRunningInstance(instance: Instance | undefined): boolean {
   return Boolean(
     instance
+      && instanceTerminalAllowed(instance)
       && normalizeSelector(instance.status) === "running"
       && instanceSelector(instance),
   );

@@ -75,6 +75,8 @@ struct VisibleInstance {
     owner_deploy_id: String,
     #[serde(default)]
     status: String,
+    #[serde(default)]
+    username: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -91,16 +93,7 @@ pub(crate) struct ClientInstanceSummary {
     pub owner_user_id: String,
 }
 
-pub async fn list_visible_instances(
-    headers: &HeaderMap,
-) -> Result<Vec<Instance>, LightOsAdminError> {
-    let account_id = current_request_account_id(headers)
-        .ok_or_else(|| LightOsAdminError::unauthorized("account id is required"))?;
-    let base_url = admin_base_url_for_request(headers).await?;
-    let client = admin_http_client(headers, Duration::from_secs(30))?;
-    list_visible_instances_from(&client, &base_url, headers, &account_id).await
-}
-
+#[cfg(test)]
 async fn list_visible_instances_from(
     client: &reqwest::Client,
     base_url: &str,
@@ -109,27 +102,16 @@ async fn list_visible_instances_from(
 ) -> Result<Vec<Instance>, LightOsAdminError> {
     let headers = build_upstream_headers(source_headers, account_id)
         .map_err(LightOsAdminError::bad_gateway)?;
-    let webshell_url = build_admin_url(base_url, "/api/webshell/instances")
-        .map_err(|error| LightOsAdminError::bad_gateway(error.to_string()))?;
-    let client_url = build_admin_url(base_url, "/api/client-instances")
-        .map_err(|error| LightOsAdminError::bad_gateway(error.to_string()))?;
-    let (webshell, client_instances) = tokio::try_join!(
-        fetch_admin_json(client, webshell_url, headers.clone()),
-        fetch_admin_json(client, client_url, headers),
-    )?;
-    let mut instances =
-        parse_visible_instances(&webshell).map_err(LightOsAdminError::bad_gateway)?;
-    instances
-        .extend(parse_client_instances(&client_instances).map_err(LightOsAdminError::bad_gateway)?);
-    instances.sort_by_key(|instance| instance.status.as_deref() != Some("running"));
-    let mut seen = HashSet::new();
-    instances.retain(|instance| {
-        instance
-            .selector
-            .as_deref()
-            .is_some_and(|selector| seen.insert(selector.to_owned()))
-    });
-    Ok(instances)
+    crate::instance_discovery::discover_from(
+        client,
+        &headers,
+        &[
+            (base_url, "/api/webshell/instances", "lightos", false),
+            (base_url, "/api/client-instances", "lightos", true),
+        ],
+    )
+    .await
+    .map(|discovery| discovery.instances)
 }
 
 pub(crate) async fn list_visible_client_instances(
@@ -398,7 +380,7 @@ fn non_empty_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
         .filter(|value| !value.is_empty())
 }
 
-fn parse_visible_instances(output: &[u8]) -> Result<Vec<Instance>, String> {
+pub(crate) fn parse_visible_instances(output: &[u8]) -> Result<Vec<Instance>, String> {
     let items: Vec<VisibleInstance> = serde_json::from_slice(output)
         .map_err(|_| "invalid LightOS webshell instances JSON".to_owned())?;
     let mut instances = items
@@ -444,6 +426,7 @@ fn instance_from_visible(item: &VisibleInstance) -> Option<Instance> {
             legacy_owner.to_owned()
         }),
         status: Some(item.status.trim().to_owned()),
+        username: Some(item.username.trim().to_owned()),
         kind: Some(InstanceKind::INSTANCE_KIND_LIGHTOS.into()),
         ..Default::default()
     })
@@ -453,7 +436,7 @@ fn parse_client_instance_summaries(output: &[u8]) -> Result<Vec<ClientInstanceSu
     serde_json::from_slice(output).map_err(|_| "invalid LightOS client instances JSON".to_owned())
 }
 
-fn parse_client_instances(output: &[u8]) -> Result<Vec<Instance>, String> {
+pub(crate) fn parse_client_instances(output: &[u8]) -> Result<Vec<Instance>, String> {
     Ok(parse_client_instance_summaries(output)?
         .iter()
         .filter_map(instance_from_client)
@@ -696,16 +679,21 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.status, StatusCode::BAD_GATEWAY);
         assert_eq!(redirected.load(Ordering::SeqCst), 0);
-        let error = list_visible_instances_from(
+        let base = format!("http://{address}/invalid");
+        let upstream = build_upstream_headers(&headers, "alice").unwrap();
+        let discovery = crate::instance_discovery::discover_from(
             &client,
-            &format!("http://{address}/invalid"),
-            &headers,
-            "alice",
+            &upstream,
+            &[
+                (&base, "/api/webshell/instances", "lightos", false),
+                (&base, "/api/client-instances", "lightos", true),
+            ],
         )
         .await
-        .unwrap_err();
-        assert_eq!(error.status, StatusCode::BAD_GATEWAY);
-        assert!(error.message.contains("JSON"));
+        .unwrap();
+        assert!(discovery.instances.is_empty());
+        assert_eq!(discovery.warnings.len(), 1);
+        assert!(discovery.warnings[0].contains("JSON"));
         server.abort();
     }
 

@@ -1,3 +1,4 @@
+import { createMicroVmTerminals } from "./microvm/view";
 import { createPluginStreamBroker, type TerminalStreamHook } from "./plugins/terminal-stream";
 import { createBuiltinPluginEntries } from "./plugins/entries.generated";
 import type { PluginEntry } from "./plugins/host";
@@ -794,6 +795,7 @@ const providerRevisionController = createProviderRevisionController({
 });
 const paneConnectionScheduler = createPaneConnectionScheduler({ capacity: 3 });
 let instances: Instance[] = [];
+let instanceLoadError = "";
 let selectedSelector = initialSelector;
 let selectedSelectorGeneration = 0;
 const agentUpdates = createAgentUpdateController({
@@ -1052,6 +1054,10 @@ herdrMachines = createHerdrMachines({
   },
   prepare: prepareAppMobileOverlay,
   updateIcons,
+  terminalOptions: () => ({ fonts: resttyFontSourcesFor(currentFont()), fontSize: settings.fontSize }),
+});
+const microVmTerminals = createMicroVmTerminals({
+  tr, prepare: prepareAppMobileOverlay,
   terminalOptions: () => ({ fonts: resttyFontSourcesFor(currentFont()), fontSize: settings.fontSize }),
 });
 const herdrIntegrationsView = createHerdrIntegrationsView({
@@ -4411,6 +4417,7 @@ async function loadInstances(options: { restart?: boolean } = {}) {
     });
     if (!loaded) return;
     instances = loaded;
+    instanceLoadError = "";
     const reconcile = reconcileSelectedInstance();
     renderInstances();
     if (reconcile.explicitFallback && selectedSelector) {
@@ -4419,6 +4426,7 @@ async function loadInstances(options: { restart?: boolean } = {}) {
       setGlobalStatus(instances.length ? tr("status.instancesLoaded") : tr("status.noInstances"));
     }
   } catch (error) {
+    instanceLoadError = errorMessage(error);
     renderInstances();
     if (navigator.onLine) {
       setGlobalStatus(tr("status.instanceLoadFailed", { message: errorMessage(error) }), "error");
@@ -4470,9 +4478,14 @@ function updateSelectedInstanceChrome() {
 }
 
 function renderInstances() {
-  elements.instanceList.innerHTML = renderInstanceListView(instances, selectedSelector, tr);
+  elements.instanceList.innerHTML = renderInstanceListView(instances, selectedSelector, tr, instanceLoadError);
   elements.instanceList.querySelectorAll<HTMLButtonElement>(".instance-row").forEach((button) => {
     button.addEventListener("click", () => {
+      if (button.dataset.targetId) {
+        const instance = instances.find(item => item.targetId === button.dataset.targetId);
+        if (instance) { closeInstanceMenu(); microVmTerminals.open(instance); }
+        return;
+      }
       const selector = normalizeSelector(button.dataset.selector ?? "");
       selectedSelectorExplicit = true;
       setSelectedSelector(selector, { updateLocation: true, replaceLocation: false, tabId: "" });

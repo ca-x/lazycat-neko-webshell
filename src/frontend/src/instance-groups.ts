@@ -1,6 +1,7 @@
+import { isMicroVm, instanceTerminalAllowed, microVmTerminalAvailable } from "./instance-target.ts";
 import type { Instance } from "./gen/lazycat/webshell/v1/capability_pb";
 
-export type InstanceGroupId = "lightos" | "remote" | "ssh";
+export type InstanceGroupId = "lightos" | "smolvm" | "remote" | "ssh";
 
 export type InstanceGroup = {
   id: InstanceGroupId;
@@ -16,13 +17,14 @@ export type InstanceRowPresentation = {
 export function groupInstances(instances: Instance[]): InstanceGroup[] {
   const grouped = new Map<InstanceGroupId, Instance[]>([
     ["lightos", []],
+    ["smolvm", []],
     ["remote", []],
     ["ssh", []],
   ]);
   for (const instance of instances) {
     grouped.get(instanceGroupId(instance))?.push(instance);
   }
-  return (["lightos", "remote", "ssh"] as const)
+  return (["lightos", "smolvm", "remote", "ssh"] as const)
     .map((id) => ({ id, instances: grouped.get(id) ?? [] }))
     .filter((group) => group.instances.length > 0);
 }
@@ -31,16 +33,17 @@ export function instanceRowPresentation(instance: Instance): InstanceRowPresenta
   const kind = instanceGroupId(instance);
   return {
     kind,
-    metadata: kind === "remote"
+    metadata: kind === "smolvm" ? "MicroVM" : kind === "remote"
       ? String(instance.platform || "Remote client").trim()
       : kind === "ssh"
         ? "SSH"
         : String(instance.ownerDeployId || "LightOS").trim(),
-    running: String(instance.status || "").trim() === "running" && Boolean(instanceSelectorValue(instance)),
+    running: microVmTerminalAvailable(instance) || instanceTerminalAllowed(instance) && String(instance.status || "").trim() === "running" && Boolean(instanceSelectorValue(instance)),
   };
 }
 
 function instanceGroupId(instance: Instance): InstanceGroupId {
+  if (isMicroVm(instance)) return "smolvm";
   const kind = instance.kind as unknown;
   if (kind === 2 || kind === "INSTANCE_KIND_REMOTE_CLIENT") return "remote";
   if (kind === 3 || kind === "INSTANCE_KIND_SSH") return "ssh";
