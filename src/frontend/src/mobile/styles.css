@@ -1,3 +1,5 @@
+@import "./settings/keyboard-layout.css";
+
 :root {
   --mobile-shortcuts-bg: var(--chrome);
   --mobile-shortcuts-height: 105px;
@@ -1532,258 +1534,7 @@ body.desktop-controls-enabled:not(.mobile-controls-enabled) .mobile-shortcuts {
   font-size: 11px;
 }
 
-.mobile-keyboard-layout-settings {
-  display: grid;
-  gap: 12px;
-}
-
-.mobile-keyboard-layout-toolbar {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.mobile-keyboard-layout-settings .mobile-keyboard-page-field {
-  min-width: 0;
-}
-
-.mobile-keyboard-layout-settings .mobile-keyboard-editor-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
-}
-
-.mobile-keyboard-layout-settings .mobile-keyboard-editor-tabs button {
-  min-height: 40px;
-  border: 1px solid var(--component-border);
-  border-radius: 7px;
-  background: var(--surface);
-  color: var(--muted);
-  padding: 7px 10px;
-  font: inherit;
-  cursor: pointer;
-  transition: color 160ms ease-out, background-color 160ms ease-out, border-color 160ms ease-out, transform 120ms ease-out;
-}
-
-.mobile-keyboard-layout-settings .mobile-keyboard-editor-tabs button[aria-selected="true"] {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-  color: var(--accent-fg);
-}
-
-.mobile-keyboard-layout-settings .mobile-keyboard-editor-tabs button:active {
-  transform: scale(0.97);
-}
-
-.mobile-keyboard-width-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px 18px;
-  padding: 10px 12px;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--component-wash) 72%, var(--surface));
-}
-
-.mobile-keyboard-width-legend > span {
-  display: grid;
-  grid-template-columns: auto auto;
-  align-items: center;
-  column-gap: 7px;
-}
-
-.mobile-keyboard-width-legend i {
-  grid-row: span 2;
-  width: 26px;
-  height: 18px;
-  border: 1px solid var(--accent-border);
-  border-radius: 4px;
-  background: var(--accent-soft);
-}
-
-.mobile-keyboard-width-legend i[data-width="md"] { width: 42px; }
-.mobile-keyboard-width-legend i[data-width="lg"] { width: 58px; }
-
-.mobile-keyboard-width-legend b,
-.mobile-keyboard-width-legend small {
-  line-height: 1.15;
-}
-
-.mobile-keyboard-width-legend b { font-size: 12px; }
-.mobile-keyboard-width-legend small { color: var(--muted); font-size: 10px; }
-
-.mobile-keyboard-key-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
-  gap: 8px;
-  padding: 8px;
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--component-wash) 66%, var(--surface));
-}
-
-.mobile-keyboard-key-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: stretch;
-  gap: 7px;
-  min-width: 0;
-  min-height: 126px;
-  padding: 7px;
-  border: 1px solid var(--component-border);
-  border-radius: 8px;
-  background: var(--surface);
-  transition: border-color 160ms ease-out, background-color 160ms ease-out, opacity 160ms ease-out, transform 160ms ease-out;
-}
-
-
-
-.mobile-keyboard-key-row.is-hidden {
-  opacity: 0.58;
-  border-style: dashed;
-}
-
-.mobile-keyboard-key-row.is-dragging {
-  opacity: 0.35;
-  transform: scale(0.98);
-}
-
-.mobile-keyboard-key-row.is-drag-over {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-}
-
-.mobile-keyboard-key-card {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.mobile-keyboard-key-card-head {
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-}
-
-.mobile-keyboard-key-meta {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mobile-keyboard-key-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  gap: 5px;
-  min-width: 0;
-}
-
-.mobile-keyboard-key-width-control {
-  display: grid;
-  flex: 1 1 80px;
-  min-width: 80px;
-  gap: 3px;
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.mobile-keyboard-key-width-control select {
-  width: 100%;
-  min-width: 0;
-  min-height: 36px;
-  padding-inline: 6px;
-}
-
-.mobile-keyboard-key-preview {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  min-height: 44px;
-  border: 1px solid var(--component-border);
-  border-radius: 6px;
-  background: var(--component-wash), var(--surface);
-  color: var(--text);
-  padding: 7px 10px;
-  text-align: left;
-  transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1), opacity 160ms ease;
-}
-
-.mobile-keyboard-key-preview[aria-pressed="false"] {
-  opacity: 0.52;
-}
-
-.mobile-keyboard-key-preview:active,
-.mobile-keyboard-key-row .icon-button:active:not(:disabled),
-.mobile-workspace-overview button:active:not(:disabled) {
-  transform: scale(0.97);
-}
-
-.mobile-keyboard-key-preview span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mobile-keyboard-key-preview small {
-  margin-left: auto;
-  color: var(--accent-fg);
-}
-
-.mobile-keyboard-key-row .icon-button {
-  flex: 0 0 44px;
-  width: 44px;
-  min-width: 44px;
-  min-height: 44px;
-}
-
-.mobile-keyboard-drag-handle {
-  min-width: 44px;
-  min-height: 44px;
-  touch-action: none;
-  cursor: grab;
-  user-select: none;
-  -webkit-user-select: none;
-  display: grid;
-  place-items: center;
-  color: var(--muted);
-}
-
-.mobile-keyboard-drag-handle svg {
-  width: 16px;
-  height: 16px;
-}
-
-.mobile-keyboard-custom-key {
-  border-top: 1px solid var(--line-soft);
-  border-bottom: 1px solid var(--line-soft);
-  padding-block: 10px;
-}
-
-.mobile-keyboard-custom-key summary {
-  min-height: 44px;
-  cursor: pointer;
-  color: var(--text);
-  font-weight: 600;
-  line-height: 44px;
-}
-
-.mobile-keyboard-custom-key-fields {
-  display: grid;
-  gap: 10px;
-  padding-top: 8px;
-}
-
-.mobile-keyboard-custom-key [hidden] {
-  display: none;
-}
+.mobile-workspace-overview button:active:not(:disabled) { transform: scale(0.97); }
 
 .mobile-workspace-overview {
   position: fixed;
@@ -1974,20 +1725,9 @@ body.desktop-controls-enabled:not(.mobile-controls-enabled) .mobile-shortcuts {
   outline-offset: 2px;
 }
 
-@media (max-width: 420px) {
-  .mobile-keyboard-layout-toolbar {
-    grid-template-columns: 1fr;
-  }
-
-  .mobile-keyboard-key-preview {
-    flex-basis: 88px;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .mobile-workspace-overview-backdrop,
   .mobile-workspace-overview-sheet,
-  .mobile-keyboard-key-preview,
   .mobile-overview-pane-list > button {
     transition-duration: 100ms;
   }
@@ -2406,35 +2146,8 @@ body.desktop-controls-enabled:not(.mobile-controls-enabled) .mobile-shortcuts {
   }
 }
 
-.mobile-keyboard-layout-preview {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.mobile-keyboard-layout-preview .mobile-keyboard-panel {
-  min-height: 56px;
-  padding: 4px 0;
-  scrollbar-width: thin;
-}
-
-.mobile-keyboard-layout-preview .mobile-keyboard-panel::-webkit-scrollbar {
-  display: block;
-  height: 4px;
-}
-
-.mobile-keyboard-layout-preview button[aria-disabled="true"] {
-  cursor: default;
-}
-
 .mobile-keyboard-key-width-control select {
   min-height: 44px;
-}
-
-@media (max-width: 560px) {
-  .mobile-keyboard-layout-toolbar {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 /* Private clipboard file action stays beside the keyboard toggle on every page. */
@@ -2471,9 +2184,7 @@ body.desktop-controls-enabled:not(.mobile-controls-enabled) .mobile-shortcuts {
 .mobile-secret-file-button:active:not(:focus-visible) { transform: scale(.97); }
 @media (prefers-reduced-motion: reduce) { .mobile-secret-file-button:active { transform: none; } }
 
-/* Category rails and the settings preview use the same native horizontal pan. */
-.mobile-keyboard-page-tabs,
-.mobile-keyboard-panel {
+.mobile-keyboard-page-tabs {
   overflow-y: hidden;
   overscroll-behavior-x: contain;
   touch-action: pan-x pinch-zoom;

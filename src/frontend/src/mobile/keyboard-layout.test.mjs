@@ -59,7 +59,7 @@ test("built-in presets are returned as independent layouts", () => {
 });
 
 test("round-trips every built-in preset through the persisted layout normalizer", () => {
-  for (const preset of ["default", "operations", "editor"]) {
+  for (const preset of ["default", "operations", "editor", "vim", "emacs"]) {
     const layout = mobileKeyboardPresetLayout(preset);
     assert.deepEqual(normalizeMobileKeyboardLayout(layout), layout);
   }
@@ -68,11 +68,11 @@ test("round-trips every built-in preset through the persisted layout normalizer"
 test("keeps built-in navigation keys in a single location", () => {
   assert.equal(normalizeMobileKeyboardPreset(undefined), "default");
   const expectedIds = {
-    main: ["main-ctrl", "main-alt", "main-shift", "main-escape", "main-tab", "main-enter", "main-copy", "main-paste", "main-menu", "main-ctrl-e", "main-ctrl-c", "main-swap", "main-shift-tab", "main-tilde", "main-slash", "main-hyphen", "main-dollar"],
-    ops: ["ops-overview", "ops-prev-tab", "ops-next-tab", "ops-new-tab", "ops-close-tab", "ops-prev-pane", "ops-next-pane", "ops-split-right", "ops-split-down", "ops-copy", "ops-paste", "ops-font-up", "ops-font-down"],
+    main: ["main-escape", "main-tab", "main-shift-tab", "main-enter", "main-ctrl-c", "main-ctrl-r", "main-copy", "main-paste", "main-ctrl", "main-alt", "main-shift", "main-ctrl-a", "main-ctrl-e", "main-ctrl-u", "main-ctrl-w", "main-ctrl-k", "main-ctrl-l", "main-alt-b", "main-alt-f", "main-alt-period"],
+    ops: ["ops-overview", "ops-prev-tab", "ops-next-tab", "ops-new-tab", "ops-close-tab", "ops-prev-pane", "ops-next-pane", "ops-split-right", "ops-split-down", "ops-copy", "ops-paste", "ops-font-up", "ops-font-down", "ops-menu"],
     nav: ["nav-left", "nav-down", "nav-up", "nav-right", "nav-home", "nav-end", "nav-page-up", "nav-page-down", "nav-insert", "nav-delete", "nav-backspace"],
     fn: Array.from({ length: 12 }, (_, index) => `fn-${index + 1}`),
-    sym: Array.from({ length: 18 }, (_, index) => `sym-${index}`),
+    sym: Array.from({ length: 22 }, (_, index) => `sym-${index}`),
   };
   const legacy = resolveMobileKeyboardLayout("default", { pages: [] });
   assert.deepEqual(Object.fromEntries(legacy.pages.map((page) => [page.id, page.keys.map((key) => key.id)])), expectedIds);

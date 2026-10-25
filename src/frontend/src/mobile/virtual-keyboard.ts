@@ -1,7 +1,5 @@
 import { escapeAttr, escapeHtml } from "../utils.ts";
 
-export type MobileVirtualKeyboardPage = "typing" | "function";
-
 type VirtualKeyBase = {
   label: string;
   name: string;
@@ -47,21 +45,6 @@ const TYPING_ROWS: readonly (readonly VirtualKey[])[] = [
   ],
 ];
 
-const FUNCTION_ROWS: readonly (readonly VirtualKey[])[] = [
-  ["f1", "f2", "f3"].map((value) => shortcut(value, value.toUpperCase()))
-    .concat([shortcut("insert", "Ins", "Insert"), shortcut("home", "Home", "Home", true), shortcut("pageUp", "PgUp", "Page up", true)]),
-  ["f4", "f5", "f6"].map((value) => shortcut(value, value.toUpperCase()))
-    .concat([shortcut("delete", "Del", "Delete", true), shortcut("end", "End", "End", true), shortcut("pageDown", "PgDn", "Page down", true)]),
-  ["f7", "f8", "f9"].map((value) => shortcut(value, value.toUpperCase()))
-    .concat([shortcut("escape", "Esc", "Escape"), shortcut("tab", "Tab"), shortcut("backspace", "⌫", "Backspace", true)]),
-  ["f10", "f11", "f12"].map((value) => shortcut(value, value.toUpperCase()))
-    .concat([shortcut("left", "←", "Left arrow", true), shortcut("up", "↑", "Up arrow", true), shortcut("right", "→", "Right arrow", true)]),
-  [
-    { chord: "shift-tab", label: "Shift+Tab", name: "Shift tab", size: "wide" },
-    shortcut("down", "↓", "Down arrow", true), shortcut("enter", "Enter", "Enter", true),
-  ],
-];
-
 function renderKey(key: VirtualKey): string {
   const route = key.chord
     ? `data-mobile-chord="${escapeAttr(key.chord)}"`
@@ -72,14 +55,8 @@ function renderKey(key: VirtualKey): string {
   return `<button type="button" class="mobile-virtual-key" ${route} aria-label="${escapeAttr(key.name)}"${modifier}${key.repeat ? ' data-mobile-repeat="true"' : ""}${key.size ? ` data-mobile-virtual-size="${key.size}"` : ""}>${escapeHtml(key.label)}</button>`;
 }
 
-export function renderMobileVirtualKeyboardPanel(page: MobileVirtualKeyboardPage): string {
-  const rows = page === "typing" ? TYPING_ROWS : FUNCTION_ROWS;
-  const name = page === "typing" ? "Typing keyboard" : "Function and navigation keys";
-  return `<div class="mobile-virtual-keyboard-panel" data-mobile-panel="${page}" role="group" aria-label="${name}"${page === "function" ? " hidden" : ""}>${rows.map((row, index) => (
+export function renderMobileTypingKeyboard(): string {
+  return `<div class="mobile-virtual-keyboard-panel" data-mobile-panel="typing" role="group" aria-label="Typing keyboard" data-i18n-aria="label.mobileTypingKeys" hidden>${TYPING_ROWS.map((row, index) => (
     `<div class="mobile-virtual-keyboard-row" data-mobile-virtual-row="${index + 1}">${row.map(renderKey).join("")}</div>`
   )).join("")}</div>`;
-}
-
-export function renderMobileVirtualKeyboardPanels(): string {
-  return renderMobileVirtualKeyboardPanel("typing") + renderMobileVirtualKeyboardPanel("function");
 }

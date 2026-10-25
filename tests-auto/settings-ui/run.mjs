@@ -122,6 +122,27 @@ export async function runSettingsUiScenario() {
     assert.equal(await evaluate('(()=>{const dialog=document.querySelector(".settings-dialog"),panels=document.querySelector(".settings-panels"),rect=dialog.getBoundingClientRect();return dialog.scrollWidth<=dialog.clientWidth&&panels.scrollWidth<=panels.clientWidth&&rect.top>=0&&rect.bottom<=innerHeight})()'), true);
     await assertBackdrop(false);
     await screenshot("plugins-mobile");
+    await click("[data-settings-tab=mobile]");
+    assert.equal(await evaluate('document.querySelector("[data-mobile-layout-customize]").open'), false);
+    assert.ok(await evaluate('document.querySelector("#mobileKeyboardLayoutSettings").getBoundingClientRect().height < 360'));
+    for (const preset of ["vim", "emacs", "default"]) {
+      await browser.command(["select", "[data-mobile-layout-preset]", preset]);
+      assert.equal(await evaluate('document.querySelector("[data-mobile-layout-preset]").value'), preset);
+      const marker = preset === "vim" ? '[data-mobile-shortcut=":"]' : preset === "emacs" ? '[data-mobile-chord="ctrl-x-ctrl-s"]' : '[data-mobile-chord="ctrl-a"]';
+      assert.equal(await evaluate(`Boolean(document.querySelector('#mobileShortcuts [data-mobile-panel=main] ${marker}'))`), true);
+    }
+    await evaluate('document.querySelector("#mobileKeyboardLayoutSettings").scrollIntoView({block:"start"})');
+    await screenshot("keyboard-settings-compact");
+    await click("[data-mobile-layout-customize] > summary");
+    await evaluate('document.querySelector("[data-mobile-key-select=main-ctrl-a]").scrollIntoView({block:"center",behavior:"instant"})');
+    await click('[data-mobile-key-select="main-ctrl-a"]');
+    assert.equal(await evaluate('document.querySelectorAll("[data-mobile-layout-key-inspector] select").length'), 1);
+    assert.equal(await evaluate('document.querySelector("[data-mobile-layout-key-inspector] strong").textContent'), "Ctrl+A");
+    await browser.command(["select", 'select[data-mobile-key-width="main-ctrl-a"]', "lg"]);
+    assert.equal(await evaluate('document.querySelector("[data-mobile-layout-preset]").value'), "custom");
+    await click("[data-mobile-layout-undo]");
+    assert.equal(await evaluate('document.querySelector("[data-mobile-layout-preset]").value'), "default");
+    await screenshot("keyboard-settings-editor");
     await click("[data-settings-tab=appearance]");
     await browser.command(["select", "#interfaceStyleSelect", "porcelain"]);
     await assertBackdrop(true);
@@ -135,6 +156,13 @@ export async function runSettingsUiScenario() {
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".plugin-switch input"),"::before").transitionDuration.split(",").every(value=>parseFloat(value)===0)'), true);
     await assertBackdrop(false);
     await screenshot("plugins-light-mobile");
+    await click("[data-settings-tab=mobile]");
+    for (const [width, height] of [[320, 568], [812, 375]]) {
+      await browser.command(["set", "viewport", String(width), String(height)]);
+      await evaluate('document.querySelector("[data-mobile-layout-key-list]").scrollIntoView({block:"center"})');
+      assert.equal(await evaluate('(()=>{const panel=document.querySelector(".settings-panels");return panel.scrollWidth<=panel.clientWidth&&[...document.querySelectorAll("[data-mobile-key-select], [data-mobile-layout-key-inspector] button, [data-mobile-layout-key-inspector] select")].every(node=>{const r=node.getBoundingClientRect();return r.width>=44&&r.height>=44})})()'), true);
+      await screenshot(`keyboard-settings-light-${width}`);
+    }
     await browser.command(["set", "viewport", "812", "375"]);
     assert.equal(await evaluate('(()=>{const r=document.querySelector(".settings-dialog").getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight})()'), true);
     await click("#closeSettings");

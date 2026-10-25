@@ -8,6 +8,7 @@ import type {
   MobileKeyboardPresetId,
 } from "./keyboard-layout-types.ts";
 import { newId } from "../utils.ts";
+import { MOBILE_CHORDS, MOBILE_KEYBOARD_CHORDS } from "./key-chords.ts";
 
 export const MAX_MOBILE_KEY_TEXT = 256;
 export const MAX_MOBILE_KEY_LABEL = 24;
@@ -37,7 +38,7 @@ export const MOBILE_KEYBOARD_ACTIONS = [
 ] as const;
 
 const ACTIONS = new Set<string>(MOBILE_KEYBOARD_ACTIONS);
-const CHORDS = new Set(["ctrl-c", "ctrl-e", "shift-tab"]);
+const CHORDS = new Set<string>(MOBILE_KEYBOARD_CHORDS);
 const SAFE_REPEAT = new Set([
   "left", "right", "up", "down", "home", "end", "pageUp", "pageDown", "delete", "backspace", "enter",
 ]);
@@ -77,19 +78,21 @@ function chord(id: string, value: string, label: string) {
   return key({ id, kind: "chord", value, label });
 }
 
-const symbols = ["$", "/", "-", "~", "|", "\\", "`", "[", "]", "{", "}", "(", ")", "&", ";", ":", "*", "?"];
+const symbols = ["$", "/", "-", "~", "|", "\\", "`", "[", "]", "{", "}", "(", ")", "&", ";", ":", "*", "?", ".", ",", "=", "'"];
 
 function defaultPages(): MobileKeyboardPage[] {
   return [
     { id: "main", keys: [
-      shortcut("main-ctrl", "ctrl", "Ctrl"), shortcut("main-alt", "alt", "Alt"), shortcut("main-shift", "shift", "Shift"),
       shortcut("main-escape", "escape", "Esc"),
-      shortcut("main-tab", "tab", "Tab"), shortcut("main-enter", "enter", "Return", { repeat: true }),
+      shortcut("main-tab", "tab", "Tab"), chord("main-shift-tab", "shift-tab", "Shift+Tab"), shortcut("main-enter", "enter", "Return"),
+      chord("main-ctrl-c", "ctrl-c", "Ctrl+C"), chord("main-ctrl-r", "ctrl-r", "Ctrl+R"),
       action("main-copy", "copy-selection", "Copy"), shortcut("main-paste", "paste", "", { icon: "clipboard-paste", ariaLabel: "Paste" }),
-      action("main-menu", "pane-menu", "Menu"), chord("main-ctrl-e", "ctrl-e", "Ctrl+E"), chord("main-ctrl-c", "ctrl-c", "Ctrl+C"),
-      action("main-swap", "swap-pane", "Swap"), chord("main-shift-tab", "shift-tab", "Shift+Tab"),
-      shortcut("main-tilde", "~", "~"), shortcut("main-slash", "/", "/"), shortcut("main-hyphen", "-", "-"),
-      shortcut("main-dollar", "$", "$"),
+      shortcut("main-ctrl", "ctrl", "Ctrl"), shortcut("main-alt", "alt", "Alt"), shortcut("main-shift", "shift", "Shift"),
+      chord("main-ctrl-a", "ctrl-a", "Ctrl+A"), chord("main-ctrl-e", "ctrl-e", "Ctrl+E"),
+      chord("main-ctrl-u", "ctrl-u", "Ctrl+U"), chord("main-ctrl-w", "ctrl-w", "Ctrl+W"),
+      chord("main-ctrl-k", "ctrl-k", "Ctrl+K"), chord("main-ctrl-l", "ctrl-l", "Ctrl+L"),
+      chord("main-alt-b", "alt-b", "Alt+B"), chord("main-alt-f", "alt-f", "Alt+F"),
+      chord("main-alt-period", "alt-period", "Alt+."),
     ] },
     { id: "ops", keys: [
       action("ops-overview", "workspace-overview", "", "layout-grid", "Tabs and panes"),
@@ -99,6 +102,7 @@ function defaultPages(): MobileKeyboardPage[] {
       action("ops-split-right", "split-right", "", "panel-right", "Split right"), action("ops-split-down", "split-down", "", "panel-bottom", "Split down"),
       action("ops-copy", "copy-selection", "", "copy", "Copy selection"), action("ops-paste", "paste-clipboard", "", "clipboard-paste", "Paste"),
       action("ops-font-up", "font-larger", "A+"), action("ops-font-down", "font-smaller", "A-"),
+      action("ops-menu", "pane-menu", "Menu"),
     ] },
     { id: "nav", keys: [
       shortcut("nav-left", "left", "", { icon: "arrow-left", ariaLabel: "Left", repeat: true }),
@@ -144,12 +148,32 @@ function editorPages(): MobileKeyboardPage[] {
   return pages;
 }
 
+function vimPages(): MobileKeyboardPage[] {
+  const pages = defaultPages();
+  pages[0] = { id: "main", keys: [
+    shortcut("vim-escape", "escape", "Esc"), shortcut("vim-colon", ":", ":"),
+    shortcut("vim-search", "/", "/"), shortcut("vim-reverse-search", "?", "?"), shortcut("vim-enter", "enter", "Return"),
+    ...[..."hjkl"].map((value) => shortcut(`vim-${value}`, value, value)),
+    shortcut("vim-undo", "u", "u"), chord("vim-redo", "ctrl-r", "Ctrl+R"),
+    ...[..."iavwbe0$"].map((value) => shortcut(`vim-key-${value.charCodeAt(0)}`, value, value)),
+    chord("vim-shift-tab", "shift-tab", "Shift+Tab"),
+  ] };
+  return pages;
+}
+
+function emacsPages(): MobileKeyboardPage[] {
+  const pages = defaultPages();
+  const chords = ["ctrl-g", "ctrl-x", "alt-x", "ctrl-x-ctrl-s", "ctrl-x-ctrl-f", "ctrl-a", "ctrl-e", "alt-b", "alt-f", "ctrl-p", "ctrl-n", "ctrl-b", "ctrl-f", "ctrl-space", "ctrl-w", "alt-w", "ctrl-y", "ctrl-k", "ctrl-s", "ctrl-r"] as const;
+  pages[0] = { id: "main", keys: chords.map((value) => chord(`emacs-${value}`, value, MOBILE_CHORDS[value].label)) };
+  return pages;
+}
+
 export function normalizeMobileKeyboardPreset(value: unknown): MobileKeyboardPresetId {
-  return value === "operations" || value === "editor" || value === "custom" ? value : "default";
+  return value === "operations" || value === "editor" || value === "vim" || value === "emacs" || value === "custom" ? value : "default";
 }
 
 export function mobileKeyboardPresetLayout(preset: Exclude<MobileKeyboardPresetId, "custom">): MobileKeyboardLayout {
-  const pages = preset === "operations" ? operationsPages() : preset === "editor" ? editorPages() : defaultPages();
+  const pages = preset === "operations" ? operationsPages() : preset === "editor" ? editorPages() : preset === "vim" ? vimPages() : preset === "emacs" ? emacsPages() : defaultPages();
   return { pages };
 }
 

@@ -1,0 +1,31 @@
+export const MOBILE_CHORDS = {
+  "ctrl-c": { label: "Ctrl+C", input: "\x03" },
+  "ctrl-r": { label: "Ctrl+R", input: "\x12" },
+  "ctrl-a": { label: "Ctrl+A", input: "\x01" },
+  "ctrl-e": { label: "Ctrl+E", input: "\x05" },
+  "ctrl-u": { label: "Ctrl+U", input: "\x15" },
+  "ctrl-w": { label: "Ctrl+W", input: "\x17" },
+  "ctrl-k": { label: "Ctrl+K", input: "\x0b" },
+  "ctrl-l": { label: "Ctrl+L", input: "\x0c" },
+  "ctrl-z": { label: "Ctrl+Z", input: "\x1a" },
+  "ctrl-x": { label: "Ctrl+X", input: "\x18" },
+  "ctrl-s": { label: "Ctrl+S", input: "\x13" },
+  "ctrl-g": { label: "Ctrl+G", input: "\x07" },
+  "ctrl-b": { label: "Ctrl+B", input: "\x02" },
+  "ctrl-f": { label: "Ctrl+F", input: "\x06" },
+  "ctrl-p": { label: "Ctrl+P", input: "\x10" },
+  "ctrl-n": { label: "Ctrl+N", input: "\x0e" },
+  "ctrl-y": { label: "Ctrl+Y", input: "\x19" },
+  "ctrl-space": { label: "Ctrl+Space", input: "\x00" },
+  "ctrl-x-ctrl-s": { label: "C-x C-s", input: "\x18\x13" },
+  "ctrl-x-ctrl-f": { label: "C-x C-f", input: "\x18\x06" },
+  "alt-b": { label: "Alt+B", input: "\x1bb" },
+  "alt-f": { label: "Alt+F", input: "\x1bf" },
+  "alt-w": { label: "Alt+W", input: "\x1bw" },
+  "alt-x": { label: "Alt+X", input: "\x1bx" },
+  "alt-period": { label: "Alt+.", input: "\x1b." },
+  "shift-tab": { label: "Shift+Tab", input: "\x1b[Z" },
+} as const;
+
+export type MobileChord = keyof typeof MOBILE_CHORDS;
+export const MOBILE_KEYBOARD_CHORDS = Object.keys(MOBILE_CHORDS) as MobileChord[];

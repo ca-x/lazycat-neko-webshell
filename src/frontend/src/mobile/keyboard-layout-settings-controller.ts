@@ -1,6 +1,6 @@
 import type { MessageKey } from "../i18n.ts";
 import type { MobileKeyboardKeyWidth, MobileKeyboardLayout, MobileKeyboardPageId, MobileKeyboardPresetId } from "./keyboard-layout-types.ts";
-import { escapeAttr, escapeHtml } from "../utils.ts";
+import { escapeHtml } from "../utils.ts";
 import {
   MOBILE_KEYBOARD_PAGE_IDS,
   mobileKeyboardPresetLayout,
@@ -13,7 +13,7 @@ import {
 
 import { createMobileKeyEditor } from "./settings/key-editor.ts";
 import { installMobileKeyboardReorderGesture } from "./settings/keyboard-reorder-gesture.ts";
-import { renderMobileKeyboardKey } from "./keyboard-layout-view.ts";
+import { renderKeyboardEditorKeys, renderKeyboardKeyInspector } from "./settings/key-layout-editor-view.ts";
 
 type Translate = (key: MessageKey, values?: Record<string, string | number>) => string;
 
@@ -31,10 +31,11 @@ type Options = {
 
 export function createMobileKeyboardLayoutSettingsController(options: Options) {
   let pageId: MobileKeyboardPageId = "main";
+  let selectedKeyId = "";
   const preset = options.root.querySelector<HTMLSelectElement>("[data-mobile-layout-preset]");
   const pageTabs = options.root.querySelector<HTMLElement>("[data-mobile-layout-page-tabs]");
   const list = options.root.querySelector<HTMLElement>("[data-mobile-layout-key-list]");
-  const preview = options.root.querySelector<HTMLElement>("[data-mobile-layout-preview]");
+  const inspector = options.root.querySelector<HTMLElement>("[data-mobile-layout-key-inspector]");
   const undo = options.root.querySelector<HTMLButtonElement>("[data-mobile-layout-undo]");
   let previous: { preset: MobileKeyboardPresetId; layout: MobileKeyboardLayout } | undefined;
   let editor: ReturnType<typeof createMobileKeyEditor> | undefined;
@@ -49,8 +50,11 @@ export function createMobileKeyboardLayoutSettingsController(options: Options) {
   }
 
   function commit(layout: MobileKeyboardLayout) {
-    const focused = document.activeElement instanceof HTMLElement && list?.contains(document.activeElement) ? document.activeElement : undefined;
+    const focused = document.activeElement instanceof HTMLElement && (list?.contains(document.activeElement) || inspector?.contains(document.activeElement)) ? document.activeElement : undefined;
     const focusAttributes = focused ? [...focused.attributes].filter((attr) => attr.name.startsWith("data-mobile-key-") || attr.name === "data-direction") : [];
+    const keys = currentLayout().pages.find((page) => page.id === pageId)?.keys ?? [];
+    const added = layout.pages.find((page) => page.id === pageId)?.keys.find((key) => !keys.some((existing) => existing.id === key.id));
+    if (added) selectedKeyId = added.id;
     remember();
     options.setLayout(layout);
     options.setPreset("custom");
@@ -59,7 +63,7 @@ export function createMobileKeyboardLayoutSettingsController(options: Options) {
     render();
     if (focusAttributes.length) {
       const selector = focusAttributes.map((attr) => `[${attr.name}="${CSS.escape(attr.value)}"]`).join("");
-      const replacement = list?.querySelector<HTMLElement>(selector);
+      const replacement = options.root.querySelector<HTMLElement>(selector);
       if (replacement && !replacement.matches(":disabled")) replacement.focus({ preventScroll: true });
       else undo?.focus({ preventScroll: true });
     }
@@ -67,7 +71,7 @@ export function createMobileKeyboardLayoutSettingsController(options: Options) {
 
   function render() {
     reorderGesture?.cancel();
-    if (undo) undo.disabled = !previous;
+    if (undo) { undo.disabled = !previous; undo.hidden = !previous; }
     if (preset) preset.value = options.preset();
     pageTabs?.querySelectorAll<HTMLButtonElement>("[data-mobile-layout-page-tab]").forEach((tab) => {
       const selected = tab.dataset.mobileLayoutPageTab === pageId;
@@ -77,31 +81,9 @@ export function createMobileKeyboardLayoutSettingsController(options: Options) {
     list?.setAttribute("aria-labelledby", `mobileLayoutPageTab${pageId.charAt(0).toUpperCase()}${pageId.slice(1)}`);
     if (!list) return;
     const keys = currentLayout().pages.find((item) => item.id === pageId)?.keys ?? [];
-    if (preview) {
-      const visible = keys.filter((key) => !key.hidden);
-      preview.innerHTML = visible.length ? visible.map((key) => renderMobileKeyboardKey(key).replace("<button ", '<button tabindex="-1" aria-disabled="true" ')).join("") : `<p class="empty">${escapeHtml(options.tr("status.mobileKeyboardPageEmpty"))}</p>`;
-    }
-    list.innerHTML = keys.length ? keys.map((key, index) => `
-      <div class="mobile-keyboard-key-row${key.hidden ? " is-hidden" : ""}" data-mobile-layout-key="${escapeAttr(key.id)}" data-mobile-key-width="${escapeAttr(key.width)}">
-        <div class="mobile-keyboard-key-card">
-          <div class="mobile-keyboard-key-card-head">
-            <span class="mobile-keyboard-drag-handle" draggable="true" aria-hidden="true"><i data-lucide="grip-vertical"></i></span>
-            <button type="button" class="mobile-keyboard-key-preview" data-mobile-key-visibility="${escapeAttr(key.id)}" aria-pressed="${!key.hidden}" aria-label="${escapeAttr(options.tr(key.hidden ? "action.show" : "action.hide"))}">
-              <i data-lucide="${key.hidden ? "eye-off" : "eye"}"></i>${key.icon ? `<i data-lucide="${escapeAttr(key.icon)}"></i>` : ""}<span>${escapeHtml(key.label || key.value)}</span>${key.autoEnter ? '<small aria-hidden="true">↵</small>' : ""}
-            </button>
-          </div>
-          <span class="mobile-keyboard-key-meta">${escapeHtml(key.ariaLabel || key.label || key.value)}</span>
-        </div>
-        <div class="mobile-keyboard-key-controls">
-          <label class="mobile-keyboard-key-width-control"><span>${escapeHtml(options.tr("field.mobileKeyboardKeyWidth"))}</span><select data-mobile-key-width="${escapeAttr(key.id)}" aria-label="${escapeAttr(options.tr("field.mobileKeyboardKeyWidth"))}">
-            <option value="sm"${key.width === "sm" ? " selected" : ""}>${escapeHtml(options.tr("option.mobileKeyboardWidthSmall"))}</option><option value="md"${key.width === "md" ? " selected" : ""}>${escapeHtml(options.tr("option.mobileKeyboardWidthMedium"))}</option><option value="lg"${key.width === "lg" ? " selected" : ""}>${escapeHtml(options.tr("option.mobileKeyboardWidthLarge"))}</option>
-          </select></label>
-          <button type="button" class="icon-button" data-mobile-key-move="${escapeAttr(key.id)}" data-direction="-1" aria-label="${escapeAttr(options.tr("action.moveUp"))}"${index === 0 ? " disabled" : ""}><i data-lucide="chevron-up"></i></button>
-          <button type="button" class="icon-button" data-mobile-key-move="${escapeAttr(key.id)}" data-direction="1" aria-label="${escapeAttr(options.tr("action.moveDown"))}"${index === keys.length - 1 ? " disabled" : ""}><i data-lucide="chevron-down"></i></button>
-          ${key.custom ? `<button type="button" class="icon-button" data-mobile-key-edit="${escapeAttr(key.id)}" aria-label="${escapeAttr(options.tr("action.mobileKeyboardEditKey"))}"><i data-lucide="pencil"></i></button><button type="button" class="icon-button danger" data-mobile-key-remove="${escapeAttr(key.id)}" aria-label="${escapeAttr(options.tr("action.remove"))}"><i data-lucide="trash-2"></i></button>` : ""}
-        </div>
-      </div>
-    `).join("") : `<p class="empty">${escapeHtml(options.tr("status.mobileKeyboardPageEmpty"))}</p>`;
+    if (!keys.some((key) => key.id === selectedKeyId)) selectedKeyId = keys[0]?.id ?? "";
+    list.innerHTML = keys.length ? renderKeyboardEditorKeys(keys, selectedKeyId, options.tr) : `<p class="empty">${escapeHtml(options.tr("status.mobileKeyboardPageEmpty"))}</p>`;
+    if (inspector) inspector.innerHTML = renderKeyboardKeyInspector(keys, selectedKeyId, options.tr);
     options.updateIcons();
   }
 
@@ -120,7 +102,7 @@ export function createMobileKeyboardLayoutSettingsController(options: Options) {
     });
     preset?.addEventListener("change", () => {
       const value = preset.value as MobileKeyboardPresetId;
-      if (value !== "default" && value !== "operations" && value !== "editor" && value !== "custom") return;
+      if (!["default", "operations", "editor", "vim", "emacs", "custom"].includes(value)) return;
       remember();
       editor?.reset();
       options.setPreset(value);
@@ -154,6 +136,13 @@ export function createMobileKeyboardLayoutSettingsController(options: Options) {
     });
     options.root.addEventListener("click", (event) => {
       const target = event.target instanceof Element ? event.target : null;
+      const select = target?.closest<HTMLButtonElement>("[data-mobile-key-select]");
+      if (select) {
+        selectedKeyId = select.dataset.mobileKeySelect ?? "";
+        render();
+        list?.querySelector<HTMLButtonElement>(`[data-mobile-key-select="${CSS.escape(selectedKeyId)}"]`)?.focus({ preventScroll: true });
+        return;
+      }
       const move = target?.closest<HTMLButtonElement>("[data-mobile-key-move]");
       if (move) return commit(moveMobileKeyboardKey(currentLayout(), pageId, move.dataset.mobileKeyMove ?? "", move.dataset.direction === "-1" ? -1 : 1));
       const visibility = target?.closest<HTMLButtonElement>("[data-mobile-key-visibility]");

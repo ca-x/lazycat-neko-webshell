@@ -1,4 +1,5 @@
-import { encodeMobileShortcutKeyInput, encodeModifiedTextInput, type TerminalShortcutModifiers } from "../keyboard";
+import { encodeMobileShortcutKeyInput, encodeModifiedTextInput, type TerminalShortcutModifiers } from "../keyboard.ts";
+import { MOBILE_CHORDS, type MobileChord } from "./key-chords.ts";
 
 export type MobileStickyModifier = "ctrl" | "alt" | "shift";
 
@@ -28,11 +29,7 @@ export function encodeMobileShortcutInput(
 }
 
 export function mobileChordInput(chord: string): string | undefined {
-  if (chord === "ctrl-c") return "\x03";
-  if (chord === "ctrl-e") return "\x05";
-  if (chord === "ctrl-z") return "\x1a";
-  if (chord === "shift-tab") return "\x1b[Z";
-  return undefined;
+  return Object.hasOwn(MOBILE_CHORDS, chord) ? MOBILE_CHORDS[chord as MobileChord].input : undefined;
 }
 
 export function hasMobileStickyModifiers(state: MobileStickyState): boolean {

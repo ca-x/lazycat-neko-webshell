@@ -2,6 +2,7 @@ import type { MessageKey } from "../../i18n.ts";
 import type { MobileKeyboardKey, MobileKeyboardLayout, MobileKeyboardPageId } from "../keyboard-layout-types.ts";
 import { addMobileKeyboardKey, editMobileKeyboardCustomKey, encodeMobileKeyboardText, MAX_MOBILE_KEYS_PER_PAGE, MAX_MOBILE_KEY_TEXT, mobileKeyboardTextError, MOBILE_KEYBOARD_ACTIONS } from "../keyboard-layout.ts";
 import { escapeAttr, escapeHtml } from "../../utils.ts";
+import { MOBILE_CHORDS, MOBILE_KEYBOARD_CHORDS } from "../key-chords.ts";
 
 type Options = {
   root: HTMLElement;
@@ -37,7 +38,7 @@ export function createMobileKeyEditor(options: Options) {
     if (!value || selected === "text") return;
     const entries = selected === "action"
       ? MOBILE_KEYBOARD_ACTIONS.map((item) => [item, item.split("-").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ")])
-      : selected === "chord" ? [["ctrl-c", "Ctrl+C"], ["ctrl-e", "Ctrl+E"], ["shift-tab", "Shift+Tab"]]
+      : selected === "chord" ? MOBILE_KEYBOARD_CHORDS.map((chord) => [chord, MOBILE_CHORDS[chord].label])
       : [
         ["escape", "Esc"], ["tab", "Tab"], ["enter", "Return"], ["home", "Home"], ["end", "End"],
         ["pageUp", "PgUp"], ["pageDown", "PgDn"], ["insert", "Ins"], ["delete", "Del"], ["backspace", "Bksp"],

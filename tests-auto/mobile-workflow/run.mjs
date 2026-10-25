@@ -18,8 +18,9 @@ export async function runMobileWorkflowScenario(){
  const screenshot=async name=>{await browser.command(['wait','240']);await browser.screenshot(path.join(artifacts,name+'.png'))};
  const touch=(type,p,id=1,delayMs=0)=>({type,delayMs,touchPoints:type==='touchEnd'||type==='touchCancel'?[]:[{...p,id,radiusX:2,radiusY:2,force:1}]});
  const tap=async selector=>{await wait('[...document.querySelectorAll("dialog:not([open])")].every(e=>getComputedStyle(e).display==="none")');const p=await evaluate(`qa.point(${JSON.stringify(selector)})`);await browser.dispatchTouch([touch('touchStart',p,1,25),touch('touchEnd',p)])};
- const composer=async()=>{await tap('[data-mobile-action="compose-text"]');await wait('document.querySelector(".mobile-composer[open]")')};
- const palette=async()=>{await tap('[data-mobile-action="command-palette"]');await wait('document.querySelector(".mobile-command-palette[open]")')};
+ const expand=async()=>{if(await evaluate('document.querySelector("#mobileShortcuts").dataset.expanded')!=="true")await tap('[data-mobile-action="toggle-expanded-keyboard"]')};
+ const composer=async()=>{await expand();await click('[data-mobile-page="ops"]');await tap('[data-mobile-action="compose-text"]');await wait('document.querySelector(".mobile-composer[open]")')};
+ const palette=async()=>{await expand();await click('[data-mobile-page="ops"]');await tap('[data-mobile-action="command-palette"]');await wait('document.querySelector(".mobile-command-palette[open]")')};
  const closeComposer=async()=>{await click('.mobile-composer-close');await wait('!document.querySelector(".mobile-composer").open')};
  try{
   await server.listen();await browser.open(`http://127.0.0.1:${server.httpServer.address().port}/tests-auto/mobile-workflow/fixture.html`);
@@ -31,7 +32,7 @@ export async function runMobileWorkflowScenario(){
     const toolbar=document.querySelector('.mobile-keyboard-toolbar'),bar=toolbar.getBoundingClientRect();
     const empty=document.querySelector('#emptyState').getBoundingClientRect();
     const toggle=root.querySelector('[data-mobile-action="toggle-expanded-keyboard"]');
-    const active=[...root.querySelectorAll('.mobile-keyboard-mode-tabs [data-mobile-page][aria-pressed="true"]')].map(node=>node.dataset.mobilePage);
+    const active=[...root.querySelectorAll('.mobile-keyboard-page-tabs [data-mobile-page][aria-pressed="true"]')].map(node=>node.dataset.mobilePage);
     return {expanded:root.dataset.expanded,activePage:root.dataset.activePage,ariaExpanded:toggle.getAttribute('aria-expanded'),panelHidden:root.querySelector('#mobileExpandedKeyboard').hidden,toolbarCount:document.querySelectorAll('.mobile-keyboard-toolbar').length,sameToolbar:toolbar===qa.dockToolbar,active,scrollWidth:document.documentElement.scrollWidth,viewportWidth:innerWidth,viewportHeight:innerHeight,dockTop:dock.top,dockBottom:dock.bottom,dockLeft:dock.left,dockRight:dock.right,emptyBottom:empty.bottom,toolbarBottom:bar.bottom,toolbarHeight:bar.height};
   })()`);
   const assertDockGeometry=async(label)=>{
@@ -49,28 +50,27 @@ export async function runMobileWorkflowScenario(){
   assert.deepEqual([dock.expanded,dock.ariaExpanded,dock.panelHidden],['false','false',true]);
   await screenshot('dock-compact');
   await tap('[data-mobile-action="toggle-expanded-keyboard"]');await wait('document.querySelector("#mobileShortcuts").dataset.expanded==="true"');
-  dock=await assertDockGeometry('typing');
-  assert.deepEqual([dock.activePage,dock.ariaExpanded,dock.panelHidden,dock.active],['typing','true',false,['typing']]);
-  assert.equal(await evaluate('document.querySelector("[data-mobile-panel=typing]").hidden'),false);
-  await screenshot('dock-typing');
-  const beforeVirtualKey=await evaluate('qa.bytes.length');
-  await tap('[data-mobile-panel="typing"] [data-mobile-shortcut="q"]');
+  dock=await assertDockGeometry('main');
+  assert.deepEqual([dock.activePage,dock.ariaExpanded,dock.panelHidden,dock.active],['main','true',false,['main']]);
+  assert.equal(await evaluate('document.querySelectorAll(".mobile-keyboard-mode-tabs").length'),0);
+  const beforeKeys=await evaluate('qa.bytes.length');
+  await tap('[data-mobile-panel=main] [data-mobile-chord="ctrl-a"]');
+  assert.equal(await evaluate('qa.bytes.at(-1)'),'\x01');
+  await tap('[data-mobile-panel=main] [data-mobile-chord="ctrl-e"]');
+  assert.equal(await evaluate('qa.bytes.at(-1)'),'\x05');
+  await screenshot('dock-main');
+  await tap('[data-mobile-page="typing"]');
+  await tap('[data-mobile-panel=typing] [data-mobile-shortcut=q]');
   assert.equal(await evaluate('qa.bytes.at(-1)'),'q');
-  const swipeStart=await evaluate('qa.point("[data-mobile-panel=typing] [data-mobile-shortcut=p]")');
-  await browser.dispatchTouch([touch('touchStart',swipeStart,7,30),touch('touchMove',{x:swipeStart.x-110,y:swipeStart.y+4},7,60),touch('touchEnd',swipeStart,7)]);
-  await wait('document.querySelector("#mobileShortcuts").dataset.activePage==="function"');
-  assert.equal(await evaluate('qa.bytes.length'),beforeVirtualKey+1,'swiping keyboard pages must not send the touched key');
-  await tap('.mobile-keyboard-mode-tabs [data-mobile-page="function"]');
-  dock=await assertDockGeometry('function');
-  assert.deepEqual([dock.activePage,dock.active],['function',['function']]);
-  assert.equal(await evaluate('document.querySelector("[data-mobile-panel=typing]").hidden'),true);
-  assert.equal(await evaluate('document.querySelector("[data-mobile-panel=function]").hidden'),false);
-  assert.equal(await evaluate('qa.bytes.length'),beforeVirtualKey+1,'switching pages must not send terminal input');
+  await screenshot('dock-typing');
+  await tap('[data-mobile-page="fn"]');
+  assert.equal(await evaluate('qa.bytes.length'),beforeKeys+3);
+  assert.equal(await evaluate('document.querySelector("[data-mobile-panel=fn]").hidden'),false);
   await screenshot('dock-function');
   await evaluate('document.documentElement.style.setProperty("--lzc-safe-area-inset-bottom","24px")');
   await browser.command(['set','viewport','390','360']);
   await assertDockGeometry('short viewport with safe inset');
-  await tap('.mobile-keyboard-mode-tabs [data-mobile-page="typing"]');
+  await tap('[data-mobile-page="typing"]');
   const beforeSmallPan=await evaluate('qa.bytes.length');
   const smallPan=await evaluate(`qa.point(${JSON.stringify('[data-mobile-panel=typing] [data-mobile-shortcut="1"]')})`);
   await browser.dispatchTouch([touch('touchStart',smallPan,8,30),touch('touchMove',{x:smallPan.x,y:smallPan.y-75},8,90),touch('touchEnd',smallPan,8)]);
@@ -86,7 +86,7 @@ export async function runMobileWorkflowScenario(){
   await tap('[data-mobile-action="toggle-system-keyboard"]');
   assert.equal(await evaluate('document.querySelector(".mobile-system-keyboard-toggle").getAttribute("aria-pressed")'),'false');
   await tap('[data-mobile-action="toggle-expanded-keyboard"]');
-  await tap('.mobile-keyboard-mode-tabs [data-mobile-mode-tab="shortcuts"]');
+  await tap('[data-mobile-page="main"]');
   dock=await assertDockGeometry('shortcuts');
   assert.deepEqual([dock.activePage,dock.active],['main',['main']]);
   assert.equal(await evaluate('document.querySelector("[data-mobile-panel=main]").hidden'),false);
@@ -143,13 +143,17 @@ export async function runMobileWorkflowScenario(){
     if(width===667&&height===375){
       const visibleTerminal=await evaluate('(()=>{const r=document.querySelector("#emptyState").getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height}})()');
       assert.equal(visibleTerminal.height>=99,true,`${label}: at least about 100px of terminal remains above the expanded dock: ${JSON.stringify(visibleTerminal)}`);
-      await evaluate('qa.keyboard.activatePage("function");document.querySelector("[data-mobile-panel=function]").scrollTop=0');
+      await evaluate('qa.keyboard.activatePage("fn");document.querySelector("[data-mobile-panel=fn]").scrollTop=0');
       const beforeFunction=await evaluate('qa.bytes.length');
-      const functionScroll=await evaluate('(()=>{const panel=document.querySelector("[data-mobile-panel=function]");panel.scrollTop=panel.scrollHeight;const key=panel.querySelector("[data-mobile-shortcut=enter]"),p=panel.getBoundingClientRect(),r=key.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {scrollTop:panel.scrollTop,panel:{top:p.top,bottom:p.bottom},key:{top:r.top,bottom:r.bottom},reachable:hit===key||key.contains(hit)}})()');
+      const swipe=await evaluate('(()=>{const r=document.querySelector("[data-mobile-panel=fn]").getBoundingClientRect();return {x:r.left+32,top:r.top+10,bottom:r.bottom-12}})()');
+      for (let attempt=0;attempt<2;attempt++) await browser.dispatchTouch([touch('touchStart',{x:swipe.x,y:swipe.bottom},9,30),touch('touchMove',{x:swipe.x,y:(swipe.top+swipe.bottom)/2},9,60),touch('touchMove',{x:swipe.x,y:swipe.top},9,60),touch('touchEnd',{x:swipe.x,y:swipe.top},9)]);
+      await wait('document.querySelector("[data-mobile-panel=fn]").scrollTop>0');
+      assert.equal(await evaluate('qa.bytes.length'),beforeFunction,'touch scrolling the function page must not emit a key');
+      const functionScroll=await evaluate('(()=>{const panel=document.querySelector("[data-mobile-panel=fn]");const key=panel.querySelector("[data-mobile-shortcut=f12]"),p=panel.getBoundingClientRect(),r=key.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {scrollTop:panel.scrollTop,panel:{top:p.top,bottom:p.bottom},key:{top:r.top,bottom:r.bottom},reachable:hit===key||key.contains(hit)}})()');
       assert.equal(functionScroll.scrollTop>0&&functionScroll.key.top>=functionScroll.panel.top-1&&functionScroll.key.bottom<=functionScroll.panel.bottom+1&&functionScroll.reachable,true,`${label}: function keyboard last row scrolls into a tappable area: ${JSON.stringify(functionScroll)}`);
-      await tap('[data-mobile-panel="function"] [data-mobile-shortcut="enter"]');
+      await tap('[data-mobile-panel="fn"] [data-mobile-shortcut="f12"]');
       assert.equal(await evaluate('qa.bytes.length'),beforeFunction+1,`${label}: scrolled function Enter activates once`);
-      assert.equal(await evaluate('qa.bytes.at(-1)'),'\r');
+      assert.equal(await evaluate('qa.bytes.at(-1)'),'\x1b[24~');
       await evaluate('qa.keyboard.activatePage("typing")');
     }
     await evaluate('document.querySelector("#webshell").dataset.tabLayout="vertical"');
@@ -203,8 +207,8 @@ export async function runMobileWorkflowScenario(){
   await evaluate('document.documentElement.style.removeProperty("--app-viewport-offset-left");document.documentElement.style.removeProperty("--app-viewport-width")');
   await browser.command(['set','viewport','390','844']);
   await evaluate('document.documentElement.style.setProperty("--lzc-safe-area-inset-bottom","0px");document.querySelector("#emptyState").hidden=true');
-  await tap('[data-mobile-action="toggle-expanded-keyboard"]');
-  await tap('.mobile-keyboard-mode-tabs [data-mobile-mode-tab="shortcuts"]');
+  await expand();
+  await tap('[data-mobile-page="main"]');
   await tap('[data-mobile-page="nav"]');
   const navigation = () => evaluate('(()=>{const panel=document.querySelector("[data-mobile-panel=nav]"),controls=document.querySelector(".mobile-keyboard-controls"),tabs=document.querySelector(".mobile-keyboard-pages");const r=panel.getBoundingClientRect(),c=controls.getBoundingClientRect(),t=tabs.getBoundingClientRect();return {visible:!panel.hidden,inFlow:getComputedStyle(panel).position==="static",below:r.top>=t.bottom,inside:r.top>=c.top&&r.bottom<=c.bottom,rows:c.height}})()');
   const nav=await navigation();assert.equal(nav.visible&&nav.inFlow&&nav.below&&nav.inside&&nav.rows>=44,true,'navigation stays within the expanded shortcuts area');

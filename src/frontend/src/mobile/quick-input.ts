@@ -50,9 +50,13 @@ const SYMBOL_LABELS: Record<string, string> = {
   "-": "Hyphen",
   "*": "Asterisk",
   "?": "Question mark",
+  ".": "Period",
+  ",": "Comma",
+  "=": "Equals",
+  "'": "Apostrophe",
 };
 
-const SYMBOLS = ["$", "/", "-", "~", "|", "\\", "`", "[", "]", "{", "}", "(", ")", "&", ";", ":", "*", "?"] as const;
+const SYMBOLS = ["$", "/", "-", "~", "|", "\\", "`", "[", "]", "{", "}", "(", ")", "&", ";", ":", "*", "?", ".", ",", "=", "'"] as const;
 const DEFAULT_PRIORITY = ["$", "/", "-", "~", "|", "\\", "`", "[", "]", "{", "}", "(", ")", "&", ";", ":", "*", "?"];
 const SLASH_COMMAND_PRIORITY = ["/", "$", "-", "~", "\\", "|", "`", "[", "]", "{", "}", "(", ")", "?", "&", ";", ":", "*"];
 const CODEX_PRIORITY = ["$", "/", "-", "~", "`", "|", "\\", "[", "]", "{", "}", "(", ")", "&", ";", ":", "*", "?"];
@@ -138,10 +142,6 @@ export function renderMobileSymbolKeyboardPanel(agent: MobileSymbolAgent): strin
     const label = SYMBOL_LABELS[symbol] ?? symbol;
     return `<button type="button" data-mobile-shortcut="${escapeAttr(symbol)}" aria-label="${escapeAttr(label)}">${escapeHtml(symbol)}</button>`;
   }).join("");
-}
-
-export function renderMobileQuickPhrasePageButton(_phrases: MobileQuickPhrase[], tr: Translate): string {
-  return `<button type="button" data-mobile-action="command-palette" aria-label="${escapeAttr(tr("mobilePalette.title"))}" title="${escapeAttr(tr("mobilePalette.title"))}"><i data-lucide="list-filter" aria-hidden="true"></i></button>`;
 }
 
 export function renderMobileQuickPhraseKeyboardPanel(phrases: MobileQuickPhrase[]): string {

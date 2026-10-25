@@ -23,22 +23,25 @@ export async function runMobileLayoutScenario() {
     await browser.open(`http://127.0.0.1:${port}/tests-auto/mobile-layout/index.html`);
     await browser.command(["set", "viewport", "375", "812"]);
     await browser.waitFor("window.layoutFixture?.ready");
+    assert.equal(await browser.evaluate('document.querySelector("[data-mobile-layout-customize]").open'), false);
+    await click("[data-mobile-layout-customize] > summary");
     const baseline = await state();
-    await click('[data-mobile-key-move="main-ctrl"][data-direction="1"]');
-    assert.equal((await state()).layout.pages[0].keys[1].id, "main-ctrl");
-    assert.equal(await browser.evaluate('document.activeElement?.dataset.mobileKeyMove'), "main-ctrl");
+    await click('[data-mobile-key-select="main-escape"]');
+    await click('[data-mobile-key-move="main-escape"][data-direction="1"]');
+    assert.equal((await state()).layout.pages[0].keys[1].id, "main-escape");
+    assert.equal(await browser.evaluate('document.activeElement?.dataset.mobileKeyMove'), "main-escape");
     await click("[data-mobile-layout-undo]");
     assert.deepEqual((await state()).layout, baseline.layout);
     assert.equal((await state()).preset, "default");
-    await click('[data-mobile-key-visibility="main-ctrl"]');
-    assert.equal(await browser.evaluate('document.querySelectorAll("[data-mobile-layout-preview] button").length'), baseline.layout.pages[0].keys.length - 1);
+    await click('[data-mobile-key-visibility="main-escape"]');
+    assert.equal(await browser.evaluate('document.querySelector("[data-mobile-layout-key=main-escape]").classList.contains("is-hidden")'), true);
     await click("[data-mobile-layout-undo]");
     // A whole-row long press, followed by a drag, moves the key one place.
     await browser.command(["scroll", "down", "550"]);
-    await browser.evaluate('document.querySelector("[data-mobile-layout-key=main-ctrl]").scrollIntoView({block:"start"})');
-    const points = await browser.evaluate(`(() => { const rect = s => { const r = document.querySelector(s).getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; }; return [rect('[data-mobile-layout-key="main-ctrl"] .mobile-keyboard-key-card'),rect('[data-mobile-layout-key="main-alt"]')]; })()`);
+    await browser.evaluate('document.querySelector("[data-mobile-layout-key=main-escape]").scrollIntoView({block:"start"})');
+    const points = await browser.evaluate(`(() => { const rect = s => { const r = document.querySelector(s).getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; }; return [rect('[data-mobile-layout-key="main-escape"] .mobile-keyboard-key-card'),rect('[data-mobile-layout-key="main-tab"]')]; })()`);
     await browser.dispatchTouch([{ type: "touchStart", touchPoints: [{ ...points[0], id: 1 }], delayMs: 420 }, { type: "touchMove", touchPoints: [{ ...points[1], id: 1 }], delayMs: 80 }, { type: "touchEnd", touchPoints: [] }]);
-    assert.equal((await state()).layout.pages[0].keys[1].id, "main-ctrl");
+    assert.equal((await state()).layout.pages[0].keys[1].id, "main-escape");
     await click("[data-mobile-layout-undo]");
     await click('[data-mobile-layout-page-tab="sym"]');
     await click("[data-mobile-key-editor-title]");
@@ -52,6 +55,7 @@ export async function runMobileLayoutScenario() {
     await fill("[data-mobile-key-text]", String.raw`printf '%s\\n' hello`);
     await click("[data-mobile-key-add]");
     const added = (await state()).layout.pages.find((page) => page.id === "sym").keys.at(-1);
+    await click(`[data-mobile-key-select="${added.id}"]`);
     await click(`[data-mobile-key-edit="${added.id}"]`);
     await fill("[data-mobile-key-label]", "Renamed");
     await click("[data-mobile-key-add]");
@@ -68,8 +72,11 @@ export async function runMobileLayoutScenario() {
     assert.equal((await state()).layout.pages.find((page) => page.id === "sym").keys.at(-1).id, added.id);
     // Navigation preview and the live category must honor the exact saved customization.
     await click('[data-mobile-layout-page-tab="nav"]');
+    await click('[data-mobile-key-select="nav-right"]');
     await click('[data-mobile-key-move="nav-right"][data-direction="-1"]');
+    await click('[data-mobile-key-select="nav-left"]');
     await browser.command(["select", 'select[data-mobile-key-width="nav-left"]', "lg"]);
+    await click('[data-mobile-key-select="nav-home"]');
     await click('[data-mobile-key-visibility="nav-home"]');
     if (!await browser.evaluate('document.querySelector("[data-mobile-key-editor-title]").closest("details").open')) await click('[data-mobile-key-editor-title]');
     await fill('[data-mobile-key-label]', 'My navigation key');
@@ -79,7 +86,7 @@ export async function runMobileLayoutScenario() {
     assert.deepEqual(configured.slice(0,4).map(key => key.value), ["left","down","right","up"]);
     assert.equal(configured.find(key => key.id === "nav-left").width, "lg");
     assert.equal(configured.find(key => key.id === "nav-home").hidden, true);
-    const preview = await browser.evaluate('[...document.querySelectorAll("[data-mobile-layout-preview] button")].map(button=>({value:button.dataset.mobileShortcut||button.dataset.mobileText,width:button.dataset.mobileKeyWidth}))');
+    const preview = configured.filter(key => !key.hidden).map(key => ({value: key.value, width: key.width}));
     const live = await browser.evaluate(`(async()=>{
       const {renderMobileKeyboardPanels}=await import('/src/frontend/src/mobile/keyboard-layout-view.ts');
       const {normalizeMobileKeyboardLayout}=await import('/src/frontend/src/mobile/keyboard-layout.ts');
@@ -90,11 +97,17 @@ export async function runMobileLayoutScenario() {
     assert.deepEqual(live,preview,'saved navigation order/width/hidden/custom text must render exactly like the preview');
     assert.equal(live.some(key => key.value === "home"), false);
     assert.equal(live.at(-1).value, "pwd");
+    for (const preset of ["vim", "emacs"]) {
+      await browser.command(["select", "[data-mobile-layout-preset]", preset]);
+      assert.equal((await state()).preset, preset);
+      assert.ok(await browser.evaluate('document.querySelectorAll("[data-mobile-key-select]").length > 10'));
+    }
     for (const [width, locale] of [[375, "en"], [375, "zh-CN"], [1024, "en"]]) {
       await browser.navigate(`http://127.0.0.1:${port}/tests-auto/mobile-layout/index.html?locale=${locale}`);
       await browser.command(["set", "viewport", String(width), "812"]);
       await browser.waitFor("window.layoutFixture?.ready");
-      const layoutCheck = await browser.evaluate(`({ width: innerWidth, scroll: document.documentElement.scrollWidth, undersized: [...document.querySelectorAll('.mobile-keyboard-key-row button, .mobile-keyboard-key-row select')].filter(el => {const r=el.getBoundingClientRect();return r.width<44||r.height<44}).length })`);
+      await click("[data-mobile-layout-customize] > summary");
+      const layoutCheck = await browser.evaluate(`({ width: innerWidth, scroll: document.documentElement.scrollWidth, undersized: [...document.querySelectorAll('.mobile-keyboard-key-row button, .mobile-keyboard-key-inspector button, .mobile-keyboard-key-inspector select')].filter(el => {const r=el.getBoundingClientRect();return r.width<44||r.height<44}).length })`);
       assert.ok(layoutCheck.scroll <= layoutCheck.width, JSON.stringify(layoutCheck));
       assert.equal(layoutCheck.undersized, 0);
       await browser.screenshot(resolve(artifactDirectory, `layout-${locale}-${width}.png`));

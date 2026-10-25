@@ -1,4 +1,4 @@
-export type MobileKeyboardPresetId = "default" | "operations" | "editor" | "custom";
+export type MobileKeyboardPresetId = "default" | "operations" | "editor" | "vim" | "emacs" | "custom";
 export type MobileKeyboardPageId = "main" | "ops" | "nav" | "fn" | "sym";
 export type MobileKeyboardKeyKind = "shortcut" | "chord" | "action" | "text";
 export type MobileKeyboardKeyWidth = "sm" | "md" | "lg";

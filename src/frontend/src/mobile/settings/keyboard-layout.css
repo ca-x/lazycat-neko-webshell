@@ -1,0 +1,42 @@
+.mobile-keyboard-layout-settings { display: grid; gap: 12px; }
+.mobile-keyboard-layout-toolbar .field { display: grid; grid-template-columns: minmax(0, 1fr) minmax(140px, 1fr); align-items: center; gap: 12px; }
+.mobile-keyboard-layout-settings select { min-width: 0; width: 100%; min-height: 44px; }
+.mobile-keyboard-customize { min-width: 0; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--surface); }
+.mobile-keyboard-customize > summary { min-height: 48px; padding: 14px 12px; color: var(--text); cursor: pointer; font-weight: 600; }
+.mobile-keyboard-customize-body { display: grid; gap: 12px; padding: 0 12px 12px; }
+.mobile-keyboard-page-field { min-width: 0; }
+.mobile-keyboard-page-field > span { color: var(--muted); font-size: 12px; }
+.mobile-keyboard-editor-tabs { display: flex; gap: 4px; margin-top: 8px; overflow-x: auto; }
+.mobile-keyboard-editor-tabs button { flex: 1 0 44px; min-width: 44px; min-height: 44px; padding: 0 6px; border: 1px solid var(--line-soft); border-radius: 7px; color: var(--text); background: var(--surface-2); font: 500 12px/1 var(--font-sans); }
+.mobile-keyboard-editor-tabs button[aria-selected="true"] { border-color: var(--accent-border); color: var(--accent-fg); background: var(--accent-soft); }
+.mobile-keyboard-key-list { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 6px; min-width: 0; align-content: start; }
+.mobile-keyboard-key-row { grid-column: span 2; min-width: 0; }
+.mobile-keyboard-key-row[data-mobile-key-width="sm"] { grid-column: span 1; }
+.mobile-keyboard-key-row[data-mobile-key-width="lg"] { grid-column: span 3; }
+.mobile-keyboard-key-card { display: flex; align-items: center; justify-content: center; gap: 4px; width: 100%; min-width: 0; min-height: 48px; padding: 6px; border: 1px solid var(--component-border); border-radius: 7px; background: var(--surface-2); color: var(--text); font: 500 12px/1.2 var(--font-mono); user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.mobile-keyboard-key-card span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-keyboard-key-card svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.mobile-keyboard-key-card[aria-pressed="true"] { border-color: var(--accent-border); outline: 1px solid var(--accent-border); background: var(--accent-soft); color: var(--accent-fg); }
+.mobile-keyboard-key-row.is-hidden .mobile-keyboard-key-card { border-style: dashed; color: var(--muted); }
+.mobile-keyboard-key-row.is-dragging { opacity: 0.4; }
+.mobile-keyboard-key-row.is-drag-over .mobile-keyboard-key-card { outline: 2px solid var(--accent-border); }
+.mobile-keyboard-key-inspector { display: grid; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--component-wash), var(--surface); }
+.mobile-keyboard-key-inspector:empty { display: none; }
+.mobile-keyboard-inspector-heading { display: flex; gap: 8px; align-items: baseline; min-width: 0; overflow-wrap: anywhere; }
+.mobile-keyboard-inspector-heading strong { font: 600 13px/1.4 var(--font-mono); }
+.mobile-keyboard-inspector-heading span { color: var(--muted); font-size: 12px; }
+.mobile-keyboard-key-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.mobile-keyboard-key-width-control { display: grid; gap: 4px; flex: 1 1 100px; min-width: 100px; color: var(--muted); font-size: 12px; }
+.mobile-keyboard-key-controls .icon-button { flex: 0 0 44px; width: 44px; min-width: 44px; min-height: 44px; }
+.mobile-keyboard-custom-key { border-top: 1px solid var(--line-soft); }
+.mobile-keyboard-custom-key summary { min-height: 44px; padding-block: 12px; font-weight: 600; color: var(--text); cursor: pointer; }
+.mobile-keyboard-custom-key-fields { display: grid; gap: 12px; padding-top: 8px; }
+.mobile-keyboard-custom-key [hidden] { display: none; }
+.mobile-keyboard-layout-settings :is(button, summary, select, input, textarea):focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.mobile-keyboard-layout-settings button:active:not(:disabled) { background-color: var(--accent-soft); }
+@media (max-width: 420px) {
+  .mobile-keyboard-key-list { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+}
+@media (max-width: 360px) {
+  .mobile-keyboard-key-list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}

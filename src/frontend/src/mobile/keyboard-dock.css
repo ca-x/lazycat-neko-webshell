@@ -3,8 +3,10 @@ body.mobile-controls-enabled {
 }
 
 body.mobile-controls-enabled.mobile-keyboard-expanded {
-  --mobile-shortcuts-height: clamp(190px, calc(var(--app-viewport-height) - 130px), 410px);
+  --mobile-shortcuts-height: clamp(190px, calc(var(--app-viewport-height) - 160px), var(--mobile-keyboard-max-height, 350px));
 }
+
+body:has(.mobile-shortcuts[data-active-page="typing"]) { --mobile-keyboard-max-height: 410px; }
 
 body.mobile-controls-enabled.mobile-composer-open {
   --mobile-shortcuts-height: var(--mobile-composer-reserved-height, 202px);
@@ -119,13 +121,13 @@ body.mobile-controls-enabled .mobile-expanded-keyboard {
 }
 
 .mobile-keyboard-quick-keys button[data-mobile-key-width="lg"] { min-width: 74px; }
-.mobile-keyboard-toolbar-actions button { width: 40px; min-width: 40px; padding: 0; }
+.mobile-keyboard-toolbar-actions button { width: 44px; min-width: 44px; padding: 0; }
 .mobile-keyboard-quick-keys button.mobile-quick-key[data-mobile-shortcut] {
-  flex: 0 0 38px;
-  width: 38px;
-  min-width: 38px;
+  flex: 0 0 44px;
+  width: 44px;
+  min-width: 44px;
   padding: 0;
-  font-size: 16px;
+  font-size: 13px;
 }
 .mobile-keyboard-toolbar-actions svg { width: 18px; height: 18px; }
 
@@ -152,36 +154,6 @@ body.mobile-controls-enabled .mobile-expanded-keyboard {
 
 .mobile-expanded-keyboard[hidden],
 .mobile-expanded-keyboard [hidden] { display: none; }
-
-.mobile-keyboard-mode-tabs {
-  display: flex;
-  flex: 0 0 44px;
-  gap: 5px;
-  min-height: 44px;
-}
-
-.mobile-keyboard-mode-tabs button {
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 44px;
-  border: 1px solid var(--line-soft);
-  border-radius: 9px;
-  background: var(--surface-2);
-  color: var(--text);
-  font: 600 12px/1 var(--font-sans);
-}
-
-.mobile-keyboard-mode-tabs button.active {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-  color: var(--accent-fg);
-}
-
-.mobile-virtual-keyboard-controls {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
-}
 
 .mobile-virtual-keyboard-panel {
   display: flex;
@@ -239,25 +211,29 @@ body.mobile-controls-enabled .mobile-expanded-keyboard {
   min-height: 44px;
 }
 
-.mobile-expanded-keyboard .mobile-keyboard-page-tabs { flex: 1 1 auto; }
-.mobile-expanded-keyboard .mobile-keyboard-page-tabs button { color: var(--text); }
-.mobile-expanded-keyboard .mobile-secret-file-secondary { display: none; }
+.mobile-expanded-keyboard .mobile-keyboard-page-tabs { flex: 1 1 auto; gap: 4px; }
+.mobile-expanded-keyboard .mobile-keyboard-page-tabs button { color: var(--text); min-width: 44px; padding: 0 8px; font: 500 12px/1 var(--font-sans); }
+.mobile-expanded-keyboard .mobile-keyboard-page-tabs button.active { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-fg); }
 .mobile-expanded-keyboard .mobile-shortcut-clock { flex: 0 0 auto; }
 
 .mobile-expanded-keyboard .mobile-keyboard-controls {
   flex: 1 1 auto;
   align-items: flex-start;
   min-height: 0;
+  overflow: hidden;
+  width: 100%;
 }
 
 .mobile-expanded-keyboard .mobile-keyboard-panel {
   display: grid;
-  grid-template-columns: repeat(10, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   grid-auto-rows: 48px;
   align-content: start;
   gap: 5px;
   max-height: 100%;
   overflow-y: auto;
+  touch-action: pan-y pinch-zoom;
+  overscroll-behavior-y: contain;
 }
 
 .mobile-expanded-keyboard .mobile-keyboard-panel[hidden] { display: none; }
@@ -269,29 +245,23 @@ body.mobile-controls-enabled .mobile-expanded-keyboard {
   height: 48px;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
 }
+
+.mobile-expanded-keyboard .mobile-keyboard-panel button > span { display: inline-flex; align-items: center; justify-content: center; gap: 4px; max-width: 100%; min-width: 0; }
+.mobile-expanded-keyboard .mobile-keyboard-panel button small { font: 400 11px/1.1 var(--font-sans); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.mobile-keyboard-tool-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+.mobile-keyboard-tool-actions button { display: flex; align-items: center; justify-content: center; gap: 8px; flex: 1; min-width: 0; min-height: 44px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--surface-2); color: var(--text); font: 500 12px/1.2 var(--font-sans); }
+.mobile-keyboard-tool-actions svg { width: 16px; height: 16px; }
+.mobile-keyboard-tool-actions button:active { background: var(--accent-soft); }
 
 .mobile-expanded-keyboard .mobile-keyboard-panel button[data-mobile-key-width="sm"] { grid-column: span 1; }
 .mobile-expanded-keyboard .mobile-keyboard-panel button[data-mobile-key-width="lg"] { grid-column: span 3; }
 .mobile-expanded-keyboard .mobile-keyboard-panel button[data-mobile-phrase] {
   grid-column: span 4;
   max-width: none;
-}
-
-@media (max-width: 360px) {
-  .mobile-keyboard-toolbar-actions .mobile-secret-file-button { display: none; }
-  .mobile-expanded-keyboard .mobile-secret-file-secondary {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex: 0 0 44px;
-    width: 44px;
-    min-height: 44px;
-    border: 1px solid var(--line-soft);
-    border-radius: 9px;
-    background: var(--surface-2);
-    color: var(--text);
-  }
 }
 
 @media (max-width: 360px) and (min-height: 500px) and (max-height: 650px) {
@@ -328,7 +298,6 @@ body.mobile-controls-enabled .mobile-expanded-keyboard {
     max-height: max(0px, calc(var(--app-viewport-height) - var(--mobile-shortcuts-height) - var(--lzc-safe-area-inset-bottom)));
     overflow: hidden;
   }
-
   body.mobile-controls-enabled .webshell[data-tab-layout="vertical"].has-named-tabs .topbar {
     width: 72px;
     min-width: 72px;

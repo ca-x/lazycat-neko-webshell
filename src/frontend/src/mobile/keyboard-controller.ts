@@ -17,7 +17,6 @@ import {
 import {
   normalizeMobileQuickPhrases,
   renderMobileQuickPhraseKeyboardPanel,
-  renderMobileQuickPhrasePageButton,
   renderMobileSymbolKeyboardPanel,
   type MobileSymbolAgent,
 } from "./quick-input";
@@ -25,7 +24,7 @@ import type { MobileQuickPhrase } from "../types";
 import { updateSystemKeyboardToggleState } from "./system-keyboard-state";
 import type { MobileKeyboardLayout, MobileKeyboardPresetId } from "./keyboard-layout-types.ts";
 import { renderMobileKeyboardPanels } from "./keyboard-layout-view.ts";
-import { installMobileKeyboardPageSwipe } from "./keyboard-page-swipe.ts";
+import { renderMobileTypingKeyboard } from "./virtual-keyboard.ts";
 
 type Translate = (key: MessageKey, values?: Record<string, string | number>) => string;
 
@@ -55,7 +54,6 @@ export type MobileKeyboardRenderInput = {
 export function createMobileKeyboardController(options: MobileKeyboardControllerOptions) {
   const sticky = createMobileStickyState();
   let gestures: ReturnType<typeof createMobileKeyGestureController<HTMLButtonElement>> | undefined;
-  let disposePageSwipe: (() => void) | undefined;
   let disposed = false;
   let deferredActionTimer: number | undefined;
   let expanded = false;
@@ -122,37 +120,22 @@ export function createMobileKeyboardController(options: MobileKeyboardController
       setTimer: (callback, delay) => window.setTimeout(callback, delay),
       clearTimer: (timer) => window.clearTimeout(timer),
     });
-    const virtualControls = options.root.querySelector<HTMLElement>(".mobile-virtual-keyboard-controls");
-    if (virtualControls) disposePageSwipe = installMobileKeyboardPageSwipe({
-      root: virtualControls, globalTarget: window, visibilityTarget: document,
-      activePage, activatePage,
-    });
     updateShortcutState();
   }
 
   function renderQuickInput(input: MobileKeyboardRenderInput): MobileQuickPhrase[] {
     stopRepeatInput();
     clearDeferredAction();
-    const pages = options.root.querySelector<HTMLElement>(".mobile-keyboard-pages");
-    const pageTabs = options.root.querySelector<HTMLElement>(".mobile-keyboard-page-tabs");
     const controls = options.root.querySelector<HTMLElement>(".mobile-keyboard-controls");
-    if (!pages || !pageTabs || !controls) return input.phrases;
+    if (!controls) return input.phrases;
     const currentPage = activePage();
-    controls.innerHTML = `${renderMobileKeyboardPanels(input.layout, currentPage)}<div class="mobile-keyboard-panel" data-mobile-panel="phrases" hidden></div>`;
+    controls.innerHTML = `${renderMobileKeyboardPanels(input.layout, currentPage, input.tr)}${renderMobileTypingKeyboard()}<div class="mobile-keyboard-panel" data-mobile-panel="phrases" hidden></div>`;
     updateShortcutState();
     const symPanel = controls.querySelector<HTMLElement>("[data-mobile-panel='sym']");
     const phrasePanel = controls.querySelector<HTMLElement>("[data-mobile-panel='phrases']");
     if (!symPanel || !phrasePanel) return input.phrases;
 
-    const phraseButton = pages.querySelector<HTMLElement>("[data-mobile-action='command-palette']");
-    phraseButton?.remove();
     const phrases = normalizeMobileQuickPhrases(input.phrases);
-    const phraseButtonHtml = renderMobileQuickPhrasePageButton(phrases, input.tr);
-    if (phraseButtonHtml) {
-      pageTabs.insertAdjacentHTML("beforeend", phraseButtonHtml);
-    } else if (!phrasePanel.hidden) {
-      activatePage("sym");
-    }
 
     if (input.preset !== "custom") symPanel.innerHTML = renderMobileSymbolKeyboardPanel(input.symbolAgent);
     phrasePanel.innerHTML = renderMobileQuickPhraseKeyboardPanel(phrases);
@@ -162,28 +145,22 @@ export function createMobileKeyboardController(options: MobileKeyboardController
   }
 
   function activatePage(page: string) {
-    if (!page) return;
+    if (!options.root.querySelector(`[data-mobile-panel="${CSS.escape(page)}"]`)) return;
     if (page !== activePage()) stopRepeatInput();
     options.root.dataset.activePage = page;
-    const legacyPage = page !== "typing" && page !== "function";
-    const pages = options.root.querySelector<HTMLElement>(".mobile-keyboard-pages");
-    const controls = options.root.querySelector<HTMLElement>(".mobile-keyboard-controls");
-    const virtual = options.root.querySelector<HTMLElement>(".mobile-virtual-keyboard-controls");
-    if (pages) pages.hidden = !legacyPage;
-    if (controls) controls.hidden = !legacyPage;
-    if (virtual) virtual.hidden = legacyPage;
     options.root.querySelectorAll<HTMLButtonElement>("[data-mobile-page]").forEach((button) => {
-      const active = button.dataset.mobilePage === page || (button.dataset.mobileModeTab === "shortcuts" && legacyPage);
+      const active = button.dataset.mobilePage === page;
       button.classList.toggle("active", active);
       button.setAttribute("aria-pressed", String(active));
     });
     options.root.querySelectorAll<HTMLElement>("[data-mobile-panel]").forEach((panel) => {
       panel.hidden = panel.dataset.mobilePanel !== page;
     });
+    if (expanded) options.onLayoutChange();
   }
 
   function activePage(): string {
-    return options.root.dataset.activePage ?? "typing";
+    return options.root.dataset.activePage ?? "main";
   }
 
   function syncExpandedView() {
@@ -282,8 +259,6 @@ export function createMobileKeyboardController(options: MobileKeyboardController
     clearDeferredAction();
     gestures?.dispose();
     gestures = undefined;
-    disposePageSwipe?.();
-    disposePageSwipe = undefined;
     document.body.classList.remove("mobile-keyboard-expanded");
   }
 

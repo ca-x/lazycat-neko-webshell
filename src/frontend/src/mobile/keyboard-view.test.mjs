@@ -1,52 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-
 import { renderMobileKeyboardView } from "./keyboard-view.ts";
 
-test("keeps quick keys and mode controls in one persistent mobile toolbar", () => {
+test("keeps terminal keys ahead of two persistent keyboard controls", () => {
   const html = renderMobileKeyboardView();
-  const quickStart = html.indexOf('class="mobile-keyboard-quick-keys"');
-  const actionStart = html.indexOf('class="mobile-keyboard-toolbar-actions"');
-  const expandedStart = html.indexOf('class="mobile-expanded-keyboard"');
-
-  assert.match(html, /id="mobileShortcuts"[^>]*data-active-page="typing" data-expanded="false"/);
-  assert.ok(quickStart >= 0 && quickStart < actionStart && actionStart < expandedStart);
-  for (const direction of ["up", "down", "left", "right"]) {
-    const index = html.indexOf(`data-mobile-shortcut="${direction}"`, quickStart);
-    assert.ok(index > quickStart && index < actionStart, `${direction} stays on the quick bar`);
+  const toolbar = html.slice(html.indexOf('class="mobile-keyboard-toolbar"'), html.indexOf('class="mobile-expanded-keyboard"'));
+  assert.match(html, /data-active-page="main" data-expanded="false"/);
+  for (const key of ["escape", "tab", "ctrl", "left", "down", "up", "right", "alt", "shift"]) {
+    assert.ok(toolbar.includes(`data-mobile-shortcut="${key}"`));
   }
-  for (const chord of ["ctrl-c", "ctrl-z"]) {
-    const index = html.indexOf(`data-mobile-chord="${chord}"`, quickStart);
-    assert.ok(index > quickStart && index < actionStart, `${chord} stays on the quick bar`);
-  }
-  const pasteIndex = html.indexOf('data-mobile-action="paste-clipboard"', quickStart);
-  assert.ok(pasteIndex > quickStart && pasteIndex < actionStart);
-  for (const modifier of ["ctrl", "alt", "shift"]) {
-    const index = html.indexOf(`data-mobile-shortcut="${modifier}" data-mobile-modifier="${modifier}"`, quickStart);
-    assert.ok(index > quickStart && index < actionStart, `${modifier} stays available for the system keyboard`);
-  }
-  for (const action of ["compose-text", "toggle-system-keyboard", "toggle-expanded-keyboard"]) {
-    const index = html.indexOf(`data-mobile-action="${action}"`);
-    assert.ok(index > actionStart && index < expandedStart, `${action} stays on the toolbar`);
-    assert.equal(html.split(`data-mobile-action="${action}"`).length - 1, 1);
-  }
-  assert.match(html.slice(actionStart, expandedStart), /class="mobile-secret-file-button" data-mobile-action="secret-file"/);
-  assert.match(html.slice(expandedStart), /class="mobile-secret-file-secondary" data-mobile-action="secret-file"/);
-  assert.match(html, /data-mobile-action="toggle-system-keyboard"[^>]*aria-pressed="false"/);
-  assert.match(html, /data-mobile-action="toggle-expanded-keyboard"[^>]*aria-expanded="false"/);
-  assert.match(html, /id="mobileExpandedKeyboard" hidden/);
+  const actions = toolbar.slice(toolbar.indexOf('class="mobile-keyboard-toolbar-actions"'));
+  assert.equal((actions.match(/<button/g) || []).length, 2);
+  assert.match(actions, /toggle-system-keyboard/);
+  assert.match(actions, /toggle-expanded-keyboard/);
+  assert.equal((html.match(/data-mobile-action="secret-file"/g) || []).length, 1);
+  assert.equal((html.match(/data-mobile-action="compose-text"/g) || []).length, 1);
 });
 
-test("expanded keyboard keeps typing, function, and editable shortcut pages separate", () => {
+test("exposes one level of pages with a single editable function key set", () => {
   const html = renderMobileKeyboardView();
-  assert.match(html, /data-mobile-page="typing" aria-pressed="true"/);
-  assert.match(html, /data-mobile-page="function" aria-pressed="false"/);
-  assert.match(html, /data-mobile-mode-tab="shortcuts"/);
-  assert.match(html, /data-mobile-panel="typing"/);
-  assert.match(html, /data-mobile-panel="function"[^>]*hidden/);
-  assert.match(html, /data-mobile-panel="main"[^>]*hidden/);
-  assert.match(html, /data-mobile-panel="phrases" hidden/);
-  assert.match(html, /class="mobile-keyboard-page-tabs"/);
-  assert.match(html, /class="mobile-shortcut-clock"/);
-  assert.match(html, /data-mobile-shortcut="escape"/);
+  const pages = [...html.matchAll(/data-mobile-page="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(pages, ["main", "nav", "fn", "sym", "typing", "ops"]);
+  assert.doesNotMatch(html, /mobile-keyboard-mode-tabs|data-mobile-mode-tab|data-mobile-panel="function"/);
+  assert.match(html, /data-mobile-page="main" aria-pressed="true"/);
+  assert.match(html, /data-mobile-panel="typing"[^>]*hidden/);
+  assert.match(html, /id="mobileExpandedKeyboard" hidden/);
 });
