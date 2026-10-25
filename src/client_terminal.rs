@@ -25,10 +25,9 @@ use tracing::{info, warn};
 
 use crate::client_terminal_auth::{DeviceAuthCache, DeviceAuthLease};
 use crate::http_body::read_limited_body;
-use crate::lightos;
 use crate::lightos_admin::{
-    self, build_admin_url, build_upstream_headers, current_request_account_id,
-    list_visible_client_instances, parse_client_selector, resolve_admin_base_url,
+    self, admin_base_url_for_request, admin_http_client, build_admin_url, build_upstream_headers,
+    current_request_account_id, list_visible_client_instances, parse_client_selector,
 };
 use crate::proto::lazycat::webshell::v1::Session;
 use crate::remote_program::{RemoteBootstrapState, RemoteProgramKind, RemoteProgramStore};
@@ -1352,14 +1351,7 @@ async fn request_terminal_ticket(
 ) -> Result<ClientTerminalTicket, ClientTerminalError> {
     let account_id = current_request_account_id(headers)
         .ok_or_else(|| ClientTerminalError::unauthorized("account id is required"))?;
-    let info = lightos::admin_info().await.map_err(|error| {
-        ClientTerminalError::bad_gateway(
-            error
-                .message
-                .unwrap_or_else(|| "failed to resolve LightOS admin info".to_owned()),
-        )
-    })?;
-    let base_url = resolve_admin_base_url(&info.base_url);
+    let base_url = admin_base_url_for_request(headers).await?;
     let url = build_admin_url(&base_url, "/api/client-instances/terminal-ticket")
         .map_err(|error| ClientTerminalError::bad_gateway(error.to_string()))?;
     let admin_origin = url.origin().ascii_serialization();
@@ -1370,11 +1362,7 @@ async fn request_terminal_ticket(
     let mut upstream_headers =
         build_upstream_headers(headers, &account_id).map_err(ClientTerminalError::bad_gateway)?;
     upstream_headers.insert("content-type", HeaderValue::from_static("application/json"));
-    let client = reqwest::Client::builder()
-        .timeout(CLIENT_TERMINAL_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| ClientTerminalError::bad_gateway(error.to_string()))?;
+    let client = admin_http_client(headers, CLIENT_TERMINAL_TIMEOUT)?;
     let response = client
         .post(url)
         .headers(upstream_headers)
@@ -1402,15 +1390,19 @@ async fn request_terminal_ticket(
             "client terminal ticket request returned {status}"
         )));
     }
-    serde_json::from_slice(&body).map_err(|error| {
-        ClientTerminalError::bad_gateway(format!("invalid client terminal ticket: {error}"))
-    })
+    serde_json::from_slice(&body)
+        .map_err(|_| ClientTerminalError::bad_gateway("invalid client terminal ticket"))
 }
 
 fn remote_access_error(status: StatusCode) -> Option<ClientTerminalError> {
     let message = "instance is not accessible by current account";
     match status {
         StatusCode::UNAUTHORIZED => Some(ClientTerminalError::unauthorized(message)),
+        StatusCode::PRECONDITION_FAILED | StatusCode::PRECONDITION_REQUIRED => {
+            Some(ClientTerminalError::unauthorized(
+                "LightOS user delegation expired or was rejected; reopen Neko from the LazyCat platform",
+            ))
+        }
         StatusCode::FORBIDDEN => Some(ClientTerminalError::forbidden(message)),
         _ => None,
     }

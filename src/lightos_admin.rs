@@ -12,6 +12,9 @@ use crate::proto::lazycat::webshell::v1::{Instance, InstanceKind};
 use crate::validation::validate_selector;
 
 const LIGHTOS_USER_ID_HEADER: &str = "x-hc-user-id";
+const LIGHTOS_USER_TICKET_HEADER: &str = "x-hc-user-ticket";
+const LIGHTOS_ADMIN_INTERCONNECT_BASE_URL: &str = "http://app.cloud.lazycat.lightos.entry.lzcx";
+const MAX_USER_TICKET_BYTES: usize = 16 * 1024;
 const LIGHTOS_REQUIRE_COOKIE_AUTH_ENV: &str = "LIGHTOS_REQUIRE_COOKIE_AUTH";
 const LIGHTOS_ADMIN_INTERNAL_BASE_URL_ENV: &str = "LIGHTOS_ADMIN_INTERNAL_BASE_URL";
 const LIGHTOS_ADMIN_APP_ID: &str = "cloud.lazycat.lightos.entry";
@@ -93,19 +96,8 @@ pub async fn list_visible_instances(
 ) -> Result<Vec<Instance>, LightOsAdminError> {
     let account_id = current_request_account_id(headers)
         .ok_or_else(|| LightOsAdminError::unauthorized("account id is required"))?;
-    let info = lightos::admin_info().await.map_err(|error| {
-        LightOsAdminError::bad_gateway(
-            error
-                .message
-                .unwrap_or_else(|| "failed to resolve LightOS admin info".to_owned()),
-        )
-    })?;
-    let base_url = resolve_admin_base_url(&info.base_url);
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| LightOsAdminError::bad_gateway(error.to_string()))?;
+    let base_url = admin_base_url_for_request(headers).await?;
+    let client = admin_http_client(headers, Duration::from_secs(30))?;
     list_visible_instances_from(&client, &base_url, headers, &account_id).await
 }
 
@@ -145,19 +137,8 @@ pub(crate) async fn list_visible_client_instances(
 ) -> Result<Vec<ClientInstanceSummary>, LightOsAdminError> {
     let account_id = current_request_account_id(headers)
         .ok_or_else(|| LightOsAdminError::unauthorized("account id is required"))?;
-    let info = lightos::admin_info().await.map_err(|error| {
-        LightOsAdminError::bad_gateway(
-            error
-                .message
-                .unwrap_or_else(|| "failed to resolve LightOS admin info".to_owned()),
-        )
-    })?;
-    let base_url = resolve_admin_base_url(&info.base_url);
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| LightOsAdminError::bad_gateway(error.to_string()))?;
+    let base_url = admin_base_url_for_request(headers).await?;
+    let client = admin_http_client(headers, Duration::from_secs(30))?;
     list_visible_client_instances_from(&client, &base_url, headers, &account_id).await
 }
 
@@ -180,6 +161,7 @@ async fn fetch_admin_json(
     url: Url,
     headers: HeaderMap,
 ) -> Result<Vec<u8>, LightOsAdminError> {
+    let delegated = headers.contains_key(LIGHTOS_USER_TICKET_HEADER);
     let response = client
         .get(url)
         .headers(headers)
@@ -187,6 +169,20 @@ async fn fetch_admin_json(
         .await
         .map_err(LightOsAdminError::upstream_request)?;
     let status = response.status();
+    if delegated && status != StatusCode::OK {
+        let status = match status {
+            StatusCode::PRECONDITION_FAILED | StatusCode::PRECONDITION_REQUIRED => {
+                StatusCode::UNAUTHORIZED
+            }
+            status => upstream_status_for_frontend(status),
+        };
+        let message = match status {
+            StatusCode::UNAUTHORIZED => "LightOS user delegation expired or was rejected; reopen Neko from the LazyCat platform".to_owned(),
+            StatusCode::FORBIDDEN => "LightOS access denied for the current account".to_owned(),
+            _ => format!("LightOS instance discovery failed ({status})"),
+        };
+        return Err(LightOsAdminError { status, message });
+    }
     let body = read_limited_body(response, MAX_ADMIN_RESPONSE_BYTES, "LightOS admin response")
         .await
         .map_err(LightOsAdminError::bad_gateway)?;
@@ -256,6 +252,74 @@ fn current_deploy_uid() -> Option<String> {
         .find_map(|name| non_empty_env(name))
 }
 
+/// Keep platform delegation on the fixed app-interconnect origin. Public admin
+/// URLs and internal overrides remain available to the official embedded mode
+/// and explicitly unauthenticated development setups, without receiving tickets.
+pub(crate) async fn admin_base_url_for_request(
+    headers: &HeaderMap,
+) -> Result<String, LightOsAdminError> {
+    if headers.contains_key(LIGHTOS_USER_TICKET_HEADER) {
+        delegation_ticket(headers).map_err(LightOsAdminError::unauthorized)?;
+        return Ok(LIGHTOS_ADMIN_INTERCONNECT_BASE_URL.to_owned());
+    }
+    if lightos_cookie_auth_required()
+        && non_empty_env(LAZYCAT_APP_ID_ENV).as_deref() != Some(LIGHTOS_ADMIN_APP_ID)
+    {
+        return Err(LightOsAdminError::unauthorized(
+            "LightOS user delegation is unavailable; reopen Neko from the LazyCat platform",
+        ));
+    }
+    let info = lightos::admin_info().await.map_err(|error| {
+        LightOsAdminError::bad_gateway(
+            error
+                .message
+                .unwrap_or_else(|| "failed to resolve LightOS admin info".to_owned()),
+        )
+    })?;
+    Ok(resolve_admin_base_url(&info.base_url))
+}
+
+pub(crate) fn admin_http_client(
+    headers: &HeaderMap,
+    timeout: Duration,
+) -> Result<reqwest::Client, LightOsAdminError> {
+    let builder = reqwest::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none());
+    // Internal tickets must not pass through an environment-configured proxy.
+    let builder = if headers.contains_key(LIGHTOS_USER_TICKET_HEADER) {
+        builder.no_proxy()
+    } else {
+        builder
+    };
+    builder
+        .build()
+        .map_err(|error| LightOsAdminError::bad_gateway(error.to_string()))
+}
+
+fn delegation_ticket(headers: &HeaderMap) -> Result<HeaderValue, String> {
+    let mut values = headers.get_all(LIGHTOS_USER_TICKET_HEADER).iter();
+    let Some(value) = values.next() else {
+        return Err(
+            "LightOS user ticket is required; reopen Neko from the LazyCat platform".to_owned(),
+        );
+    };
+    if values.next().is_some()
+        || value.as_bytes().len() > MAX_USER_TICKET_BYTES
+        || value
+            .to_str()
+            .ok()
+            .is_none_or(|value| value.trim().is_empty())
+    {
+        return Err(
+            "invalid LightOS user ticket; reopen Neko from the LazyCat platform".to_owned(),
+        );
+    }
+    let mut ticket = value.clone();
+    ticket.set_sensitive(true);
+    Ok(ticket)
+}
+
 pub(crate) fn resolve_admin_base_url(public_base_url: &str) -> String {
     let configured = lightos_config_value(LIGHTOS_ADMIN_INTERNAL_BASE_URL_ENV);
     if !configured.is_empty() {
@@ -287,6 +351,14 @@ pub(crate) fn build_upstream_headers(
     account_id: &str,
 ) -> Result<HeaderMap, String> {
     let mut target = HeaderMap::new();
+    if source.contains_key(LIGHTOS_USER_TICKET_HEADER) {
+        target.insert(LIGHTOS_USER_TICKET_HEADER, delegation_ticket(source)?);
+        target.insert("accept", HeaderValue::from_static("application/json"));
+        copy_header(source, &mut target, "accept-language");
+        // The interconnect validates the ticket and projects the user's identity.
+        // Browser credentials and incoming identity claims must not cross apps.
+        return Ok(target);
+    }
     for name in [
         "accept",
         "accept-language",
@@ -328,7 +400,7 @@ fn non_empty_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 
 fn parse_visible_instances(output: &[u8]) -> Result<Vec<Instance>, String> {
     let items: Vec<VisibleInstance> = serde_json::from_slice(output)
-        .map_err(|error| format!("invalid LightOS webshell instances JSON: {error}"))?;
+        .map_err(|_| "invalid LightOS webshell instances JSON".to_owned())?;
     let mut instances = items
         .iter()
         .filter_map(instance_from_visible)
@@ -378,8 +450,7 @@ fn instance_from_visible(item: &VisibleInstance) -> Option<Instance> {
 }
 
 fn parse_client_instance_summaries(output: &[u8]) -> Result<Vec<ClientInstanceSummary>, String> {
-    serde_json::from_slice(output)
-        .map_err(|error| format!("invalid LightOS client instances JSON: {error}"))
+    serde_json::from_slice(output).map_err(|_| "invalid LightOS client instances JSON".to_owned())
 }
 
 fn parse_client_instances(output: &[u8]) -> Result<Vec<Instance>, String> {
@@ -498,6 +569,145 @@ mod tests {
         upstream_status_for_frontend,
     };
     use crate::proto::lazycat::webshell::v1::InstanceKind;
+
+    #[test]
+    fn delegation_rejects_missing_blank_ambiguous_and_oversized_tickets() {
+        assert!(super::delegation_ticket(&HeaderMap::new()).is_err());
+        for ticket in [
+            String::new(),
+            "  ".to_owned(),
+            "x".repeat(super::MAX_USER_TICKET_BYTES + 1),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-hc-user-ticket", HeaderValue::from_str(&ticket).unwrap());
+            let error = super::delegation_ticket(&headers).unwrap_err();
+            assert!(error.contains("reopen Neko"));
+            assert!(!error.contains("xxxx"));
+        }
+        let mut headers = HeaderMap::new();
+        headers.append(
+            "x-hc-user-ticket",
+            HeaderValue::from_static("fixture-first"),
+        );
+        headers.append(
+            "x-hc-user-ticket",
+            HeaderValue::from_static("fixture-second"),
+        );
+        assert!(super::delegation_ticket(&headers).is_err());
+        headers.remove("x-hc-user-ticket");
+        headers.insert(
+            "x-hc-user-ticket",
+            HeaderValue::from_static("fixture-valid"),
+        );
+        let ticket = super::delegation_ticket(&headers).unwrap();
+        assert_eq!(ticket, "fixture-valid");
+        assert!(ticket.is_sensitive());
+    }
+
+    #[tokio::test]
+    async fn delegated_discovery_always_uses_the_fixed_app_interconnect_origin() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-hc-user-ticket",
+            HeaderValue::from_static("fixture-valid"),
+        );
+        headers.insert("host", HeaderValue::from_static("untrusted.example"));
+        headers.insert(
+            "x-forwarded-host",
+            HeaderValue::from_static("untrusted.example"),
+        );
+        let base = super::admin_base_url_for_request(&headers).await.unwrap();
+        assert_eq!(base, "http://app.cloud.lazycat.lightos.entry.lzcx");
+        assert_eq!(
+            build_admin_url(&base, "/api/client-instances/terminal-ticket")
+                .unwrap()
+                .host_str(),
+            Some("app.cloud.lazycat.lightos.entry.lzcx")
+        );
+        headers.append(
+            "x-hc-user-ticket",
+            HeaderValue::from_static("fixture-duplicate"),
+        );
+        let error = super::admin_base_url_for_request(&headers)
+            .await
+            .unwrap_err();
+        assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn delegated_failures_are_explicit_and_do_not_echo_ticket_or_follow_redirects() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let redirected = Arc::new(AtomicUsize::new(0));
+        let sink = Arc::clone(&redirected);
+        let app = Router::new()
+            .route(
+                "/status/{code}",
+                get(
+                    |axum::extract::Path(code): axum::extract::Path<u16>| async move {
+                        (StatusCode::from_u16(code).unwrap(), "fixture-secret-ticket")
+                    },
+                ),
+            )
+            .route(
+                "/redirect",
+                get(|| async { (StatusCode::TEMPORARY_REDIRECT, [("location", "/sink")]) }),
+            )
+            .route(
+                "/sink",
+                get(move || async move {
+                    sink.fetch_add(1, Ordering::SeqCst);
+                    "[]"
+                }),
+            )
+            .route(
+                "/invalid/api/webshell/instances",
+                get(|| async { "not JSON" }),
+            )
+            .route("/invalid/api/client-instances", get(|| async { "[]" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-hc-user-ticket",
+            HeaderValue::from_static("fixture-secret-ticket"),
+        );
+        let client = super::admin_http_client(&headers, std::time::Duration::from_secs(2)).unwrap();
+        for (upstream, expected) in [
+            (401, StatusCode::UNAUTHORIZED),
+            (403, StatusCode::FORBIDDEN),
+            (412, StatusCode::UNAUTHORIZED),
+            (428, StatusCode::UNAUTHORIZED),
+            (500, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            let url = reqwest::Url::parse(&format!("http://{address}/status/{upstream}")).unwrap();
+            let error = fetch_admin_json(&client, url, headers.clone())
+                .await
+                .unwrap_err();
+            assert_eq!(error.status, expected);
+            assert!(!error.message.contains("fixture-secret-ticket"));
+        }
+        let url = reqwest::Url::parse(&format!("http://{address}/redirect")).unwrap();
+        let error = fetch_admin_json(&client, url, headers.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(error.status, StatusCode::BAD_GATEWAY);
+        assert_eq!(redirected.load(Ordering::SeqCst), 0);
+        let error = list_visible_instances_from(
+            &client,
+            &format!("http://{address}/invalid"),
+            &headers,
+            "alice",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.status, StatusCode::BAD_GATEWAY);
+        assert!(error.message.contains("JSON"));
+        server.abort();
+    }
 
     #[test]
     fn account_id_prefers_lightos_user_header() {
@@ -688,6 +898,81 @@ mod tests {
 
         assert_eq!(instances.len(), 1);
         assert_eq!(instances[0].selector.as_deref(), Some("alpha@deploy-a"));
+    }
+
+    #[tokio::test]
+    async fn delegated_discovery_keeps_same_name_instances_scoped_to_each_user() {
+        let app = Router::new()
+            .route(
+                "/api/webshell/instances",
+                get(|headers: HeaderMap| async move {
+                    let owner = match headers
+                        .get("x-hc-user-ticket")
+                        .and_then(|v| v.to_str().ok())
+                    {
+                        Some("fixture-alice") => "catflap-alice",
+                        Some("fixture-bob") => "catflap-bob",
+                        _ => return StatusCode::UNAUTHORIZED.into_response(),
+                    };
+                    for name in [
+                        "cookie",
+                        "authorization",
+                        "x-hc-user-id",
+                        "x-hc-user-role",
+                        "x-hc-source",
+                    ] {
+                        assert!(
+                            !headers.contains_key(name),
+                            "delegated identity must be projected by the platform: {name}"
+                        );
+                    }
+                    Json(json!([{"name":"same-name", "owner_deploy_id":owner, "status":"running"}]))
+                        .into_response()
+                }),
+            )
+            .route(
+                "/api/client-instances",
+                get(|headers: HeaderMap| async move {
+                    if !matches!(
+                        headers
+                            .get("x-hc-user-ticket")
+                            .and_then(|v| v.to_str().ok()),
+                        Some("fixture-alice" | "fixture-bob")
+                    ) {
+                        return StatusCode::UNAUTHORIZED.into_response();
+                    }
+                    Json(json!([])).into_response()
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        for (ticket, owner) in [
+            ("fixture-alice", "catflap-alice"),
+            ("fixture-bob", "catflap-bob"),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-hc-user-ticket", HeaderValue::from_static(ticket));
+            headers.insert("cookie", HeaderValue::from_static("session=private"));
+            headers.insert("authorization", HeaderValue::from_static("Bearer private"));
+            headers.insert("x-hc-user-id", HeaderValue::from_static("wrong-user"));
+            headers.insert("x-hc-user-role", HeaderValue::from_static("ADMIN"));
+            headers.insert("x-hc-source", HeaderValue::from_static("wrong-source"));
+            let instances = list_visible_instances_from(
+                &reqwest::Client::new(),
+                &format!("http://{address}"),
+                &headers,
+                "wrong-user",
+            )
+            .await
+            .expect("delegated discovery");
+            assert_eq!(instances.len(), 1);
+            assert_eq!(
+                instances[0].selector.as_deref(),
+                Some(format!("same-name@{owner}").as_str())
+            );
+        }
+        server.abort();
     }
 
     #[tokio::test]

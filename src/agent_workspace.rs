@@ -260,6 +260,16 @@ impl AgentWorkspace {
         }
     }
 
+    /// Refresh only the default for future panes; existing PTYs keep their user
+    /// and process identity. Missing metadata never clears a confirmed default.
+    pub fn update_username(&self, username: &str) -> anyhow::Result<()> {
+        let username = username.trim();
+        if !username.is_empty() {
+            username.clone_into(&mut self.lock_inner()?.username);
+        }
+        Ok(())
+    }
+
     pub fn ensure_state(
         &self,
         cols: u16,
@@ -1111,6 +1121,91 @@ fn node_kind(node: &AgentLayoutNode) -> Option<AgentLayoutNodeType> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refreshed_username_changes_new_tabs_and_splits_without_replacing_existing_ptys() {
+        for action in [
+            AgentWorkspaceActionType::AGENT_WORKSPACE_ACTION_TYPE_CREATE_TAB,
+            AgentWorkspaceActionType::AGENT_WORKSPACE_ACTION_TYPE_SPLIT_PANE,
+        ] {
+            let workspace = AgentWorkspace::new("demo@owner", "");
+            let initial = workspace.ensure_state(80, 24, 65536).unwrap();
+            let original = workspace.active_pane().unwrap();
+            let session_id = original.session_id().to_owned();
+            workspace
+                .update_username("neko-fixture-user-does-not-exist")
+                .unwrap();
+            workspace.update_username(" root ").unwrap();
+            workspace.update_username("  ").unwrap();
+            assert_eq!(workspace.lock_inner().unwrap().username, "root");
+            let updated = workspace
+                .apply_action(
+                    &AgentWorkspaceAction {
+                        action: Some(action.into()),
+                        tab_id: initial.tabs[0].id.clone(),
+                        pane_id: Some(original.id().to_owned()),
+                        ..Default::default()
+                    },
+                    80,
+                    24,
+                    65536,
+                )
+                .unwrap();
+            let active_tab = updated
+                .tabs
+                .iter()
+                .find(|tab| tab.id == updated.active_tab_id)
+                .unwrap();
+            let created = workspace
+                .pane(active_tab.active_pane_id.as_deref().unwrap())
+                .unwrap();
+            assert_ne!(created.id(), original.id());
+            assert!(Arc::ptr_eq(
+                &original,
+                &workspace.pane(original.id()).unwrap()
+            ));
+            assert_eq!(original.session_id(), session_id);
+            original
+                .write_input(b"printf 'NEKO%s\\n' '_EXISTING_PTY_OK'\n".to_vec())
+                .unwrap();
+            created
+                .write_input(b"printf 'NEKO%s\\n' '_NEW_PTY_OK'\n".to_vec())
+                .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            loop {
+                let output = |pane: &AgentPane| -> Vec<u8> {
+                    pane.snapshot_after_bounded(0, 65536, 1024)
+                        .frames
+                        .iter()
+                        .flat_map(|frame| frame.data.iter().copied())
+                        .collect()
+                };
+                let old = output(&original);
+                let new = output(&created);
+                if old
+                    .windows(b"NEKO_EXISTING_PTY_OK".len())
+                    .any(|part| part == b"NEKO_EXISTING_PTY_OK")
+                    && new
+                        .windows(b"NEKO_NEW_PTY_OK".len())
+                        .any(|part| part == b"NEKO_NEW_PTY_OK")
+                {
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    original.close();
+                    created.close();
+                    panic!(
+                        "existing PTY or refreshed account failed: old={}, new={}",
+                        String::from_utf8_lossy(&old),
+                        String::from_utf8_lossy(&new)
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            original.close();
+            created.close();
+        }
+    }
 
     #[test]
     fn slow_subscriber_is_disconnected_when_its_queue_is_full() {

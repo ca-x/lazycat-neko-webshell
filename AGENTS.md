@@ -57,6 +57,18 @@ unknown methods merely because a newer server advertises a larger protocol.
   user's UID/GID with bounded output, a bounded runtime, and a controlled
   environment.
 
+## Keep LightOS Discovery Delegated
+
+- For cross-app discovery and remote-client terminal tickets, send the current
+  request's `X-HC-User-Ticket` only to the fixed LightOS `.lzcx` app origin.
+  Do not follow redirects, use environment proxies, forward browser credentials
+  or caller identity claims, or log/store/echo the ticket.
+- The platform projects the user identity; LightOS owns the visible-instance
+  set. Keep full `name@owner_deploy_id` selectors and target authorization.
+- Missing/invalid delegation and upstream failures must remain explicit errors,
+  not an empty instance list. Legacy credential forwarding is restricted to
+  the official embedded mode or explicitly unauthenticated development setups.
+
 ## Keep Agent Upgrades Independent
 
 The target-local lightweight agent has its own compatibility lifecycle. Do not

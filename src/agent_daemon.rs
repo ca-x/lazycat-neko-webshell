@@ -910,19 +910,23 @@ impl AgentDaemon {
             .username
             .as_deref()
             .map(str::trim)
-            .filter(|username| !username.is_empty())
-            .unwrap_or(self.username.as_str())
-            .to_owned();
+            .filter(|username| !username.is_empty());
         let mut slot = self
             .workspace
             .lock()
             .map_err(|_| anyhow!("agent workspace slot lock poisoned"))?;
-        if slot.is_none() {
-            *slot = Some(Arc::new(AgentWorkspace::new(selector, username)));
+        if let Some(workspace) = slot.as_ref() {
+            if let Some(username) = username {
+                workspace.update_username(username)?;
+            }
+            return Ok(Arc::clone(workspace));
         }
-        slot.as_ref()
-            .cloned()
-            .ok_or_else(|| anyhow!("agent workspace is unavailable"))
+        let workspace = Arc::new(AgentWorkspace::new(
+            selector,
+            username.unwrap_or(self.username.as_str()),
+        ));
+        *slot = Some(Arc::clone(&workspace));
+        Ok(workspace)
     }
 
     fn request_selector(&self, request: &AgentRequest) -> anyhow::Result<String> {
@@ -1372,8 +1376,63 @@ mod tests {
     }
 
     #[test]
+    fn workspace_request_refreshes_the_default_user_before_spawning_a_shell() {
+        let daemon = AgentDaemon {
+            selector: "demo@owner".to_owned(),
+            username: "neko-fixture-user-does-not-exist".to_owned(),
+            payload_manifest: None,
+            agent_version: AGENT_VERSION,
+            workspace: Mutex::new(None),
+            workspace_recovery_path: std::env::temp_dir()
+                .join("unused-neko-user-refresh.workspace"),
+            recovery_tabs: Mutex::new(Some(0)),
+            recovery_lock: Mutex::new(()),
+        };
+        let mut request = crate::agent_protocol::state_request("demo@owner", "", 80, 24, 65536);
+        let original = daemon.workspace_for_request(&request).unwrap();
+        request.username = Some(" root ".to_owned());
+        let workspace = daemon.workspace_for_request(&request).unwrap();
+        assert!(Arc::ptr_eq(&original, &workspace));
+        // A later request without metadata must not restore the stale startup user.
+        request.username = None;
+        daemon.workspace_for_request(&request).unwrap();
+        request.username = Some("  ".to_owned());
+        daemon.workspace_for_request(&request).unwrap();
+        let state = workspace.ensure_state(80, 24, 65536).unwrap();
+        let pane = workspace
+            .pane(state.tabs[0].active_pane_id.as_deref().unwrap())
+            .unwrap();
+        pane.write_input(b"printf 'NEKO%s\\n' '_USER_REFRESH_OK'\n".to_vec())
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let snapshot = pane.snapshot_after_bounded(0, 65536, 1024);
+            let bytes: Vec<u8> = snapshot
+                .frames
+                .iter()
+                .flat_map(|frame| frame.data.iter().copied())
+                .collect();
+            if bytes
+                .windows(b"NEKO_USER_REFRESH_OK".len())
+                .any(|part| part == b"NEKO_USER_REFRESH_OK")
+            {
+                break;
+            }
+            if Instant::now() >= deadline {
+                let _ = pane.write_input(b"exit\n".to_vec());
+                panic!(
+                    "new pane did not use the refreshed user: {}",
+                    String::from_utf8_lossy(&bytes)
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        pane.write_input(b"exit\n".to_vec()).unwrap();
+    }
+
+    #[test]
     fn agent_compatibility_window_is_valid() {
-        assert_eq!(AGENT_VERSION, 20);
+        assert_eq!(AGENT_VERSION, 21);
         assert_eq!(MIN_SUPPORTED_AGENT_VERSION, 11);
     }
 
