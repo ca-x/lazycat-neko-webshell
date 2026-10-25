@@ -23,11 +23,14 @@ use tokio_tungstenite::tungstenite::Message as RemoteMessage;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tracing::{info, warn};
 
+use crate::client_broker::{
+    CATFLAP_CREDENTIAL_HEADER, CATFLAP_PROTOCOL, ClientBroker, ClientTarget,
+};
 use crate::client_terminal_auth::{DeviceAuthCache, DeviceAuthLease};
 use crate::http_body::read_limited_body;
 use crate::lightos_admin::{
     self, admin_base_url_for_request, admin_http_client, build_admin_url, build_upstream_headers,
-    current_request_account_id, list_visible_client_instances, parse_client_selector,
+    current_request_account_id, list_broker_client_instances, parse_client_selector,
 };
 use crate::proto::lazycat::webshell::v1::Session;
 use crate::remote_program::{RemoteBootstrapState, RemoteProgramKind, RemoteProgramStore};
@@ -117,8 +120,22 @@ impl From<lightos_admin::LightOsAdminError> for ClientTerminalError {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 pub(crate) struct ClientTerminalTicket {
+    #[serde(default)]
+    version: u32,
+    #[serde(default)]
+    protocol: String,
+    #[serde(default)]
+    owner_user_id: String,
+    #[serde(default)]
+    device_id: String,
+    #[serde(default)]
+    terminal_epoch: String,
+    #[serde(default)]
+    credential_header: String,
+    #[serde(default)]
+    expires_at: u64,
     #[serde(default)]
     client_instance_id: String,
     #[serde(default)]
@@ -132,9 +149,42 @@ pub(crate) struct ClientTerminalTicket {
 #[derive(Serialize)]
 struct ClientTerminalTicketRequest<'a> {
     id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<u32>,
+}
+
+impl std::fmt::Debug for ClientTerminalTicket {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ClientTerminalTicket")
+            .field("client_instance_id", &self.client_instance_id)
+            .finish_non_exhaustive()
+    }
+}
+
+fn terminal_credentials(
+    broker: ClientBroker,
+    ticket: &ClientTerminalTicket,
+    url: &mut Url,
+) -> Result<HeaderMap, ClientTerminalError> {
+    let mut headers = HeaderMap::new();
+    match broker {
+        ClientBroker::LightOs => {
+            url.query_pairs_mut().append_pair("ticket", &ticket.ticket);
+        }
+        ClientBroker::Catflap(_) => {
+            headers.insert(
+                CATFLAP_CREDENTIAL_HEADER,
+                HeaderValue::from_str(&ticket.ticket)
+                    .map_err(|_| ClientTerminalError::bad_gateway("invalid terminal credential"))?,
+            );
+        }
+    }
+    Ok(headers)
 }
 
 struct ClientTerminalDialInfo {
+    broker: ClientBroker,
     ticket: ClientTerminalTicket,
     device_api_url: Url,
     auth_token: secrecy::SecretString,
@@ -518,7 +568,23 @@ pub(crate) async fn authorize_client(
     if current_request_account_id(headers).is_none() {
         return Err(ClientTerminalError::unauthorized("account id is required"));
     }
-    let visible = list_visible_client_instances(headers).await?;
+    let target = ClientTarget::parse(selector).unwrap();
+    let visible = list_broker_client_instances(headers, target.broker).await?;
+    if target.broker.app().is_some()
+        && visible.iter().any(|item| {
+            item.id == target.id
+                && (item.status != "running"
+                    || !item
+                        .capabilities
+                        .as_ref()
+                        .is_some_and(|capability| capability.terminal))
+        })
+    {
+        return Err(ClientTerminalError::new(
+            StatusCode::CONFLICT,
+            "client terminal is not ready",
+        ));
+    }
     authorize_client_id(selector, &visible)
 }
 
@@ -730,8 +796,8 @@ pub(crate) async fn connect_terminal(
                 query.append_pair(key, value);
             }
         }
-        query.append_pair("ticket", &dial.ticket.ticket);
     }
+    let credential_headers = terminal_credentials(dial.broker, &dial.ticket, &mut url)?;
     let safe_url = sanitize_client_terminal_url(&url);
     let websocket_url = websocket_terminal_url(&url)?;
     info!(
@@ -752,6 +818,7 @@ pub(crate) async fn connect_terminal(
         .map_err(|_| ClientTerminalError::bad_gateway("invalid device auth token"))?,
     );
     let connector = websocket_tls_connector()?;
+    request.headers_mut().extend(credential_headers);
     let program_state = state.remote_programs.program_state(selector, pane_id);
     Ok(RemoteTerminalConnection {
         request,
@@ -1115,8 +1182,13 @@ fn translate_remote_control(
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
         .trim();
+    let selector_matches = remote_selector == selector
+        || ClientTarget::parse(selector).is_some_and(|target| {
+            target.broker.app().is_some()
+                && remote_selector == ClientBroker::LightOs.selector(target.id)
+        });
     if (!remote_selector.is_empty() || !remote_pane.is_empty())
-        && (remote_selector != selector || remote_pane != pane_id)
+        && (!selector_matches || remote_pane != pane_id)
     {
         return Err(ClientTerminalError::bad_gateway(
             "remote terminal replay identity mismatch",
@@ -1212,17 +1284,19 @@ async fn client_terminal_json(
                 pairs.append_pair(key, value);
             }
         }
-        pairs.append_pair("ticket", &dial.ticket.ticket);
     }
+    let credential_headers = terminal_credentials(dial.broker, &dial.ticket, &mut url)?;
     let safe_url = sanitize_client_terminal_url(&url);
     let client = reqwest::Client::builder()
         .timeout(CLIENT_TERMINAL_TIMEOUT)
+        .no_proxy()
         .danger_accept_invalid_certs(true)
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| ClientTerminalError::bad_gateway(error.to_string()))?;
     let mut request = client
         .request(method, url)
+        .headers(credential_headers)
         .header(
             "lzc_dapi_auth_token",
             HeaderValue::from_str(dial.auth_token.expose_secret())
@@ -1295,9 +1369,13 @@ async fn client_terminal_dial_info(
     auth_cache: &DeviceAuthCache,
 ) -> Result<ClientTerminalDialInfo, ClientTerminalError> {
     let client_id = authorize_client(headers, selector).await?;
+    let broker = ClientTarget::parse(selector).unwrap().broker;
     info!(selector, client_id, "remote client visibility authorized");
-    let ticket = request_terminal_ticket(headers, &client_id).await?;
+    let ticket = request_terminal_ticket(headers, &client_id, broker).await?;
     let ticket = validate_ticket(ticket, &client_id)?;
+    if broker.app().is_some() {
+        validate_catflap_ticket(&ticket, headers, &client_id)?;
+    }
     let device_api_url = Url::parse(&ticket.device_api_url)
         .map_err(|_| ClientTerminalError::bad_gateway("invalid client terminal device URL"))?;
     let device_origin = device_api_url.origin().ascii_serialization();
@@ -1338,6 +1416,7 @@ async fn client_terminal_dial_info(
     );
     let auth_token = secrecy::SecretString::from(auth_token.expose_secret().to_owned());
     Ok(ClientTerminalDialInfo {
+        broker,
         ticket,
         device_api_url,
         auth_token,
@@ -1348,11 +1427,33 @@ async fn client_terminal_dial_info(
 async fn request_terminal_ticket(
     headers: &HeaderMap,
     client_id: &str,
+    broker: ClientBroker,
+) -> Result<ClientTerminalTicket, ClientTerminalError> {
+    let base_url = match broker.app() {
+        Some(app) => {
+            if !headers.contains_key("x-hc-user-ticket") {
+                return Err(ClientTerminalError::unauthorized(
+                    "Catflap requires platform user delegation",
+                ));
+            }
+            crate::catflap_terminal::origin(app)
+                .map_err(|_| ClientTerminalError::bad_request("unsupported broker"))?
+                .to_owned()
+        }
+        None => admin_base_url_for_request(headers).await?,
+    };
+    request_terminal_ticket_from(headers, client_id, broker, &base_url).await
+}
+
+async fn request_terminal_ticket_from(
+    headers: &HeaderMap,
+    client_id: &str,
+    broker: ClientBroker,
+    base_url: &str,
 ) -> Result<ClientTerminalTicket, ClientTerminalError> {
     let account_id = current_request_account_id(headers)
         .ok_or_else(|| ClientTerminalError::unauthorized("account id is required"))?;
-    let base_url = admin_base_url_for_request(headers).await?;
-    let url = build_admin_url(&base_url, "/api/client-instances/terminal-ticket")
+    let url = build_admin_url(base_url, "/api/client-instances/terminal-ticket")
         .map_err(|error| ClientTerminalError::bad_gateway(error.to_string()))?;
     let admin_origin = url.origin().ascii_serialization();
     info!(
@@ -1362,11 +1463,14 @@ async fn request_terminal_ticket(
     let mut upstream_headers =
         build_upstream_headers(headers, &account_id).map_err(ClientTerminalError::bad_gateway)?;
     upstream_headers.insert("content-type", HeaderValue::from_static("application/json"));
+    if broker.app().is_some() {
+        upstream_headers.insert("x-catflap-request", HeaderValue::from_static("1"));
+    }
     let client = admin_http_client(headers, CLIENT_TERMINAL_TIMEOUT)?;
     let response = client
         .post(url)
         .headers(upstream_headers)
-        .json(&ClientTerminalTicketRequest { id: client_id })
+        .json(&ClientTerminalTicketRequest { id: client_id, version: broker.app().map(|_| 1) })
         .send()
         .await
         .map_err(|error| {
@@ -1406,6 +1510,53 @@ fn remote_access_error(status: StatusCode) -> Option<ClientTerminalError> {
         StatusCode::FORBIDDEN => Some(ClientTerminalError::forbidden(message)),
         _ => None,
     }
+}
+
+fn validate_catflap_ticket(
+    ticket: &ClientTerminalTicket,
+    headers: &HeaderMap,
+    id: &str,
+) -> Result<(), ClientTerminalError> {
+    let account = current_request_account_id(headers)
+        .ok_or_else(|| ClientTerminalError::unauthorized("account id is required"))?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| ClientTerminalError::bad_gateway("system clock unavailable"))?
+        .as_secs();
+    let url = Url::parse(&ticket.device_api_url)
+        .map_err(|_| ClientTerminalError::bad_gateway("invalid device URL"))?;
+    if ticket.version != 1
+        || ticket.protocol != CATFLAP_PROTOCOL
+        || ticket.client_instance_id != id
+        || ticket.owner_user_id != account
+        || ticket.device_id.is_empty()
+        || ticket.device_id.len() > 256
+        || ticket.device_id.chars().any(char::is_control)
+        || ticket.credential_header != CATFLAP_CREDENTIAL_HEADER
+        || ticket.terminal_epoch.is_empty()
+        || ticket.terminal_epoch.len() > 128
+        || !ticket
+            .terminal_epoch
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+        || ticket.terminal_service_name
+            != format!(
+                "catflap.client-terminal.managed.{id}.{}",
+                ticket.terminal_epoch
+            )
+        || ticket.expires_at <= now
+        || ticket.expires_at > now.saturating_add(120)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || HeaderValue::from_str(&ticket.ticket).is_err()
+    {
+        return Err(ClientTerminalError::bad_gateway(
+            "invalid Catflap v1 terminal ticket",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_ticket(
@@ -1908,6 +2059,7 @@ mod tests {
             device_api_url: "https://device.example/root".to_owned(),
             terminal_service_name: "cloud.lazycat.lightos.client-terminal.client-a".to_owned(),
             ticket: "terminal-secret".to_owned(),
+            ..Default::default()
         }
     }
 
@@ -1943,6 +2095,171 @@ mod tests {
         let error = validate_ticket(ticket(), "client-b").expect_err("mismatched ticket");
         assert!(error.to_string().contains("does not match"));
         assert!(!error.to_string().contains("terminal-secret"));
+    }
+
+    #[test]
+    fn catflap_ticket_checks_identity_protocol_epoch_expiry_and_url() {
+        let id = "pc-0123456789abcdef0123456789abcdef";
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-hc-user-id", "alice".parse().unwrap());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let valid = ClientTerminalTicket {
+            version: 1,
+            protocol: super::CATFLAP_PROTOCOL.into(),
+            client_instance_id: id.into(),
+            owner_user_id: "alice".into(),
+            device_id: "DEVICE-A".into(),
+            terminal_epoch: "valid_epoch".into(),
+            terminal_service_name: format!("catflap.client-terminal.managed.{id}.valid_epoch"),
+            credential_header: super::CATFLAP_CREDENTIAL_HEADER.into(),
+            expires_at: now + 60,
+            device_api_url: "https://sdk.example:8443".into(),
+            ticket: "test-secret".into(),
+        };
+        assert!(super::validate_catflap_ticket(&valid, &headers, id).is_ok());
+        for field in 0..12 {
+            let mut invalid = valid.clone();
+            match field {
+                0 => invalid.version = 2,
+                1 => invalid.protocol = "official".into(),
+                2 => invalid.client_instance_id = "other".into(),
+                3 => invalid.owner_user_id = "bob".into(),
+                4 => invalid.device_id.clear(),
+                5 => invalid.terminal_epoch = "other_epoch".into(),
+                6 => invalid.credential_header = "authorization".into(),
+                7 => invalid.expires_at = now - 1,
+                8 => invalid.expires_at = now + 3600,
+                9 => invalid.device_api_url = "https://user:password@sdk.example".into(),
+                10 => invalid.device_api_url = "https://sdk.example?ticket=secret".into(),
+                _ => invalid.device_api_url = "https://sdk.example#fragment".into(),
+            }
+            assert!(
+                super::validate_catflap_ticket(&invalid, &headers, id).is_err(),
+                "field {field}"
+            );
+        }
+        assert!(!format!("{valid:?}").contains("test-secret"));
+    }
+
+    #[test]
+    fn catflap_uses_header_credentials_for_both_http_and_websocket() {
+        use crate::client_broker::{CATFLAP_APPS, CATFLAP_CREDENTIAL_HEADER, ClientBroker};
+        for path in ["/workspace", "/ws"] {
+            let ticket = ticket();
+            let mut url = client_terminal_url(&ticket, path).unwrap();
+            let headers = super::terminal_credentials(
+                ClientBroker::Catflap(CATFLAP_APPS[0]),
+                &ticket,
+                &mut url,
+            )
+            .unwrap();
+            assert!(url.query().is_none());
+            assert_eq!(headers[CATFLAP_CREDENTIAL_HEADER], "terminal-secret");
+            assert!(!headers.contains_key("authorization"));
+            let official =
+                super::terminal_credentials(ClientBroker::LightOs, &ticket, &mut url).unwrap();
+            assert!(official.is_empty());
+            assert_eq!(
+                url.query_pairs()
+                    .find(|(key, _)| key == "ticket")
+                    .unwrap()
+                    .1,
+                "terminal-secret"
+            );
+        }
+    }
+
+    #[test]
+    fn catflap_replay_maps_only_the_authenticated_registration_to_its_source() {
+        use crate::client_broker::{CATFLAP_APPS, ClientBroker};
+        let id = "pc-0123456789abcdef0123456789abcdef";
+        let selector = ClientBroker::Catflap(CATFLAP_APPS[0]).selector(id);
+        for kind in ["history-replay-start", "history-replay-complete"] {
+            let frame = serde_json::json!({"type":kind,"selector":format!("client:{id}"),"pane_id":"pane-1","last_sequence":19});
+            let translated =
+                translate_remote_control(&frame.to_string(), &selector, "pane-1", 5).unwrap();
+            let translated: serde_json::Value = serde_json::from_str(&translated).unwrap();
+            assert_eq!(translated["selector"], selector);
+            assert_eq!(translated["pane_id"], "pane-1");
+            assert!(
+                translate_remote_control(&frame.to_string(), &selector, "other-pane", 5).is_err()
+            );
+            for other in [
+                "client:other".to_owned(),
+                ClientBroker::Catflap(CATFLAP_APPS[1]).selector(id),
+            ] {
+                let mut invalid = frame.clone();
+                invalid["selector"] = other.into();
+                assert!(
+                    translate_remote_control(&invalid.to_string(), &selector, "pane-1", 5).is_err()
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn ticket_requests_delegate_only_current_ticket_and_preserve_broker_contract() {
+        use crate::client_broker::{CATFLAP_APPS, ClientBroker};
+        use axum::http::HeaderMap;
+        use axum::{Json, Router, routing::post};
+        let app = Router::new().route(
+            "/api/client-instances/terminal-ticket",
+            post(
+                |headers: HeaderMap, Json(body): Json<serde_json::Value>| async move {
+                    assert_eq!(headers["x-hc-user-ticket"], "fresh-user-ticket");
+                    for key in [
+                        "cookie",
+                        "authorization",
+                        "origin",
+                        "x-hc-user-id",
+                        "x-hc-user-role",
+                    ] {
+                        assert!(!headers.contains_key(key), "{key}");
+                    }
+                    assert_eq!(body["id"], "pc-0123456789abcdef0123456789abcdef");
+                    if headers.contains_key("x-catflap-request") {
+                        assert_eq!(headers["x-catflap-request"], "1");
+                        assert_eq!(body["version"], 1);
+                    } else {
+                        assert!(body.get("version").is_none());
+                    }
+                    Json(serde_json::json!({"ticket":"fixture-secret"}))
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut headers = HeaderMap::new();
+        for (key, value) in [
+            ("x-hc-user-ticket", "fresh-user-ticket"),
+            ("x-hc-user-id", "alice"),
+            ("x-hc-user-role", "admin"),
+            ("cookie", "private-cookie"),
+            ("authorization", "private-token"),
+            ("origin", "https://browser.example"),
+        ] {
+            headers.insert(key, value.parse().unwrap());
+        }
+        for broker in [
+            ClientBroker::LightOs,
+            ClientBroker::Catflap(CATFLAP_APPS[0]),
+            ClientBroker::Catflap(CATFLAP_APPS[1]),
+        ] {
+            let ticket = super::request_terminal_ticket_from(
+                &headers,
+                "pc-0123456789abcdef0123456789abcdef",
+                broker,
+                &base,
+            )
+            .await
+            .unwrap();
+            assert_eq!(ticket.ticket, "fixture-secret");
+        }
+        server.abort();
     }
 
     #[test]
@@ -2459,6 +2776,7 @@ mod tests {
             platform: "darwin".to_owned(),
             status: "running".to_owned(),
             owner_user_id: "alice".to_owned(),
+            ..Default::default()
         }];
 
         assert_eq!(

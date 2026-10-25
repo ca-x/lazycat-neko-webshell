@@ -4,7 +4,7 @@ use std::{collections::HashMap, time::Duration};
 use crate::{
     http_body::read_limited_body,
     lightos_admin::{self, LightOsAdminError},
-    proto::lazycat::webshell::v1::Instance,
+    proto::lazycat::webshell::v1::{Instance, InstanceKind},
 };
 use axum::http::{HeaderMap, StatusCode};
 
@@ -41,21 +41,36 @@ pub(crate) async fn discover(headers: &HeaderMap) -> Result<Discovery, LightOsAd
     if headers.contains_key("x-hc-user-ticket") {
         for origin in CATFLAP_ORIGINS {
             endpoints.push((origin, "/api/webshell/targets", "catflap", false));
+            endpoints.push((origin, "/api/client-instances", "catflap", true));
         }
     }
-    discover_from(&client, &upstream, &endpoints).await
+    discover_as(&client, &upstream, &endpoints, &account).await
 }
 
 type Endpoint<'a> = (&'a str, &'a str, &'a str, bool);
 
+#[cfg(test)]
 pub(crate) async fn discover_from(
     client: &reqwest::Client,
     headers: &HeaderMap,
     endpoints: &[Endpoint<'_>],
 ) -> Result<Discovery, LightOsAdminError> {
+    let account = lightos_admin::current_request_account_id(headers).unwrap_or_default();
+    discover_as(client, headers, endpoints, &account).await
+}
+
+async fn discover_as(
+    client: &reqwest::Client,
+    headers: &HeaderMap,
+    endpoints: &[Endpoint<'_>],
+    account: &str,
+) -> Result<Discovery, LightOsAdminError> {
     let results = futures::future::join_all(endpoints.iter().map(
         |&(base, path, source, remote)| async move {
-            (source, fetch(client, headers, base, path, remote).await)
+            (
+                source,
+                fetch(client, headers, base, path, remote, account).await,
+            )
         },
     ))
     .await;
@@ -83,6 +98,7 @@ async fn fetch(
     base: &str,
     path: &str,
     remote: bool,
+    account: &str,
 ) -> Result<Discovery, LightOsAdminError> {
     let error = |status, detail: &str| LightOsAdminError {
         status,
@@ -150,7 +166,13 @@ async fn fetch(
         }
         return Ok(discovery);
     }
-    (if remote {
+    (if remote && crate::client_broker::ClientBroker::from_origin(base).is_some() {
+        lightos_admin::parse_broker_client_instances(
+            &body,
+            crate::client_broker::ClientBroker::from_origin(base).unwrap(),
+            account,
+        )
+    } else if remote {
         lightos_admin::parse_client_instances(&body)
     } else {
         lightos_admin::parse_visible_instances(&body)
@@ -174,22 +196,30 @@ fn combine(
             Ok(instances) => {
                 succeeded = true;
                 for mut instance in instances {
-                    let key = (
-                        instance.kind,
-                        instance.selector.clone().or(instance.target_id.clone()),
-                    );
+                    let key = instance_identity(&instance);
                     if let Some(&position) = positions.get(&key) {
                         let existing: &mut Instance = &mut output.instances[position];
+                        if instance.kind == Some(InstanceKind::INSTANCE_KIND_REMOTE_CLIENT.into())
+                            && client_rank(&instance) > client_rank(existing)
+                        {
+                            let sources = std::mem::take(&mut existing.sources);
+                            *existing = instance.clone();
+                            existing.sources = sources;
+                        }
                         if !existing.sources.iter().any(|value| value == source) {
                             existing.sources.push(source.to_owned());
                         }
                         // Catflap's owned-instance metadata is authoritative for its login account.
                         if source == "catflap"
+                            && instance.kind == Some(InstanceKind::INSTANCE_KIND_LIGHTOS.into())
                             && instance.username.as_deref().is_some_and(|s| !s.is_empty())
                         {
                             existing.username = instance.username;
                         }
-                        if source == "catflap" && instance.terminal_available.is_some() {
+                        if source == "catflap"
+                            && instance.kind == Some(InstanceKind::INSTANCE_KIND_LIGHTOS.into())
+                            && instance.terminal_available.is_some()
+                        {
                             existing.terminal_available = instance.terminal_available;
                         }
                     } else {
@@ -229,6 +259,55 @@ fn combine(
     Ok(output)
 }
 
+fn instance_identity(
+    instance: &Instance,
+) -> (
+    Option<buffa::EnumValue<InstanceKind>>,
+    String,
+    Option<String>,
+) {
+    let physical = instance.kind == Some(InstanceKind::INSTANCE_KIND_REMOTE_CLIENT.into());
+    if physical
+        && instance
+            .physical_device_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty())
+        && instance
+            .owner_user_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty())
+    {
+        return (
+            instance.kind,
+            format!("device:{}", instance.owner_user_id.as_deref().unwrap()),
+            instance.physical_device_id.clone(),
+        );
+    }
+    let scope = if instance.kind == Some(InstanceKind::INSTANCE_KIND_LIGHTOS.into()) {
+        String::new()
+    } else {
+        instance.provider_app_id.clone().unwrap_or_default()
+    };
+    (
+        instance.kind,
+        scope,
+        instance.selector.clone().or(instance.target_id.clone()),
+    )
+}
+
+fn client_rank(instance: &Instance) -> (bool, bool, bool) {
+    (
+        instance
+            .terminal_available
+            .unwrap_or(instance.status.as_deref() == Some("running")),
+        instance.status.as_deref() == Some("running"),
+        instance
+            .provider_app_id
+            .as_deref()
+            .is_none_or(str::is_empty),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,6 +340,61 @@ mod tests {
             assert_eq!(result.instances.len(), 1);
             assert_eq!(result.instances[0].sources, [source]);
             assert!(result.warnings.is_empty());
+        }
+    }
+
+    #[test]
+    fn physical_identity_merges_only_known_device_and_owner_and_keeps_ready_broker() {
+        let mut official = item("client:official");
+        official.kind = Some(InstanceKind::INSTANCE_KIND_REMOTE_CLIENT.into());
+        official.physical_device_id = Some("DEVICE-A".into());
+        official.owner_user_id = Some("alice".into());
+        official.terminal_available = Some(false);
+        let mut catflap = official.clone();
+        catflap.selector = Some("client:catflap:registration".into());
+        catflap.provider_app_id = Some("community.lazycat.app.catflap".into());
+        catflap.terminal_available = Some(true);
+        let mut other_owner = catflap.clone();
+        other_owner.owner_user_id = Some("bob".into());
+        let mut other_device = catflap.clone();
+        other_device.physical_device_id = Some("DEVICE-B".into());
+        let result = combine(vec![
+            ("lightos", Ok(vec![official])),
+            (
+                "catflap",
+                Ok(vec![
+                    catflap.clone(),
+                    catflap.clone(),
+                    other_owner,
+                    other_device,
+                ]),
+            ),
+        ])
+        .unwrap();
+        assert_eq!(result.instances.len(), 3);
+        assert_eq!(result.instances[0].selector, catflap.selector);
+        assert_eq!(result.instances[0].sources, ["lightos", "catflap"]);
+    }
+
+    #[test]
+    fn unknown_device_identity_and_microvm_providers_never_merge_by_name() {
+        for kind in [
+            InstanceKind::INSTANCE_KIND_REMOTE_CLIENT,
+            InstanceKind::INSTANCE_KIND_SMOLVM,
+        ] {
+            let mut first = item("same-id");
+            first.kind = Some(kind.into());
+            first.name = Some("My computer".into());
+            first.provider_app_id = Some("community.lazycat.app.catflap".into());
+            let mut second = first.clone();
+            second.provider_app_id = Some("community.lazycat.app.catflap.dev".into());
+            assert_eq!(
+                combine(vec![("catflap", Ok(vec![first.clone(), first, second]))])
+                    .unwrap()
+                    .instances
+                    .len(),
+                2
+            );
         }
     }
 

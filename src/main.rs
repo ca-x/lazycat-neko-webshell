@@ -19,6 +19,7 @@ mod assets;
 mod backgrounds;
 mod catflap_targets;
 mod catflap_terminal;
+mod client_broker;
 mod client_terminal;
 mod client_terminal_auth;
 mod config;

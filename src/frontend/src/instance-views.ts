@@ -1,4 +1,4 @@
-import { discoveryWarning, instanceSourceDots } from "./instance-discovery";
+import { instanceSourceDots } from "./instance-discovery";
 import type { Instance } from "./gen/lazycat/webshell/v1/capability_pb";
 import type { MessageKey } from "./i18n";
 import { groupInstances, instanceRowPresentation, type InstanceGroupId } from "./instance-groups";
@@ -13,8 +13,7 @@ export function renderInstanceListView(
   tr: Translate,
   loadError = "",
 ): string {
-  const problem = loadError || discoveryWarning(instances);
-  const notice = problem ? `<div class="instance-discovery-warning" role="status">${escapeHtml(tr("status.instanceLoadFailed", { message: problem }))}</div>` : "";
+  const notice = loadError ? `<div class="instance-discovery-warning" role="status">${escapeHtml(tr("status.instanceLoadFailed", { message: loadError }))}</div>` : "";
   if (!instances.length) {
     if (notice) return notice;
     return `<div class="empty">${escapeHtml(tr("status.noInstancesVisible"))}</div>`;

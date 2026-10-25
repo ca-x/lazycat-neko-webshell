@@ -517,6 +517,8 @@ import {
   instanceSelector,
   isRunningInstance,
   normalizeSelector,
+  launchSelector,
+  preservePhysicalSelection,
   readRememberedSelector,
   readRememberedTabId,
   rememberSelector,
@@ -561,8 +563,8 @@ const writeRemoteClipboardText = createSerializedTerminalRemoteClipboardWriter(
 );
 
 const params = new URLSearchParams(window.location.search);
-const initialSelector = normalizeSelector(params.get("name") ?? "");
-const initialSelectorExplicit = params.has("name") && Boolean(initialSelector);
+const initialSelector = launchSelector(params);
+const initialSelectorExplicit = Boolean(initialSelector);
 
 const elements = renderShell(qs<HTMLDivElement>("#app"));
 const performanceMeter = createPerformanceMeter(elements.terminalStage);
@@ -2715,9 +2717,9 @@ function bindLifecycleEvents() {
   });
   window.addEventListener("popstate", () => {
     const nextParams = new URLSearchParams(window.location.search);
-    const nextSelector = normalizeSelector(nextParams.get("name") ?? "");
+    const nextSelector = launchSelector(nextParams);
     const nextTabId = normalizeSelector(nextParams.get("tab") ?? "");
-    selectedSelectorExplicit = nextParams.has("name") && Boolean(nextSelector);
+    selectedSelectorExplicit = Boolean(nextSelector);
     if (nextSelector === selectedSelector) {
       const viewTabId = selectorTabIdForWorkspaceId(tabs, nextSelector, nextTabId);
       if (viewTabId) {
@@ -4454,6 +4456,10 @@ function reconcileSelectedInstance(): { selected: boolean; explicitFallback: boo
   }
 
   const rememberedSelector = selectedSelectorExplicit ? "" : readRememberedSelector();
+  if (preservePhysicalSelection(current, selectedSelectorExplicit)) {
+    updateSelectedInstanceChrome();
+    return { selected: false, explicitFallback: false };
+  }
   const rememberedRunning = rememberedSelector
     ? instances.find((instance) => instanceSelector(instance) === rememberedSelector && isRunningInstance(instance))
     : undefined;

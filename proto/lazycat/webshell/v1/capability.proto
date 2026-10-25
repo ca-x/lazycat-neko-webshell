@@ -39,6 +39,7 @@ message Instance {
   string target_id = 10;
   bool terminal_available = 11;
   string provider_app_id = 12;
+  string physical_device_id = 13;
 }
 
 enum InstanceKind {

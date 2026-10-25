@@ -1,6 +1,11 @@
 import { isMicroVm, instanceTerminalAllowed } from "./instance-target.ts";
 import type { Instance } from "./gen/lazycat/webshell/v1/capability_pb";
 import { isRemoteClientSelector } from "./remote-client-terminal.ts";
+export { launchSelector } from "./client-broker.ts";
+
+export function preservePhysicalSelection(selector: string, explicit: boolean): boolean {
+  return explicit && selector.startsWith("client:");
+}
 
 export { isRemoteClientSelector };
 
@@ -54,6 +59,8 @@ export function updateWorkspaceLocation(
   const normalized = normalizeSelector(selector);
   if (!normalized) return;
   const url = new URL(window.location.href);
+  url.searchParams.delete("broker");
+  url.searchParams.delete("catflap_app_id");
   url.searchParams.set("name", normalized);
   const tabId = normalizeSelector(options.tabId ?? options.activeTabId ?? "");
   if (tabId) {
@@ -77,6 +84,8 @@ export function updateWorkspaceLocation(
 
 export function clearWorkspaceLocation() {
   const url = new URL(window.location.href);
+  url.searchParams.delete("broker");
+  url.searchParams.delete("catflap_app_id");
   url.searchParams.delete("name");
   url.searchParams.delete("tab");
   const state = window.history.state && typeof window.history.state === "object" ? window.history.state : {};

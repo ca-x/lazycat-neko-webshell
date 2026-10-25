@@ -79,7 +79,7 @@ struct VisibleInstance {
     username: String,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 pub(crate) struct ClientInstanceSummary {
     #[serde(default)]
     pub id: String,
@@ -91,6 +91,15 @@ pub(crate) struct ClientInstanceSummary {
     pub status: String,
     #[serde(default)]
     pub owner_user_id: String,
+    #[serde(default)]
+    pub device_id: String,
+    #[serde(default)]
+    pub capabilities: Option<ClientCapabilities>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub(crate) struct ClientCapabilities {
+    pub terminal: bool,
 }
 
 #[cfg(test)]
@@ -122,6 +131,28 @@ pub(crate) async fn list_visible_client_instances(
     let base_url = admin_base_url_for_request(headers).await?;
     let client = admin_http_client(headers, Duration::from_secs(30))?;
     list_visible_client_instances_from(&client, &base_url, headers, &account_id).await
+}
+
+pub(crate) async fn list_broker_client_instances(
+    headers: &HeaderMap,
+    broker: crate::client_broker::ClientBroker,
+) -> Result<Vec<ClientInstanceSummary>, LightOsAdminError> {
+    let Some(app) = broker.app() else {
+        return list_visible_client_instances(headers).await;
+    };
+    if !headers.contains_key(LIGHTOS_USER_TICKET_HEADER) {
+        return Err(LightOsAdminError::unauthorized(
+            "Catflap requires platform user delegation",
+        ));
+    }
+    let account = current_request_account_id(headers)
+        .ok_or_else(|| LightOsAdminError::unauthorized("account id is required"))?;
+    let base = crate::catflap_terminal::origin(app)
+        .map_err(|_| LightOsAdminError::bad_gateway("unsupported client broker"))?;
+    let client = admin_http_client(headers, Duration::from_secs(30))?;
+    let clients = list_visible_client_instances_from(&client, base, headers, &account).await?;
+    validate_broker_clients(&clients, broker, &account).map_err(LightOsAdminError::bad_gateway)?;
+    Ok(clients)
 }
 
 pub(crate) async fn list_visible_client_instances_from(
@@ -443,6 +474,53 @@ pub(crate) fn parse_client_instances(output: &[u8]) -> Result<Vec<Instance>, Str
         .collect())
 }
 
+pub(crate) fn parse_broker_client_instances(
+    output: &[u8],
+    broker: crate::client_broker::ClientBroker,
+    account: &str,
+) -> Result<Vec<Instance>, String> {
+    let clients = parse_client_instance_summaries(output)?;
+    validate_broker_clients(&clients, broker, account)?;
+    Ok(clients
+        .iter()
+        .filter_map(|item| {
+            let mut instance = instance_from_client(item)?;
+            instance.selector = Some(broker.selector(item.id.trim()));
+            instance.provider_app_id = broker.app().map(ToOwned::to_owned);
+            if broker.app().is_some() {
+                instance.terminal_available = Some(
+                    item.status == "running"
+                        && item
+                            .capabilities
+                            .as_ref()
+                            .is_some_and(|capability| capability.terminal),
+                );
+            }
+            Some(instance)
+        })
+        .collect())
+}
+
+fn validate_broker_clients(
+    clients: &[ClientInstanceSummary],
+    broker: crate::client_broker::ClientBroker,
+    account: &str,
+) -> Result<(), String> {
+    if broker.app().is_some()
+        && clients.iter().any(|item| {
+            !crate::client_broker::valid_catflap_id(&item.id)
+                || item.owner_user_id != account
+                || !matches!(item.status.as_str(), "running" | "offline")
+                || item.capabilities.is_none()
+                || item.device_id.len() > 256
+                || item.device_id.chars().any(char::is_control)
+        })
+    {
+        return Err("invalid Catflap client instances response".into());
+    }
+    Ok(())
+}
+
 fn instance_from_client(item: &ClientInstanceSummary) -> Option<Instance> {
     let id = item.id.trim();
     let selector = format!("client:{id}");
@@ -457,6 +535,12 @@ fn instance_from_client(item: &ClientInstanceSummary) -> Option<Instance> {
         kind: Some(InstanceKind::INSTANCE_KIND_REMOTE_CLIENT.into()),
         platform: Some(item.platform.trim().to_owned()),
         owner_user_id: Some(item.owner_user_id.trim().to_owned()),
+        physical_device_id: (!item.device_id.trim().is_empty())
+            .then(|| item.device_id.trim().to_owned()),
+        terminal_available: item
+            .capabilities
+            .as_ref()
+            .map(|capability| capability.terminal && status == "running"),
         ..Default::default()
     })
 }
@@ -466,17 +550,7 @@ pub(crate) fn is_client_selector(selector: &str) -> bool {
 }
 
 pub(crate) fn parse_client_selector(selector: &str) -> Option<&str> {
-    let value = selector.trim();
-    let id = value.strip_prefix("client:")?;
-    if id.is_empty()
-        || id.len() > 256
-        || !id
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
-    {
-        return None;
-    }
-    Some(id)
+    crate::client_broker::ClientTarget::parse(selector).map(|target| target.id)
 }
 
 fn lightos_config_value(name: &str) -> String {
@@ -552,6 +626,59 @@ mod tests {
         upstream_status_for_frontend,
     };
     use crate::proto::lazycat::webshell::v1::InstanceKind;
+
+    #[test]
+    fn catflap_clients_require_current_owner_registration_and_terminal_capability() {
+        use crate::client_broker::{CATFLAP_APPS, ClientBroker};
+        let broker = ClientBroker::Catflap(CATFLAP_APPS[0]);
+        let id = "pc-0123456789abcdef0123456789abcdef";
+        let valid = json!({"id":id,"name":"Computer","owner_user_id":"alice","platform":"linux","status":"running","capabilities":{"terminal":true,"desktop":false},"device_id":"DEVICE-A"});
+        let parse = |value| {
+            super::parse_broker_client_instances(
+                &serde_json::to_vec(&json!([value])).unwrap(),
+                broker,
+                "alice",
+            )
+        };
+        let items = parse(valid.clone()).unwrap();
+        assert_eq!(
+            items[0].selector.as_deref(),
+            Some(broker.selector(id).as_str())
+        );
+        assert_eq!(items[0].terminal_available, Some(true));
+        assert_eq!(items[0].physical_device_id.as_deref(), Some("DEVICE-A"));
+        for (key, value) in [
+            ("id", json!("official-id")),
+            ("owner_user_id", json!("bob")),
+            ("status", json!("unknown")),
+            ("capabilities", json!(null)),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[key] = value;
+            assert!(parse(invalid).is_err(), "{key}");
+        }
+        let mut unavailable = valid;
+        unavailable["capabilities"]["terminal"] = json!(false);
+        unavailable.as_object_mut().unwrap().remove("device_id");
+        let items = parse(unavailable).unwrap();
+        assert_eq!(items[0].terminal_available, Some(false));
+        assert!(items[0].physical_device_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn catflap_never_falls_back_to_legacy_credentials() {
+        use crate::client_broker::{CATFLAP_APPS, ClientBroker};
+        let mut headers = HeaderMap::new();
+        headers.insert("cookie", "private-cookie".parse().unwrap());
+        headers.insert("x-hc-user-id", "alice".parse().unwrap());
+        assert_eq!(
+            super::list_broker_client_instances(&headers, ClientBroker::Catflap(CATFLAP_APPS[0]))
+                .await
+                .unwrap_err()
+                .status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
 
     #[test]
     fn delegation_rejects_missing_blank_ambiguous_and_oversized_tickets() {

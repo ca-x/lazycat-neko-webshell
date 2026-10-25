@@ -1,4 +1,3 @@
-import { recordDiscoveryWarnings } from "./instance-discovery";
 import type { Instance } from "./gen/lazycat/webshell/v1/capability_pb";
 import type {
   HerdrAction,
@@ -56,7 +55,6 @@ export async function fetchInstances(signal?: AbortSignal): Promise<Instance[]> 
   if (!Array.isArray(payload)) {
     throw new Error("invalid instances response");
   }
-  recordDiscoveryWarnings(payload as Instance[], response.headers.get("x-neko-discovery-warnings"));
   return payload as Instance[];
 }
 

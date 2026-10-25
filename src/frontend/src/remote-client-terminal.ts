@@ -1,3 +1,5 @@
+import { isPhysicalClientSelector as isRemoteClientSelector } from "./client-broker.ts";
+
 type RemoteReplayPane = {
   selector: string;
   term?: { reset(): void };
@@ -56,15 +58,7 @@ const REMOTE_CLIENT_KEEPALIVE_INTERVAL_MS = 10_000;
 const REMOTE_CLIENT_AGENT_PREPARE_TIMEOUT_MS = 45_000;
 const REMOTE_CLIENT_HISTORY_REPLAY_TIMEOUT_MS = 180_000;
 
-export function isRemoteClientSelector(value: unknown): boolean {
-  const selector = String(value ?? "").trim();
-  const id = selector.startsWith("client:") ? selector.slice("client:".length) : "";
-  return Boolean(
-    id
-      && id.length <= 256
-      && [...id].every((character) => /[A-Za-z0-9._-]/.test(character)),
-  );
-}
+export { isPhysicalClientSelector as isRemoteClientSelector } from "./client-broker.ts";
 
 export function isRemoteHerdrPane(pane: RemoteHerdrPane): boolean {
   return isRemoteClientSelector(pane.selector)
