@@ -153,6 +153,7 @@ export function createMobileKeyboardController(options: MobileKeyboardController
     const focusValue = focusAttribute ? focused?.getAttribute(focusAttribute) : undefined;
     const focusPanel = focused?.closest<HTMLElement>("[data-mobile-panel]")?.dataset.mobilePanel;
     const scroll = new Map(Array.from(controls.querySelectorAll<HTMLElement>("[data-mobile-panel]"), (panel) => [panel.dataset.mobilePanel, panel.scrollTop]));
+    const agentGroupScroll = new Map(Array.from(controls.querySelectorAll<HTMLElement>("[data-agent-group]"), (group) => [group.dataset.agentGroup, group.querySelector<HTMLElement>(".mobile-agent-keyboard-keys")?.scrollLeft ?? 0]));
     lastInput = input;
     const nextContext = currentContext();
     const sameContext = nextContext?.key === renderedContext?.key;
@@ -178,6 +179,10 @@ export function createMobileKeyboardController(options: MobileKeyboardController
     syncExpandedView();
     if (sameContext) {
       controls.querySelectorAll<HTMLElement>("[data-mobile-panel]").forEach((panel) => { panel.scrollTop = scroll.get(panel.dataset.mobilePanel) ?? 0; });
+      controls.querySelectorAll<HTMLElement>("[data-agent-group]").forEach((group) => {
+        const keys = group.querySelector<HTMLElement>(".mobile-agent-keyboard-keys");
+        if (keys) keys.scrollLeft = agentGroupScroll.get(group.dataset.agentGroup) ?? 0;
+      });
       if (focusAttribute && focusValue != null && focusPanel) {
         controls.querySelector<HTMLButtonElement>(`[data-mobile-panel="${CSS.escape(focusPanel)}"] [${focusAttribute}="${CSS.escape(focusValue)}"]`)?.focus({ preventScroll: true });
       }

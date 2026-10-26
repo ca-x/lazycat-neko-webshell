@@ -54,6 +54,7 @@ export async function runMobileAgentKeyboardScenario() {
   };
   const exact = async (selector, expected, label) => {
     await clear();
+    await evaluate(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'nearest',inline:'nearest'})`);
     await tap(selector);
     const current = await state();
     assert.deepEqual(current.output.map((event) => event.data), [expected], `${label}: one activation sends exactly the representative bytes`);
@@ -149,6 +150,30 @@ export async function runMobileAgentKeyboardScenario() {
       assert.match(text, /运行中/, 'busy Agent actions explain their queue semantics');
     });
 
+    await check('agent-category-rows-swipe-and-preserve-position', async () => {
+      await browser.command(['set', 'viewport', '320', '568']);
+      await profile('claude');
+      const row = `${main} [data-agent-group="edit"] .mobile-agent-keyboard-keys`;
+      const before = await evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(row)});return {width:el.clientWidth,content:el.scrollWidth}})()`);
+      assert.ok(before.content > before.width, 'the category contains horizontally reachable shortcuts');
+      await evaluate(`document.querySelector(${JSON.stringify(row)}).scrollIntoView({block:'nearest'})`);
+      const point = await evaluate(`qa.point(${JSON.stringify(`${row} button:first-child`)})`);
+      await browser.dispatchTouch([
+        touch('touchStart', point, 25),
+        touch('touchMove', { x: point.x - 30, y: point.y }, 25),
+        touch('touchMove', { x: point.x - 90, y: point.y }, 25),
+        touch('touchEnd', point),
+      ]);
+      const scrolled = await evaluate(`document.querySelector(${JSON.stringify(row)}).scrollLeft`);
+      assert.ok(scrolled > 0, 'horizontal touch gesture moves the category');
+      assert.deepEqual((await state()).output, [], 'swiping a key sends no terminal input');
+      await evaluate('qa.setLocale("en")');
+      assert.ok(await evaluate(`document.querySelector(${JSON.stringify(row)}).scrollLeft`) > 0, 'language rerender retains the category position');
+      await evaluate(`document.querySelector(${JSON.stringify(chord('alt-y'))}).scrollIntoView({block:'nearest',inline:'nearest'})`);
+      await exact(chord('alt-y'), '\x1by', 'last shortcut in horizontally scrolled category');
+      await browser.command(['set', 'viewport', '390', '844']);
+    });
+
     await check('codex-async-navigation-exact-bytes', async () => {
       await profile('codex');
       for (const [selector, expected, label] of [
@@ -164,17 +189,20 @@ export async function runMobileAgentKeyboardScenario() {
       await profile('claude');
       await exact(chord('ctrl-x-ctrl-s'), '\x18\x13', 'Claude send queued now');
       await exact(chord('alt-p'), '\x1bp', 'Claude choose model');
+      await exact(chord('ctrl-b'), '\x02', 'Claude background task');
       await exact(chord('shift-tab'), '\x1b[Z', 'Claude permission mode');
       await exact(shortcut('up'), '\x1b[A', 'Claude retrieve queued');
       await profile('opencode');
       await exact(chord('ctrl-x-enter'), '\x18\r', 'OpenCode queue');
       await exact(chord('ctrl-x-a'), '\x18a', 'OpenCode Agent list');
       await exact(chord('ctrl-x-m'), '\x18m', 'OpenCode model list');
+      await exact(chord('ctrl-x-n'), '\x18n', 'OpenCode new session');
       await exact(shortcut('down'), '\x1b[B', 'OpenCode next input');
       await profile('pi');
       await exact(chord('alt-enter'), '\x1b\r', 'Pi follow up');
       await exact(chord('alt-up'), '\x1b[1;3A', 'Pi retrieve queued');
       await exact(chord('ctrl-l'), '\x0c', 'Pi choose model');
+      await exact(chord('ctrl-p'), '\x10', 'Pi next model');
       await exact(chord('ctrl-o'), '\x0f', 'Pi tool output');
     });
 

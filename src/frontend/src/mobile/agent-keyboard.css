@@ -12,22 +12,42 @@
 
 .mobile-agent-keyboard-group {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
   min-width: 0;
 }
 
 .mobile-agent-keyboard-group h3 {
-  grid-column: 1 / -1;
   margin: 0;
   color: var(--muted);
   font: 500 11px/1.4 var(--font-sans);
 }
 
+.mobile-agent-keyboard-keys {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 1px 2px 5px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  touch-action: pan-x pan-y;
+  overscroll-behavior-x: contain;
+}
+
+.mobile-agent-keyboard-keys:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
 .mobile-expanded-keyboard .mobile-keyboard-panel.mobile-agent-keyboard button {
+  flex: 0 0 clamp(94px, 28vw, 132px);
+  width: auto;
   height: auto;
   min-height: 56px;
   padding: 7px 4px;
+  scroll-snap-align: start;
   white-space: normal;
   overflow: visible;
 }

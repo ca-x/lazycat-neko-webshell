@@ -81,7 +81,7 @@ Standard WebShell detects foreground coding agents such as Codex, Claude Code, O
 
 Native OSC 7501 reports and output from commands such as `w1 codex` take precedence over screen inference. Working, blocked (permission/question/auth), done, error, and clear records are supported. Returning to the shell clears the previous process's status. Reconnection restores the current table without answering historical probes. Screen rules can depend on the Agent CLI version; native reports are more precise.
 
-The replaceable `crates/program-status` adapter contains `w1 = "0.3"`. The target agent implementation version is 19; the compatible minimum remains 11. Existing compatible agents keep running. Prepare an optional upgrade through the update entry to enable this feature on the next agent launch.
+The replaceable `crates/program-status` adapter contains `w1 = "0.3"`. The target agent implementation version is 21; the compatible minimum remains 11. Existing compatible agents keep running. Prepare an optional upgrade through the update entry to enable this feature on the next agent launch.
 
 Claude Code / Codex can use [optional status hooks](docs/agent-status-hooks.md) for explicit approval and turn-completion signals. Hooks are opt-in and never rewrite existing Agent configuration. Native reports still take priority.
 
@@ -90,6 +90,8 @@ Herdr's Jump to list shows an attention button only for current pending actions,
 ## Mobile Use
 
 The bottom toolbar keeps the arrow keys and Ctrl+C/V/Z within reach and scrolls horizontally. Tap the arrow to expand the touch keyboard, then switch among typing, function keys, and your existing editable shortcut pages. You can also swipe between the typing and function pages. The keyboard icon opens the system IME; the draft icon opens a separate input dock for Chinese or multiline text, with Insert and Send + Enter actions. On tablets, the dock spans the terminal area and leaves a vertical tab rail accessible; its keys stay centered at a comfortable width.
+
+Under Settings → Mobile → Shortcut layout, you can enable the Agent dynamic keyboard (off by default). When the focused terminal runs Claude Code, Codex CLI, OpenCode, or Pi, the main page shows the Agent's send, control, mode, session, and editing shortcuts. Swipe sideways within a category to reach more keys, or vertically to reach another category. Native WebShell and Herdr use the same view. Turning the option off or losing a reliable Agent identity restores the saved layout. Bindings follow Agent defaults and may vary with the Agent version or custom configuration.
 
 The expanded shortcut page still has customizable categories:
 

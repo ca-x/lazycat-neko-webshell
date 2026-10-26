@@ -6,31 +6,34 @@ import { mobileAgentKeyboardGroups, mobileAgentName } from "./agent-keymap.ts";
 import { normalizeMobileKeyboardLayout } from "./keyboard-layout.ts";
 import { createMobileStickyState, encodeMobileShortcutInput, mobileChordInput } from "./shortcuts.ts";
 
-// Approved action order, independently specified rather than read from the chord table.
+const commonControl = ["ctrl-c", "ctrl-d"];
+const commonEditing = ["alt-b", "alt-f", "ctrl-u", "ctrl-k", "ctrl-w", "alt-d"];
+
+// Action order is specified independently of the profile implementation.
 const expectedProfiles = {
   codex: [
     ["enter", "ctrl-j", "tab", "alt-up"],
-    ["escape", "alt-down", "ctrl-bracket-right"],
+    ["escape", "alt-down", "ctrl-bracket-right", ...commonControl],
     ["alt-left", "alt-right", "shift-tab"],
-    ["ctrl-a", "ctrl-e", "ctrl-r", "ctrl-t"],
+    ["ctrl-a", "ctrl-e", "ctrl-r", "ctrl-t", "ctrl-b", "ctrl-f", "alt-b", "alt-f", "ctrl-p", "ctrl-n", "ctrl-u", "ctrl-k", "ctrl-w", "alt-d", "ctrl-y", "alt-y"],
   ],
   claude: [
-    ["enter", "ctrl-j", "ctrl-x-ctrl-s", "up"],
-    ["escape"],
-    ["shift-tab", "alt-p"],
-    ["ctrl-a", "ctrl-e", "ctrl-r", "ctrl-o"],
+    ["enter", "ctrl-j", "ctrl-x-ctrl-s", "up", "tab"],
+    ["escape", "ctrl-c", "ctrl-l", "ctrl-d", "ctrl-g", "ctrl-x-ctrl-e", "ctrl-b", "ctrl-x-ctrl-k"],
+    ["shift-tab", "alt-p", "alt-t", "alt-o", "ctrl-t", "ctrl-s"],
+    ["ctrl-a", "ctrl-e", "ctrl-r", "ctrl-o", "alt-b", "alt-f", "ctrl-p", "ctrl-n", "ctrl-u", "ctrl-k", "ctrl-w", "alt-d", "ctrl-y", "alt-y"],
   ],
   pi: [
     ["enter", "ctrl-j", "alt-enter", "alt-up"],
-    ["escape"],
-    ["shift-tab", "ctrl-l"],
-    ["ctrl-a", "ctrl-e", "ctrl-o"],
+    ["escape", "ctrl-c", "ctrl-d", "ctrl-g"],
+    ["shift-tab", "ctrl-l", "ctrl-p", "ctrl-t"],
+    ["ctrl-a", "ctrl-e", "ctrl-o", "ctrl-b", "ctrl-f", ...commonEditing, "ctrl-y", "alt-y"],
   ],
   opencode: [
     ["enter", "ctrl-j", "ctrl-x-enter"],
-    ["escape"],
-    ["ctrl-x-a", "ctrl-x-m"],
-    ["ctrl-a", "ctrl-e", "up", "down"],
+    ["escape", ...commonControl],
+    ["ctrl-x-a", "ctrl-x-m", "ctrl-p", "ctrl-a", "ctrl-x-n", "ctrl-x-l", "ctrl-x-g", "ctrl-x-c", "ctrl-x-e", "ctrl-x-t", "ctrl-x-b", "ctrl-x-s", "ctrl-x-x", "ctrl-x-y", "ctrl-x-u", "ctrl-x-r", "ctrl-r", "ctrl-x-q", "ctrl-t"],
+    ["ctrl-e", "up", "down", "ctrl-b", "ctrl-f", ...commonEditing],
   ],
 };
 
@@ -41,12 +44,30 @@ const expectedPhysicalKeys = {
   up: ["shortcut", "Up", "\x1b[A"],
   down: ["shortcut", "Down", "\x1b[B"],
   "ctrl-j": ["chord", "Ctrl+J", "\x0a"],
+  "ctrl-c": ["chord", "Ctrl+C", "\x03"],
+  "ctrl-d": ["chord", "Ctrl+D", "\x04"],
   "ctrl-a": ["chord", "Ctrl+A", "\x01"],
   "ctrl-e": ["chord", "Ctrl+E", "\x05"],
   "ctrl-r": ["chord", "Ctrl+R", "\x12"],
   "ctrl-t": ["chord", "Ctrl+T", "\x14"],
   "ctrl-o": ["chord", "Ctrl+O", "\x0f"],
   "ctrl-l": ["chord", "Ctrl+L", "\x0c"],
+  "ctrl-u": ["chord", "Ctrl+U", "\x15"],
+  "ctrl-w": ["chord", "Ctrl+W", "\x17"],
+  "ctrl-k": ["chord", "Ctrl+K", "\x0b"],
+  "ctrl-y": ["chord", "Ctrl+Y", "\x19"],
+  "ctrl-b": ["chord", "Ctrl+B", "\x02"],
+  "ctrl-f": ["chord", "Ctrl+F", "\x06"],
+  "ctrl-p": ["chord", "Ctrl+P", "\x10"],
+  "ctrl-n": ["chord", "Ctrl+N", "\x0e"],
+  "ctrl-g": ["chord", "Ctrl+G", "\x07"],
+  "ctrl-s": ["chord", "Ctrl+S", "\x13"],
+  "alt-b": ["chord", "Alt+B", "\x1bb"],
+  "alt-f": ["chord", "Alt+F", "\x1bf"],
+  "alt-d": ["chord", "Alt+D", "\x1bd"],
+  "alt-y": ["chord", "Alt+Y", "\x1by"],
+  "alt-t": ["chord", "Alt+T", "\x1bt"],
+  "alt-o": ["chord", "Alt+O", "\x1bo"],
   "ctrl-bracket-right": ["chord", "Ctrl+]", "\x1d"],
   "alt-enter": ["chord", "Alt+Enter", "\x1b\r"],
   "alt-p": ["chord", "Alt+P", "\x1bp"],
@@ -56,9 +77,24 @@ const expectedPhysicalKeys = {
   "alt-right": ["chord", "Alt+Right", "\x1b[1;3C"],
   "shift-tab": ["chord", "Shift+Tab", "\x1b[Z"],
   "ctrl-x-ctrl-s": ["chord", "C-x C-s", "\x18\x13"],
+  "ctrl-x-ctrl-e": ["chord", "C-x C-e", "\x18\x05"],
+  "ctrl-x-ctrl-k": ["chord", "C-x C-k", "\x18\x0b"],
   "ctrl-x-enter": ["chord", "C-x Enter", "\x18\r"],
   "ctrl-x-a": ["chord", "C-x A", "\x18a"],
   "ctrl-x-m": ["chord", "C-x M", "\x18m"],
+  "ctrl-x-n": ["chord", "C-x N", "\x18n"],
+  "ctrl-x-l": ["chord", "C-x L", "\x18l"],
+  "ctrl-x-g": ["chord", "C-x G", "\x18g"],
+  "ctrl-x-c": ["chord", "C-x C", "\x18c"],
+  "ctrl-x-e": ["chord", "C-x E", "\x18e"],
+  "ctrl-x-t": ["chord", "C-x T", "\x18t"],
+  "ctrl-x-b": ["chord", "C-x B", "\x18b"],
+  "ctrl-x-s": ["chord", "C-x S", "\x18s"],
+  "ctrl-x-x": ["chord", "C-x X", "\x18x"],
+  "ctrl-x-y": ["chord", "C-x Y", "\x18y"],
+  "ctrl-x-u": ["chord", "C-x U", "\x18u"],
+  "ctrl-x-r": ["chord", "C-x R", "\x18r"],
+  "ctrl-x-q": ["chord", "C-x Q", "\x18q"],
 };
 
 function entries(agent) {
@@ -79,11 +115,7 @@ for (const [agent, expected] of Object.entries(expectedProfiles)) {
       "agentKeyboard.group.send", "agentKeyboard.group.control", "agentKeyboard.group.mode", "agentKeyboard.group.edit",
     ]);
     assert.deepEqual(groups.map((group) => group.keys.map((item) => item.key.value)), expected);
-    assert.equal(entries(agent).length, { codex: 14, claude: 11, pi: 10, opencode: 10 }[agent]);
-    const limits = [[2, 4], [1, 3], [2, 3], [2, 4]];
-    groups.forEach((group, index) => {
-      assert.ok(group.keys.length >= limits[index][0] && group.keys.length <= limits[index][1]);
-    });
+    assert.equal(entries(agent).length, { codex: 28, claude: 33, pi: 25, opencode: 36 }[agent]);
   });
 
   test(`${agent} sends each physical shortcut's exact bytes without implicit Enter`, () => {
@@ -109,9 +141,11 @@ for (const [agent, expected] of Object.entries(expectedProfiles)) {
       assert.equal(key.custom, false, key.value);
       assert.equal(key.width, "md", key.value);
     }
-    const normalized = normalizeMobileKeyboardLayout({ pages: [{ id: "main", keys }] }).pages[0].keys;
     const supported = (key) => [key.id, key.kind, key.value, key.label];
-    assert.deepEqual(normalized.map(supported), keys.map(supported));
+    for (const key of keys) {
+      const normalized = normalizeMobileKeyboardLayout({ pages: [{ id: "main", keys: [key] }] }).pages[0].keys[0];
+      assert.deepEqual(supported(normalized), supported(key));
+    }
   });
 }
 
