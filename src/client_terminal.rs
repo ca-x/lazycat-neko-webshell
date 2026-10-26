@@ -146,6 +146,46 @@ pub(crate) struct ClientTerminalTicket {
     ticket: String,
 }
 
+// LightOS metadata (including its string expires_at) does not follow the
+// Catflap v1 schema. Decode only the transport fields used by this broker.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct LightOsTerminalTicketResponse {
+    client_instance_id: String,
+    device_api_url: String,
+    terminal_service_name: String,
+    ticket: String,
+}
+
+fn parse_terminal_ticket_response(
+    body: &[u8],
+    broker: ClientBroker,
+) -> Result<ClientTerminalTicket, ClientTerminalError> {
+    let result =
+        match broker {
+            ClientBroker::LightOs => serde_json::from_slice::<LightOsTerminalTicketResponse>(body)
+                .map(|response| ClientTerminalTicket {
+                    client_instance_id: response.client_instance_id,
+                    device_api_url: response.device_api_url,
+                    terminal_service_name: response.terminal_service_name,
+                    ticket: response.ticket,
+                    ..Default::default()
+                }),
+            ClientBroker::Catflap(_) => serde_json::from_slice(body),
+        };
+    result.map_err(|error| {
+        // Serde error messages may contain response values, including credentials.
+        warn!(
+            ?broker,
+            category = ?error.classify(),
+            line = error.line(),
+            column = error.column(),
+            "remote client terminal ticket response decoding failed"
+        );
+        ClientTerminalError::bad_gateway("invalid client terminal ticket response")
+    })
+}
+
 #[derive(Serialize)]
 struct ClientTerminalTicketRequest<'a> {
     id: &'a str,
@@ -1494,8 +1534,7 @@ async fn request_terminal_ticket_from(
             "client terminal ticket request returned {status}"
         )));
     }
-    serde_json::from_slice(&body)
-        .map_err(|_| ClientTerminalError::bad_gateway("invalid client terminal ticket"))
+    parse_terminal_ticket_response(&body, broker)
 }
 
 fn remote_access_error(status: StatusCode) -> Option<ClientTerminalError> {
@@ -1586,9 +1625,14 @@ fn validate_ticket(
             "invalid client terminal service name",
         ));
     }
-    if ticket.ticket.trim().is_empty() || ticket.ticket.len() > 8192 {
+    if ticket.ticket.trim().is_empty() {
         return Err(ClientTerminalError::bad_gateway(
-            "invalid client terminal ticket",
+            "client terminal ticket is empty",
+        ));
+    }
+    if ticket.ticket.len() > 8192 {
+        return Err(ClientTerminalError::bad_gateway(
+            "client terminal ticket exceeds size limit",
         ));
     }
     Ok(ticket)
@@ -2063,6 +2107,169 @@ mod tests {
         }
     }
 
+    fn ticket_response(broker: crate::client_broker::ClientBroker, id: &str) -> serde_json::Value {
+        let mut response = serde_json::json!({
+            "client_instance_id": id,
+            "device_api_url": "https://device.example/root",
+            "terminal_service_name": format!("cloud.lazycat.lightos.client-terminal.{id}"),
+            "ticket": "fixture-secret",
+            // Synthetic fixture: the official contract specifies a string,
+            // but this is not a recording of a real upstream timestamp.
+            "expires_at": "2026-10-26T00:00:00Z",
+        });
+        if broker.app().is_some() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            response["version"] = 1.into();
+            response["protocol"] = super::CATFLAP_PROTOCOL.into();
+            response["owner_user_id"] = "alice".into();
+            response["device_id"] = "DEVICE-A".into();
+            response["terminal_epoch"] = "fixture_epoch".into();
+            response["credential_header"] = super::CATFLAP_CREDENTIAL_HEADER.into();
+            response["expires_at"] = (now + 60).into();
+            response["terminal_service_name"] =
+                format!("catflap.client-terminal.managed.{id}.fixture_epoch").into();
+        }
+        response
+    }
+
+    #[test]
+    fn official_ticket_metadata_does_not_use_the_catflap_schema() {
+        use crate::client_broker::ClientBroker;
+
+        let mut response = ticket_response(ClientBroker::LightOs, "client-a");
+        // Additional metadata must not impose Catflap's field types on LightOS.
+        response["version"] = "official-metadata".into();
+        response["protocol"] = serde_json::json!({"name": "official"});
+        for expires_at in [Some("2026-10-26T00:00:00Z"), None] {
+            if let Some(value) = expires_at {
+                response["expires_at"] = value.into();
+            } else {
+                response.as_object_mut().unwrap().remove("expires_at");
+            }
+            let ticket = super::parse_terminal_ticket_response(
+                &serde_json::to_vec(&response).unwrap(),
+                ClientBroker::LightOs,
+            )
+            .unwrap();
+            let ticket = validate_ticket(ticket, "client-a").unwrap();
+            assert_eq!(ticket.ticket, "fixture-secret");
+            assert_eq!(ticket.device_api_url, "https://device.example/root");
+        }
+    }
+
+    #[test]
+    fn catflap_ticket_response_requires_integer_expiry_without_official_fallback() {
+        use crate::client_broker::{CATFLAP_APPS, ClientBroker};
+
+        let id = "pc-0123456789abcdef0123456789abcdef";
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-hc-user-id", "alice".parse().unwrap());
+        for broker in CATFLAP_APPS.map(ClientBroker::Catflap) {
+            let response = ticket_response(broker, id);
+            let ticket = super::parse_terminal_ticket_response(
+                &serde_json::to_vec(&response).unwrap(),
+                broker,
+            )
+            .unwrap();
+            let ticket = validate_ticket(ticket, id).unwrap();
+            super::validate_catflap_ticket(&ticket, &headers, id).unwrap();
+
+            for expiry in [
+                serde_json::json!("2026-10-26T00:00:00Z"),
+                serde_json::json!("1792972800"),
+                serde_json::json!(-1),
+                serde_json::json!(1.5),
+                serde_json::json!(null),
+                serde_json::json!(true),
+                serde_json::json!({}),
+                serde_json::json!([]),
+            ] {
+                let mut invalid = response.clone();
+                invalid["expires_at"] = expiry;
+                let error = super::parse_terminal_ticket_response(
+                    &serde_json::to_vec(&invalid).unwrap(),
+                    broker,
+                )
+                .expect_err("Catflap must not fall back to the official schema");
+                assert_eq!(error.status, StatusCode::BAD_GATEWAY);
+                assert_eq!(error.message, "invalid client terminal ticket response");
+                assert!(!error.to_string().contains("fixture-secret"));
+            }
+        }
+    }
+
+    #[test]
+    fn distinguishes_ticket_response_errors_from_empty_and_oversized_credentials() {
+        let malformed = super::parse_terminal_ticket_response(
+            br#"{"ticket":"fixture-secret","client_instance_id":23}"#,
+            crate::client_broker::ClientBroker::LightOs,
+        )
+        .unwrap_err();
+        let mut empty = ticket();
+        empty.ticket = " \r\n\t".into();
+        let empty = validate_ticket(empty, "client-a").unwrap_err();
+        let mut oversized = ticket();
+        oversized.ticket = "fixture-secret".repeat(8192);
+        let oversized = validate_ticket(oversized, "client-a").unwrap_err();
+        assert_eq!(malformed.message, "invalid client terminal ticket response");
+        assert_eq!(empty.message, "client terminal ticket is empty");
+        assert_eq!(
+            oversized.message,
+            "client terminal ticket exceeds size limit"
+        );
+        for error in [malformed, empty, oversized] {
+            assert_eq!(error.status, StatusCode::BAD_GATEWAY);
+            assert!(!error.to_string().contains("fixture-secret"));
+        }
+        let mut maximum = ticket();
+        maximum.ticket = "x".repeat(8192);
+        validate_ticket(maximum, "client-a").unwrap();
+    }
+
+    #[test]
+    fn ticket_decode_diagnostics_do_not_expose_response_values() {
+        use crate::client_broker::{CATFLAP_APPS, ClientBroker};
+
+        struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let logs = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = Arc::clone(&logs);
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(move || Capture(Arc::clone(&captured)))
+            .finish();
+        let error = tracing::subscriber::with_default(subscriber, || {
+            super::parse_terminal_ticket_response(
+                br#"{"ticket":"fixture-secret","version":"raw-response-secret"}"#,
+                ClientBroker::Catflap(CATFLAP_APPS[0]),
+            )
+        })
+        .unwrap_err();
+        let logs = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+        assert!(logs.contains("ticket response decoding failed"));
+        assert!(logs.contains("category=Data"));
+        assert!(logs.contains("line=1"));
+        for secret in ["fixture-secret", "raw-response-secret"] {
+            assert!(!logs.contains(secret));
+            assert!(!error.to_string().contains(secret));
+        }
+    }
+
     fn remote_program_store() -> RemoteProgramStore {
         let database = Arc::new(
             AppDatabase::open(std::env::temp_dir().join(format!(
@@ -2226,7 +2433,12 @@ mod tests {
                     } else {
                         assert!(body.get("version").is_none());
                     }
-                    Json(serde_json::json!({"ticket":"fixture-secret"}))
+                    let broker = if headers.contains_key("x-catflap-request") {
+                        ClientBroker::Catflap(CATFLAP_APPS[0])
+                    } else {
+                        ClientBroker::LightOs
+                    };
+                    Json(ticket_response(broker, body["id"].as_str().unwrap()))
                 },
             ),
         );
@@ -2257,6 +2469,11 @@ mod tests {
             )
             .await
             .unwrap();
+            let id = "pc-0123456789abcdef0123456789abcdef";
+            let ticket = validate_ticket(ticket, id).unwrap();
+            if broker.app().is_some() {
+                super::validate_catflap_ticket(&ticket, &headers, id).unwrap();
+            }
             assert_eq!(ticket.ticket, "fixture-secret");
         }
         server.abort();
