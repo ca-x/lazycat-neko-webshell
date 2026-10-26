@@ -7,6 +7,8 @@ project:
   output: .lazycat-build/neko-webshell.lpk
 
 update:
+  sync_homepage: false
+  sync_license: false
   strategy: publish
   version_source:
     type: git
@@ -19,14 +21,11 @@ build:
       version: 1.97.1
   run_buildscript: true
 
+release:
+  use_github_release_notes: false
+  store_changelog_format: plain
 stores:
   official:
-    enabled: true
-    skip_if_version_exists: true
-    create_if_missing: false
-    changelog_locales: [zh, en]
+    enabled: false
   private:
-    enabled: true
-    skip_if_version_exists: true
-    name: Neko Webshell
-    summary: Published from GitHub Actions
+    enabled: false

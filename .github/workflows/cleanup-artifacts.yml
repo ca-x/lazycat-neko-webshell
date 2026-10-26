@@ -1,0 +1,25 @@
+name: Clean expired LPK artifacts
+on:
+  schedule:
+    - cron: '41 2 * * *'
+  workflow_dispatch:
+permissions:
+  actions: write
+  contents: read
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v9
+        with:
+          script: |
+            const cutoff = Date.now() - 3 * 24 * 60 * 60 * 1000;
+            let deleted = 0;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {...context.repo, per_page: 100});
+            for (const artifact of artifacts) {
+              if (!/^(?:lpk-|neko-(?:webshell-)?lpk|client-lpk-|server-lpk-)/.test(artifact.name)) continue;
+              if (!artifact.expired && Date.parse(artifact.created_at) >= cutoff) continue;
+              await github.rest.actions.deleteArtifact({...context.repo, artifact_id: artifact.id});
+              deleted++;
+            }
+            core.info(`Deleted ${deleted} expired/old LPK artifacts. Retention: 3 days.`);

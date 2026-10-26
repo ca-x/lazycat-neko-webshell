@@ -275,3 +275,7 @@ https://<provider-domain>/?name=<name>@<owner_deploy_id>
 ```
 
 目标实例里的命令执行由 LightOS 和目标实例内 agent 配合完成；SSH 目标由本机 OpenSSH 进程连接。Neko Webshell 负责界面、工作区恢复、输入输出转发、内置工具能力和移动端体验。
+
+## 私有构建与公开发布
+
+源码仓库为 `ca-x/lazycat-neko-webshell`。更新版本后 push `v<版本>`，或手动运行 `Build Neko LPK`，只构建并上传 `neko-lpk-v<版本>` Artifact，不创建私有 GitHub Release，不读取商店凭据。Artifact 保留 3 天并自动清理。公开仓库 `lazycat-contrib/lazycat-neko-webshell` 拉取成品，验证后创建公开 Release 并发布喵喵和官方双商店；发布凭据仅保存在公开仓库或授权它的组织 Secrets。
