@@ -49,7 +49,7 @@ jobs:
         uses: ca-x/lazycat-github-action@v1.3.6
         env:
           LAZYCAT_WORKFLOW_TOOLCHAINS: node,rust
-          LAZYCAT_WORKFLOW_NODE_VERSION: 24
+          LAZYCAT_WORKFLOW_NODE_VERSION: 24.x
           LAZYCAT_WORKFLOW_RUST_TOOLCHAIN: 1.97.1
         with:
           operation: build
