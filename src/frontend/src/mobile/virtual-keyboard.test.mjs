@@ -3,7 +3,7 @@ import test from "node:test";
 import { encodeMobileShortcutKeyInput } from "../keyboard.ts";
 import { renderMobileTypingKeyboard } from "./virtual-keyboard.ts";
 import { mobileKeyboardPresetLayout, normalizeMobileKeyboardLayout } from "./keyboard-layout.ts";
-import { renderMobileSymbolKeyboardPanel } from "./quick-input.ts";
+import { renderMobileKeyboardPanels } from "./keyboard-layout-view.ts";
 
 test("optional ABC page supplies QWERTY without a second function keyboard", () => {
   const html = renderMobileTypingKeyboard();
@@ -44,5 +44,5 @@ test("ABC and symbols retain every printable ASCII character after flattening", 
     }
     for (let code = 32; code <= 126; code += 1) assert.ok(produced.has(String.fromCharCode(code)), `missing character: ${String.fromCharCode(code)}`);
   }
-  for (const symbol of [".", ",", "=", "&#039;"]) assert.ok(renderMobileSymbolKeyboardPanel("default").includes(`data-mobile-shortcut="${symbol}"`));
+  for (const symbol of [".", ",", "=", "&#039;"]) assert.ok(renderMobileKeyboardPanels(mobileKeyboardPresetLayout("default")).includes(`data-mobile-shortcut="${symbol}"`));
 });

@@ -1,0 +1,48 @@
+.mobile-expanded-keyboard .mobile-keyboard-panel.mobile-agent-keyboard {
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: auto;
+  gap: 12px;
+  padding: 2px 2px 8px;
+}
+
+.mobile-agent-keyboard-heading {
+  color: var(--muted);
+  font: 500 12px/1.3 var(--font-sans);
+}
+
+.mobile-agent-keyboard-group {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.mobile-agent-keyboard-group h3 {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font: 500 11px/1.4 var(--font-sans);
+}
+
+.mobile-expanded-keyboard .mobile-keyboard-panel.mobile-agent-keyboard button {
+  height: auto;
+  min-height: 56px;
+  padding: 7px 4px;
+  white-space: normal;
+  overflow: visible;
+}
+
+.mobile-expanded-keyboard .mobile-keyboard-panel.mobile-agent-keyboard button small {
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.mobile-expanded-keyboard .mobile-keyboard-panel.mobile-agent-keyboard button > span {
+  display: block;
+  width: 100%;
+  overflow-wrap: anywhere;
+  font-family: var(--font-sans);
+}

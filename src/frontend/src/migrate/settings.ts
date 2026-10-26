@@ -125,6 +125,7 @@ export function migrateSettings(value: Partial<Settings>): Settings {
     aiVoiceReplyProviderProfiles,
     aiVoiceReplyActiveProviderProfileId,
     mobileQuickPhrases: normalizeMobileQuickPhrases(value.mobileQuickPhrases),
+    mobileAgentKeyboardEnabled: normalizeBooleanSetting(value.mobileAgentKeyboardEnabled, false),
     mobileKeyboardPreset: normalizeMobileKeyboardPreset(value.mobileKeyboardPreset),
     mobileKeyboardLayout: normalizeMobileKeyboardLayout(value.mobileKeyboardLayout ?? DEFAULT_SETTINGS.mobileKeyboardLayout),
   };

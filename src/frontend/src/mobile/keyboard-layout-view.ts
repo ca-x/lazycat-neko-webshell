@@ -10,7 +10,7 @@ export function renderMobileKeyboardPanels(layout: MobileKeyboardLayout, activeP
   `).join("");
 }
 
-export function renderMobileKeyboardKey(key: MobileKeyboardKey, tr?: MobileKeyTranslate): string {
+export function renderMobileKeyboardKey(key: MobileKeyboardKey, tr?: MobileKeyTranslate, presentation: { label?: string; hint?: string } = {}): string {
   const data = key.kind === "shortcut"
     ? `data-mobile-shortcut="${escapeAttr(key.value)}"${key.repeat ? ' data-mobile-repeat="true"' : ""}${isModifier(key.value) ? ` data-mobile-modifier="${escapeAttr(key.value)}" aria-pressed="false"` : ""}`
     : key.kind === "chord"
@@ -18,11 +18,12 @@ export function renderMobileKeyboardKey(key: MobileKeyboardKey, tr?: MobileKeyTr
       : key.kind === "action"
         ? `data-mobile-action="${escapeAttr(key.value)}"`
         : `data-mobile-text="${escapeTerminalDataAttribute(key.value)}"${key.autoEnter ? ' data-mobile-auto-enter="true"' : ""}`;
+  const label = presentation.label ?? key.label;
   const content = key.icon
-    ? `<i data-lucide="${escapeAttr(key.icon)}"></i>${key.label ? `<span>${escapeHtml(key.label)}</span>` : ""}`
-    : escapeHtml(key.label || key.value);
-  const hint = mobileKeyHint(key, tr);
-  return `<button type="button" ${data} data-mobile-key-width="${escapeAttr(key.width)}" aria-label="${escapeAttr([key.ariaLabel || key.label || key.value, hint].filter(Boolean).join(": "))}"><span>${content}</span>${hint ? `<small>${escapeHtml(hint)}</small>` : ""}</button>`;
+    ? `<i data-lucide="${escapeAttr(key.icon)}"></i>${label ? `<span>${escapeHtml(label)}</span>` : ""}`
+    : escapeHtml(label || key.value);
+  const hint = presentation.hint ?? mobileKeyHint(key, tr);
+  return `<button type="button" ${data} data-mobile-key-width="${escapeAttr(key.width)}" aria-label="${escapeAttr([presentation.label ?? (key.ariaLabel || key.label || key.value), hint].filter(Boolean).join(": "))}"><span>${content}</span>${hint ? `<small>${escapeHtml(hint)}</small>` : ""}</button>`;
 }
 
 function isModifier(value: string): boolean {

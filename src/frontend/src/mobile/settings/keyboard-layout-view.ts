@@ -2,7 +2,6 @@ export function renderMobileKeyboardLayoutSettingsView(): string {
   return `
     <div class="settings-group mobile-keyboard-layout-settings" id="mobileKeyboardLayoutSettings">
       <div class="settings-group-title" data-i18n="section.mobileKeyboardLayout">Shortcut layout</div>
-      <p class="settings-help" data-i18n="setting.mobileKeyboardLayoutHelp">Choose a layout for your terminal or editor. Keys follow the active program's bindings; presets do not change its editing mode.</p>
       <div class="mobile-keyboard-layout-toolbar">
         <label class="field">
           <span data-i18n="field.mobileKeyboardPreset">Preset</span>
@@ -16,9 +15,17 @@ export function renderMobileKeyboardLayoutSettingsView(): string {
           </select>
         </label>
       </div>
+      <div>
+        <label class="switch">
+          <input type="checkbox" data-mobile-agent-keyboard-enabled aria-describedby="mobileAgentKeyboardHelp" />
+          <span data-i18n="setting.mobileAgentKeyboardEnabled">Use Agent shortcuts</span>
+        </label>
+        <p class="settings-help settings-help-inline" id="mobileAgentKeyboardHelp" data-i18n="setting.mobileAgentKeyboardHelp">Opt in to Agent shortcuts in native and Herdr terminals. Turning this off restores your saved layout. Shortcuts may vary with Agent version or custom bindings.</p>
+      </div>
       <details class="mobile-keyboard-customize" data-mobile-layout-customize>
         <summary data-i18n="mobileKeyboard.customize">Customize keys</summary>
         <div class="mobile-keyboard-customize-body">
+        <p class="settings-help" data-i18n="setting.mobileKeyboardLayoutHelp">Choose a layout for your terminal or editor. Keys follow the active program's bindings; presets do not change its editing mode.</p>
         <div class="field mobile-keyboard-page-field">
           <span data-i18n="field.mobileKeyboardPage">Shortcut category</span>
           <div class="mobile-keyboard-editor-tabs" role="tablist" data-mobile-layout-page-tabs>

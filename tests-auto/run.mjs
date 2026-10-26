@@ -14,6 +14,7 @@ const scenarios = new Map([
   ["terminal-diagnostics", { module: "./terminal-diagnostics/run.mjs", exportName: "runTerminalDiagnosticsScenario" }],
   ["herdr-history", { module: "./herdr-history/run.mjs", exportName: "runHerdrHistoryScenario" }],
   ["mobile-keyboard", { module: "./mobile-keyboard/run.mjs", exportName: "runMobileKeyboardScenario" }],
+  ["mobile-agent-keyboard", { module: "./mobile-agent-keyboard/run.mjs", exportName: "runMobileAgentKeyboardScenario" }],
   ["mobile-layout", { module: "./mobile-layout/run.mjs", exportName: "runMobileLayoutScenario" }],
   [
     "workspace-sync",

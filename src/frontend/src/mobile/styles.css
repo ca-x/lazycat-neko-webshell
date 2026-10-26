@@ -1,4 +1,5 @@
 @import "./settings/keyboard-layout.css";
+@import "./agent-keyboard.css";
 
 :root {
   --mobile-shortcuts-bg: var(--chrome);

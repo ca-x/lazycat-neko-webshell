@@ -1,5 +1,7 @@
 .mobile-keyboard-layout-settings { display: grid; gap: 12px; }
-.mobile-keyboard-layout-toolbar .field { display: grid; grid-template-columns: minmax(0, 1fr) minmax(140px, 1fr); align-items: center; gap: 12px; }
+.mobile-keyboard-layout-settings > [hidden] { display: none; }
+.mobile-keyboard-layout-settings .switch { margin-top: 0; }
+.mobile-keyboard-layout-toolbar .field { display: grid; grid-template-columns: minmax(0, 1fr) minmax(140px, 1fr); align-items: center; gap: 12px; margin-top: 0; }
 .mobile-keyboard-layout-settings select { min-width: 0; width: 100%; min-height: 44px; }
 .mobile-keyboard-customize { min-width: 0; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--surface); }
 .mobile-keyboard-customize > summary { min-height: 48px; padding: 14px 12px; color: var(--text); cursor: pointer; font-weight: 600; }

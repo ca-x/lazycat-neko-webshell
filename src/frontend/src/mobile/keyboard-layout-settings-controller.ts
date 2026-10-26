@@ -23,6 +23,8 @@ type Options = {
   layout: () => MobileKeyboardLayout;
   setPreset: (preset: MobileKeyboardPresetId) => void;
   setLayout: (layout: MobileKeyboardLayout) => void;
+  agentKeyboardEnabled?: () => boolean;
+  setAgentKeyboardEnabled?: (enabled: boolean) => void;
   save: () => void;
   changed: () => void;
   updateIcons: () => void;
@@ -33,6 +35,7 @@ export function createMobileKeyboardLayoutSettingsController(options: Options) {
   let pageId: MobileKeyboardPageId = "main";
   let selectedKeyId = "";
   const preset = options.root.querySelector<HTMLSelectElement>("[data-mobile-layout-preset]");
+  const agentKeyboardEnabled = options.root.querySelector<HTMLInputElement>("[data-mobile-agent-keyboard-enabled]");
   const pageTabs = options.root.querySelector<HTMLElement>("[data-mobile-layout-page-tabs]");
   const list = options.root.querySelector<HTMLElement>("[data-mobile-layout-key-list]");
   const inspector = options.root.querySelector<HTMLElement>("[data-mobile-layout-key-inspector]");
@@ -73,6 +76,7 @@ export function createMobileKeyboardLayoutSettingsController(options: Options) {
     reorderGesture?.cancel();
     if (undo) { undo.disabled = !previous; undo.hidden = !previous; }
     if (preset) preset.value = options.preset();
+    if (agentKeyboardEnabled) agentKeyboardEnabled.checked = options.agentKeyboardEnabled?.() === true;
     pageTabs?.querySelectorAll<HTMLButtonElement>("[data-mobile-layout-page-tab]").forEach((tab) => {
       const selected = tab.dataset.mobileLayoutPageTab === pageId;
       tab.setAttribute("aria-selected", String(selected));
@@ -89,6 +93,12 @@ export function createMobileKeyboardLayoutSettingsController(options: Options) {
 
   function bind() {
     editor = createMobileKeyEditor({ root: options.root, layout: currentLayout, page: () => pageId, commit, tr: options.tr });
+    agentKeyboardEnabled?.addEventListener("change", () => {
+      if (!options.setAgentKeyboardEnabled) return;
+      options.setAgentKeyboardEnabled(agentKeyboardEnabled.checked);
+      options.save();
+      options.changed();
+    });
     undo?.addEventListener("click", () => {
       if (!previous) return;
       const snapshot = previous;

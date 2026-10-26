@@ -198,6 +198,7 @@ export const DEFAULT_SETTINGS: Settings = {
   aiVoiceReplyProviderProfiles: defaultAiVoiceSpeechProviderProfiles(),
   aiVoiceReplyActiveProviderProfileId: "mimo",
   mobileQuickPhrases: [],
+  mobileAgentKeyboardEnabled: false,
   mobileKeyboardPreset: "default",
   mobileKeyboardLayout: mobileKeyboardPresetLayout("default"),
 };

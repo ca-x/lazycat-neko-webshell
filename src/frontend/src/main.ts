@@ -165,7 +165,7 @@ import { formatMobileClockTime } from "./mobile/clock";
 import { createMobileClockController } from "./mobile/clock-controller";
 import { createHerdrJumpMobileAdapter } from "./mobile/herdr-jump-adapter";
 import { isMobileOverlayMode, prepareMobileOverlay } from "./mobile/overlay";
-import { createMobileSymbolAgentController } from "./mobile/symbol-agent-controller";
+import { createMobileAgentKeyboardContext } from "./mobile/agent-keyboard-context";
 import { isCoarseTouchPointer } from "./mobile/terminal-gestures";
 import { createMobileTerminalInteractionController } from "./mobile/terminal-interaction-controller";
 import { createMobileWorkspaceOverviewController } from "./mobile/workspace-overview-controller";
@@ -578,6 +578,7 @@ const imageUploadProgress = createUploadProgressController(elements.webshell);
 let mobileSystemKeyboard: ReturnType<typeof createMobileSystemKeyboardController>;
 const mobileKeyboard = createMobileKeyboardController({
   root: elements.mobileShortcuts,
+  agentContext: () => mobileAgentKeyboard.current(),
   preserveSystemKeyboardState: () => mobileSystemKeyboard.preserveState(),
   onKeyInput: sendActivePaneKeyInput,
   onPasteShortcut: async () => {
@@ -635,6 +636,8 @@ const mobileKeyboardLayoutSettings = createMobileKeyboardLayoutSettingsControlle
   root: elements.mobileKeyboardLayoutSettings,
   preset: () => settings.mobileKeyboardPreset,
   layout: () => settings.mobileKeyboardLayout,
+  agentKeyboardEnabled: () => settings.mobileAgentKeyboardEnabled,
+  setAgentKeyboardEnabled: (enabled) => { settings.mobileAgentKeyboardEnabled = enabled; },
   setPreset: (preset) => { settings.mobileKeyboardPreset = preset; },
   setLayout: (layout) => { settings.mobileKeyboardLayout = layout; },
   save: saveSettings,
@@ -693,27 +696,11 @@ const {
   handleViewportChange,
   prepareMobileOverlay: prepareAppMobileOverlay,
 });
-const mobileSymbolAgent = createMobileSymbolAgentController({
-  activeHerdrPane: () => {
-    const pane = activeHerdrTerminalPane();
-    if (!pane) return undefined;
-    const selector = normalizeSelector(pane.selector || selectedSelector);
-    if (!selector) return undefined;
-    return { selector, sessionId: pane.sessionId ?? "" };
-  },
-  ensureHerdrState: async (selector) => {
-    const stateMatches = herdrState?.available && normalizeSelector(herdrState.selector) === selector;
-    return stateMatches || await refreshHerdrState(selector);
-  },
-  readCurrentPane: async (selector) => {
-    const envelope = await runHerdrSocketRequest("pane.current", {}, {
-      selector,
-      id: "lazycat-webshell:mobile-symbol-agent",
-      mirrorNotification: false,
-    });
-    return envelope.result;
-  },
-  onChange: renderMobileQuickInput,
+const mobileAgentKeyboard = createMobileAgentKeyboardContext({
+  enabled: () => settings.mobileAgentKeyboardEnabled,
+  pane: activePane,
+  herdr: () => herdrState,
+  changed: renderMobileQuickInput,
 });
 const notificationDom = createNotificationDom({
   elements,
@@ -972,6 +959,7 @@ const herdrNavigation = createHerdrNavigationController({
   runSerial: (task) => herdrInteractionQueue.run(task),
   applyState: (state) => {
     herdrState = state;
+    mobileAgentKeyboard.setHerdrSnapshotValid(true);
     herdrLazycatNotifications.reconcile();
     renderTabs();
     renderHerdrDock();
@@ -1581,6 +1569,7 @@ function setSelectedSelector(
   const normalized = normalizeSelector(selector);
   if (normalized !== selectedSelector) {
     herdrJumpController?.setAttentionConnected(false);
+    mobileAgentKeyboard.setHerdrSnapshotValid(false);
     herdrConsole?.dismiss();
     herdrHistory?.dismiss();
     herdrIntegrations?.dismiss();
@@ -2888,7 +2877,6 @@ function transformMobileStickyInput(text: string, source: string): string | unde
 function renderMobileQuickInput() {
   const phrases = mobileKeyboard.renderQuickInput({
     phrases: settings.mobileQuickPhrases,
-    symbolAgent: mobileSymbolAgent.current(),
     tr,
     preset: settings.mobileKeyboardPreset,
     layout: resolveMobileKeyboardLayout(settings.mobileKeyboardPreset, settings.mobileKeyboardLayout),
@@ -4800,6 +4788,7 @@ async function performHerdrStateRefresh(
     const state = herdrBridgeStateForUi(fetchedState);
     if (!state.available) {
       herdrJumpController?.setAttentionConnected(false);
+      mobileAgentKeyboard.setHerdrSnapshotValid(false);
       if (mode === "preserve-available" && herdrState?.available) return false;
       const stateChanged = !herdrBridgeStatesEqual(herdrState, state);
       advanceHerdrStateRevision();
@@ -4807,7 +4796,7 @@ async function performHerdrStateRefresh(
       if (stateChanged) {
         renderTabs();
         renderHerdrDock();
-        mobileSymbolAgent.invalidate();
+        mobileAgentKeyboard.refresh();
       }
       return false;
     }
@@ -4815,12 +4804,12 @@ async function performHerdrStateRefresh(
     const stateChanged = !herdrBridgeStatesEqual(herdrState, state);
     advanceHerdrStateRevision();
     herdrState = state;
+    mobileAgentKeyboard.setHerdrSnapshotValid(true);
     herdrLazycatNotifications.reconcile();
     if (stateChanged) {
       renderTabs();
       renderHerdrDock();
-      mobileSymbolAgent.invalidate();
-      void mobileSymbolAgent.refresh();
+      mobileAgentKeyboard.refresh();
       if (previousFocusedPaneId !== state.focused_pane_id) {
         refreshHerdrTerminalAfterAction(requestSelector, "focus_tab");
       }
@@ -4831,6 +4820,7 @@ async function performHerdrStateRefresh(
   } catch (error) {
     if (requestId === herdrStateGeneration && isCurrentSelectorRequest(requestSelector, generation)) {
       herdrJumpController?.setAttentionConnected(false);
+      mobileAgentKeyboard.setHerdrSnapshotValid(false);
       if (settings.debugMode) {
         setGlobalStatus(tr("status.herdrActionFailed", { message: errorMessage(error) }), "error");
       }
@@ -4878,6 +4868,7 @@ async function runHerdrAction(
       }
       invalidatePendingHerdrStateRefresh();
       herdrState = state;
+      mobileAgentKeyboard.setHerdrSnapshotValid(true);
       herdrLazycatNotifications.reconcile();
       renderTabs();
       renderHerdrDock();
@@ -5040,6 +5031,7 @@ async function syncHerdrEventBridge(options: { force?: boolean } = {}) {
     }
     if (generation === herdrEventSocketGeneration && normalizeSelector(selectedSelector) === selector) {
       herdrJumpController?.setAttentionConnected(false);
+      mobileAgentKeyboard.setHerdrSnapshotValid(false);
       herdrEventSocketOpeningSelector = "";
       scheduleHerdrEventReconnect(selector, generation);
     }
@@ -5075,13 +5067,17 @@ async function syncHerdrEventBridge(options: { force?: boolean } = {}) {
   socket.addEventListener("close", () => {
     if (herdrEventSocket !== socket || generation !== herdrEventSocketGeneration) return;
     herdrJumpController?.setAttentionConnected(false);
+    mobileAgentKeyboard.setHerdrSnapshotValid(false);
     herdrEventSocket = undefined;
     herdrEventStreamPolicy.reset();
     herdrEventRefreshLoop.reset();
     scheduleHerdrEventReconnect(selector, generation);
   });
   socket.addEventListener("error", () => {
-    if (herdrEventSocket === socket && generation === herdrEventSocketGeneration) herdrJumpController?.setAttentionConnected(false);
+    if (herdrEventSocket === socket && generation === herdrEventSocketGeneration) {
+      herdrJumpController?.setAttentionConnected(false);
+      mobileAgentKeyboard.setHerdrSnapshotValid(false);
+    }
     if (herdrEventSocket === socket && settings.debugMode) {
       setGlobalStatus(tr("status.herdrUnavailable"), "error");
     }
@@ -5098,6 +5094,7 @@ function handleHerdrEventMessage(raw: unknown) {
     return;
   }
   if (envelope.error) {
+    mobileAgentKeyboard.setHerdrSnapshotValid(false);
     recoverHerdrEventStream(envelope, () => scheduleHerdrActionRefresh(selectedSelector, [0, 900, 1800]));
     if (settings.debugMode) {
       setGlobalStatus(tr("status.herdrActionFailed", { message: envelope.error.message || envelope.error.code || "" }), "error");
@@ -5171,6 +5168,7 @@ function stopHerdrEventBridge() {
 }
 
 function closeHerdrEventSocket() {
+  mobileAgentKeyboard.setHerdrSnapshotValid(false);
   window.clearTimeout(herdrEventReconnectTimer);
   herdrEventReconnectTimer = undefined;
   herdrEventStreamPolicy.reset();
@@ -5187,6 +5185,7 @@ function clearHerdrState() {
   invalidatePendingHerdrStateRefresh();
   herdrRefreshCoordinator.clearQueued();
   herdrState = undefined;
+  mobileAgentKeyboard.refresh();
   herdrRuntimeGuard.clear();
   clearHerdrActionRefreshTimers();
   stopHerdrEventBridge();
@@ -6995,7 +6994,7 @@ function updateActiveDetails() {
     }, tr("status.idle"));
     setGlobalStatus(status.message, status.tone);
     document.title = tr("app.title");
-    mobileSymbolAgent.reset();
+    mobileAgentKeyboard.refresh();
     terminalControl.render();
     return;
   }
@@ -7005,7 +7004,7 @@ function updateActiveDetails() {
   elements.instanceStatusDot.dataset.status = instanceForSelector(tab.selector)?.status ?? "running";
   setGlobalStatus(pane.status, pane.tone);
   document.title = `${tabCurrentTitle(tab)} - ${tr("app.title")}`;
-  void mobileSymbolAgent.refresh();
+  mobileAgentKeyboard.refresh();
   terminalControl.render();
 }
 

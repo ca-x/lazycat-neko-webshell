@@ -1,28 +1,6 @@
 import type { MessageKey } from "../i18n.ts";
-import type { JsonRecord, MobileQuickPhrase } from "../types.ts";
-import { recordField, stringField } from "../json-meta.ts";
+import type { MobileQuickPhrase } from "../types.ts";
 import { escapeAttr, escapeHtml } from "../utils.ts";
-
-export type MobileSymbolAgent =
-  | "default"
-  | "agy"
-  | "amp"
-  | "claude"
-  | "cline"
-  | "codex"
-  | "copilot"
-  | "cursor"
-  | "devin"
-  | "droid"
-  | "gemini"
-  | "grok"
-  | "hermes"
-  | "kilo"
-  | "kimi"
-  | "kiro"
-  | "opencode"
-  | "pi"
-  | "qodercli";
 
 type Translate = (key: MessageKey, values?: Record<string, string | number>) => string;
 
@@ -30,119 +8,6 @@ export const MAX_MOBILE_QUICK_PHRASES = 24;
 export const MAX_MOBILE_QUICK_PHRASE_LABEL = 32;
 export const MAX_MOBILE_QUICK_PHRASE_TEXT = 256;
 export const MAX_MOBILE_QUICK_PHRASE_GROUP = 24;
-
-const SYMBOL_LABELS: Record<string, string> = {
-  "|": "Pipe",
-  "\\": "Backslash",
-  "~": "Tilde",
-  "`": "Backtick",
-  "[": "Left bracket",
-  "]": "Right bracket",
-  "{": "Left brace",
-  "}": "Right brace",
-  "(": "Left parenthesis",
-  ")": "Right parenthesis",
-  "&": "Ampersand",
-  ";": "Semicolon",
-  ":": "Colon",
-  "$": "Dollar",
-  "/": "Slash",
-  "-": "Hyphen",
-  "*": "Asterisk",
-  "?": "Question mark",
-  ".": "Period",
-  ",": "Comma",
-  "=": "Equals",
-  "'": "Apostrophe",
-};
-
-const SYMBOLS = ["$", "/", "-", "~", "|", "\\", "`", "[", "]", "{", "}", "(", ")", "&", ";", ":", "*", "?", ".", ",", "=", "'"] as const;
-const DEFAULT_PRIORITY = ["$", "/", "-", "~", "|", "\\", "`", "[", "]", "{", "}", "(", ")", "&", ";", ":", "*", "?"];
-const SLASH_COMMAND_PRIORITY = ["/", "$", "-", "~", "\\", "|", "`", "[", "]", "{", "}", "(", ")", "?", "&", ";", ":", "*"];
-const CODEX_PRIORITY = ["$", "/", "-", "~", "`", "|", "\\", "[", "]", "{", "}", "(", ")", "&", ";", ":", "*", "?"];
-const PATH_FIRST_PRIORITY = ["/", "-", "~", "$", "|", "\\", "`", "[", "]", "{", "}", "(", ")", "?", "&", ";", ":", "*"];
-
-const AGENT_PRIORITY: Partial<Record<MobileSymbolAgent, string[]>> = {
-  agy: SLASH_COMMAND_PRIORITY,
-  amp: SLASH_COMMAND_PRIORITY,
-  claude: SLASH_COMMAND_PRIORITY,
-  cline: SLASH_COMMAND_PRIORITY,
-  codex: CODEX_PRIORITY,
-  copilot: SLASH_COMMAND_PRIORITY,
-  cursor: SLASH_COMMAND_PRIORITY,
-  devin: DEFAULT_PRIORITY,
-  droid: PATH_FIRST_PRIORITY,
-  gemini: SLASH_COMMAND_PRIORITY,
-  grok: SLASH_COMMAND_PRIORITY,
-  hermes: SLASH_COMMAND_PRIORITY,
-  kilo: SLASH_COMMAND_PRIORITY,
-  kimi: SLASH_COMMAND_PRIORITY,
-  kiro: SLASH_COMMAND_PRIORITY,
-  opencode: SLASH_COMMAND_PRIORITY,
-  pi: SLASH_COMMAND_PRIORITY,
-  qodercli: SLASH_COMMAND_PRIORITY,
-};
-
-const AGENT_ALIASES: Record<string, MobileSymbolAgent> = {
-  agy: "agy",
-  antigravity: "agy",
-  amp: "amp",
-  claude: "claude",
-  "claude-code": "claude",
-  cline: "cline",
-  codex: "codex",
-  copilot: "copilot",
-  "github-copilot": "copilot",
-  cursor: "cursor",
-  devin: "devin",
-  droid: "droid",
-  gemini: "gemini",
-  grok: "grok",
-  hermes: "hermes",
-  kilo: "kilo",
-  kimi: "kimi",
-  kiro: "kiro",
-  opencode: "opencode",
-  pi: "pi",
-  qoder: "qodercli",
-  qodercli: "qodercli",
-};
-
-export function mobileSymbolAgentFromText(value: string): MobileSymbolAgent {
-  const normalized = value.toLowerCase().trim();
-  if (!normalized) return "default";
-  const tokens = normalized.split(/[^a-z0-9-]+/).filter(Boolean);
-  for (const token of [normalized, ...tokens]) {
-    const agent = AGENT_ALIASES[token];
-    if (agent) return agent;
-  }
-  return "default";
-}
-
-export function mobileSymbolAgentFromHerdrPane(result: JsonRecord | undefined): MobileSymbolAgent {
-  const pane = recordField(result, "pane") ?? result;
-  const session = recordField(pane, "agent_session");
-  const candidates = [
-    stringField(pane, "agent"),
-    stringField(session, "agent"),
-    stringField(session, "source"),
-    stringField(pane, "display_agent"),
-    stringField(pane, "title"),
-    stringField(pane, "label"),
-  ];
-  for (const candidate of candidates) {
-    const agent = mobileSymbolAgentFromText(candidate);
-    if (agent !== "default") return agent;
-  }
-  return "default";
-}
-
-export function renderMobileSymbolKeyboardPanel(agent: MobileSymbolAgent): string {
-  return orderedSymbols(agent).map((symbol) => {
-    const label = SYMBOL_LABELS[symbol] ?? symbol;
-    return `<button type="button" data-mobile-shortcut="${escapeAttr(symbol)}" aria-label="${escapeAttr(label)}">${escapeHtml(symbol)}</button>`;
-  }).join("");
-}
 
 export function renderMobileQuickPhraseKeyboardPanel(phrases: MobileQuickPhrase[]): string {
   return sortedMobileQuickPhrases(phrases).map((phrase) => (
@@ -236,18 +101,6 @@ export function markMobileQuickPhraseUsed(phrases: MobileQuickPhrase[], id: stri
         lastUsedAt: now,
       }
     : phrase);
-}
-
-function orderedSymbols(agent: MobileSymbolAgent): string[] {
-  const priority = AGENT_PRIORITY[agent] ?? DEFAULT_PRIORITY;
-  const seen = new Set<string>();
-  const ordered: string[] = [];
-  for (const symbol of [...priority, ...SYMBOLS]) {
-    if (!SYMBOL_LABELS[symbol] || seen.has(symbol)) continue;
-    seen.add(symbol);
-    ordered.push(symbol);
-  }
-  return ordered;
 }
 
 function normalizePhraseText(value: unknown): string {

@@ -449,6 +449,7 @@ export type Settings = {
   aiVoiceReplyProviderProfiles: AiVoiceSpeechProviderProfile[];
   aiVoiceReplyActiveProviderProfileId: string;
   mobileQuickPhrases: MobileQuickPhrase[];
+  mobileAgentKeyboardEnabled: boolean;
   mobileKeyboardPreset: MobileKeyboardPresetId;
   mobileKeyboardLayout: MobileKeyboardLayout;
 };
