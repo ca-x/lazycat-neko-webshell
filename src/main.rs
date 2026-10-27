@@ -10,6 +10,7 @@ mod agent_client;
 mod agent_control;
 mod agent_daemon;
 mod agent_history;
+mod agent_keyboard_usage;
 mod agent_protocol;
 mod agent_pty;
 mod agent_status_hook;

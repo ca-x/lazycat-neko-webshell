@@ -26,7 +26,7 @@ import { renderMobileTypingKeyboard } from "./virtual-keyboard.ts";
 import type { MobileAgentKeyboardContext } from "./agent-keyboard-context.ts";
 import { renderMobileAgentKeyboard } from "./agent-keyboard-view.ts";
 import { mobileAgentKeyboardGroups, mobileAgentName } from "./agent-keymap.ts";
-import { rankAgentKeyboardKeys, recordAgentKeyboardUse } from "./agent-keyboard-usage.ts";
+import { loadAgentKeyboardUsage, rankAgentKeyboardKeys, recordAgentKeyboardUse } from "./agent-keyboard-usage.ts";
 
 type Translate = (key: MessageKey, values?: Record<string, string | number>) => string;
 
@@ -62,6 +62,10 @@ export function createMobileKeyboardController(options: MobileKeyboardController
   let expanded = false;
   let lastInput: MobileKeyboardRenderInput | undefined;
   let renderedContext: MobileAgentKeyboardContext | undefined;
+  const agentPointers = new Set<number>();
+  let rankingPending = false;
+  let rankingTimer: number | undefined;
+  let lastAgentScrollAt = 0;
   const keyboardRestores = new WeakMap<HTMLButtonElement, () => void>();
 
   function currentContext() {
@@ -123,6 +127,14 @@ export function createMobileKeyboardController(options: MobileKeyboardController
 
   function bind() {
     if (disposed || gestures) return;
+    void loadAgentKeyboardUsage();
+    window.addEventListener("focus", refreshUsageIfVisible);
+    document.addEventListener("visibilitychange", refreshUsageIfVisible);
+    options.root.addEventListener("pointerdown", trackAgentPointer, true);
+    options.root.addEventListener("scroll", trackAgentScroll, true);
+    window.addEventListener("pointerup", releaseAgentPointer);
+    window.addEventListener("pointercancel", releaseAgentPointer);
+    window.addEventListener("blur", clearAgentPointers);
     gestures = createMobileKeyGestureController<HTMLButtonElement>({
       root: options.root, globalTarget: window, visibilityTarget: document,
       button: (target) => {
@@ -139,7 +151,10 @@ export function createMobileKeyboardController(options: MobileKeyboardController
       repeat: (button) => button.dataset.mobileRepeat === "true" && Boolean(button.dataset.mobileShortcut),
       start: (button) => { clearDeferredAction(); captureKeyboardState(button); },
       activate: activateButton,
-      finish: (button, repeated) => { keyboardRestores.delete(button); if (repeated) clearSticky(); },
+      finish: (button, repeated) => {
+        keyboardRestores.delete(button);
+        if (repeated) clearSticky();
+      },
       capture: (button, id) => button.setPointerCapture?.(id),
       release: (button, id) => { if (button.hasPointerCapture?.(id)) button.releasePointerCapture(id); },
       setTimer: (callback, delay) => window.setTimeout(callback, delay),
@@ -166,6 +181,7 @@ export function createMobileKeyboardController(options: MobileKeyboardController
     const sameContext = nextContext?.key === renderedContext?.key;
     if (nextContext?.key !== renderedContext?.key) clearSticky();
     renderedContext = nextContext;
+    if (renderedContext && !sameContext) refreshUsage();
     const currentPage = activePage();
     controls.innerHTML = `${renderMobileKeyboardPanels(input.layout, currentPage, input.tr)}${renderMobileTypingKeyboard()}<div class="mobile-keyboard-panel" data-mobile-panel="phrases" hidden></div>`;
     updateShortcutState();
@@ -199,19 +215,7 @@ export function createMobileKeyboardController(options: MobileKeyboardController
 
   function activatePage(page: string) {
     if (!options.root.querySelector(`[data-mobile-panel="${CSS.escape(page)}"]`)) return;
-    if (page === "main" && page !== activePage() && renderedContext) {
-      for (const group of mobileAgentKeyboardGroups(renderedContext.agent)) {
-        const row = options.root.querySelector<HTMLElement>(`[data-agent-group="${group.id}"] .mobile-agent-keyboard-keys`);
-        if (!row) continue;
-        const buttons = new Map(Array.from(row.querySelectorAll<HTMLButtonElement>("button"), (button) =>
-          [button.dataset.mobileChord ?? button.dataset.mobileShortcut, button]));
-        for (const entry of rankAgentKeyboardKeys(renderedContext.agent, group.id, group.keys)) {
-          const button = buttons.get(entry.key.value);
-          if (button) row.append(button);
-        }
-        row.scrollLeft = 0;
-      }
-    }
+    const returningToAgent = page === "main" && page !== activePage() && Boolean(renderedContext);
     if (page !== activePage()) stopRepeatInput();
     options.root.dataset.activePage = page;
     options.root.querySelectorAll<HTMLButtonElement>("[data-mobile-page]").forEach((button) => {
@@ -222,7 +226,78 @@ export function createMobileKeyboardController(options: MobileKeyboardController
     options.root.querySelectorAll<HTMLElement>("[data-mobile-panel]").forEach((panel) => {
       panel.hidden = panel.dataset.mobilePanel !== page;
     });
+    if (returningToAgent) {
+      reorderAgentRows();
+      rankingPending = false;
+      refreshUsage();
+    }
     if (expanded) options.onLayoutChange();
+  }
+
+  function refreshUsage() {
+    rankingPending = false;
+    window.clearTimeout(rankingTimer);
+    void loadAgentKeyboardUsage().then((loaded) => {
+      if (!loaded || disposed) return;
+      rankingPending = true;
+      scheduleRanking();
+    });
+  }
+
+  function trackAgentPointer(event: PointerEvent) {
+    if (event.target instanceof Element && event.target.closest(".mobile-agent-keyboard")) {
+      agentPointers.add(event.pointerId);
+    }
+  }
+
+  function releaseAgentPointer(event: PointerEvent) {
+    agentPointers.delete(event.pointerId);
+    if (rankingPending) scheduleRanking();
+  }
+
+  function clearAgentPointers() {
+    agentPointers.clear();
+    if (rankingPending) scheduleRanking();
+  }
+
+  function trackAgentScroll(event: Event) {
+    if (event.target instanceof Element && event.target.closest(".mobile-agent-keyboard")) {
+      lastAgentScrollAt = Date.now();
+      if (rankingPending) scheduleRanking();
+    }
+  }
+
+  function scheduleRanking() {
+    window.clearTimeout(rankingTimer);
+    rankingTimer = window.setTimeout(() => {
+      rankingTimer = undefined;
+      if (!rankingPending || disposed || activePage() !== "main") return;
+      if (agentPointers.size || Date.now() - lastAgentScrollAt < 200) {
+        if (!agentPointers.size) scheduleRanking();
+        return;
+      }
+      rankingPending = false;
+      reorderAgentRows(false);
+    }, 200);
+  }
+
+  function refreshUsageIfVisible() {
+    if (!disposed && !document.hidden && renderedContext && activePage() === "main") refreshUsage();
+  }
+
+  function reorderAgentRows(resetScroll = true) {
+    if (!renderedContext || activePage() !== "main") return;
+    for (const group of mobileAgentKeyboardGroups(renderedContext.agent)) {
+      const row = options.root.querySelector<HTMLElement>(`[data-agent-group="${group.id}"] .mobile-agent-keyboard-keys`);
+      if (!row) continue;
+      const buttons = new Map(Array.from(row.querySelectorAll<HTMLButtonElement>("button"), (button) =>
+        [button.dataset.mobileChord ?? button.dataset.mobileShortcut, button]));
+      for (const entry of rankAgentKeyboardKeys(renderedContext.agent, group.id, group.keys)) {
+        const button = buttons.get(entry.key.value);
+        if (button) row.append(button);
+      }
+      if (resetScroll) row.scrollLeft = 0;
+    }
   }
 
   function activePage(): string {
@@ -323,6 +398,14 @@ export function createMobileKeyboardController(options: MobileKeyboardController
     if (disposed) return;
     disposed = true;
     clearDeferredAction();
+    window.clearTimeout(rankingTimer);
+    window.removeEventListener("focus", refreshUsageIfVisible);
+    document.removeEventListener("visibilitychange", refreshUsageIfVisible);
+    options.root.removeEventListener("pointerdown", trackAgentPointer, true);
+    options.root.removeEventListener("scroll", trackAgentScroll, true);
+    window.removeEventListener("pointerup", releaseAgentPointer);
+    window.removeEventListener("pointercancel", releaseAgentPointer);
+    window.removeEventListener("blur", clearAgentPointers);
     gestures?.dispose();
     gestures = undefined;
     lastInput = undefined;

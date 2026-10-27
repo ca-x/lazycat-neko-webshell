@@ -73,6 +73,7 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .route("/api/catflap/{app}/sessions/{session}/ws", get(crate::catflap_terminal::attach))
         .route("/api/runtime", get(runtime_info))
         .route("/api/agent/update", get(crate::agent_updates::get_update).post(crate::agent_updates::post_update))
+        .route("/api/agent-keyboard/usage", get(crate::agent_keyboard_usage::list).post(crate::agent_keyboard_usage::record).layer(DefaultBodyLimit::max(512)))
         .route("/api/sounds", get(list_sounds))
         .route("/api/sounds/package", post(install_sound_package))
         .route("/api/lightos-admin-info", get(lightos_admin_info))

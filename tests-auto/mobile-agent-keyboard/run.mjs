@@ -202,6 +202,30 @@ export async function runMobileAgentKeyboardScenario() {
       assert.equal(await evaluate(`document.querySelector(${JSON.stringify(`${main} [data-agent-group="send"] .mobile-agent-keyboard-keys`)})?.firstElementChild?.dataset.mobileShortcut`), 'enter', 'usage is isolated by Agent');
     });
 
+    await check('server-usage-loads-and-replaces-another-users-order', async () => {
+      const row = `${main} [data-agent-group="send"] .mobile-agent-keyboard-keys`;
+      await evaluate(`window.__agentKeyboardFetch = window.fetch;
+        window.__agentKeyboardUser = 'alice';
+        window.fetch = (input, init) => String(input).includes('/api/agent-keyboard/usage') && !init?.method
+          ? Promise.resolve(new Response(JSON.stringify({userId:window.__agentKeyboardUser,usage:[{
+              agent:'codex',group:'send',shortcut:window.__agentKeyboardUser === 'alice' ? 'alt-enter' : 'enter',count:100
+            }]}),{headers:{'content-type':'application/json'}}))
+          : window.__agentKeyboardFetch(input,init);`);
+      try {
+        await profile('claude');
+        await profile('codex');
+        await evaluate('new Promise(resolve => setTimeout(resolve, 500))');
+        assert.equal(await evaluate(`document.querySelector(${JSON.stringify(row)})?.firstElementChild?.dataset.mobileChord`), 'alt-enter');
+        await evaluate(`window.__agentKeyboardUser = 'bob'`);
+        await profile('claude');
+        await profile('codex');
+        await evaluate('new Promise(resolve => setTimeout(resolve, 500))');
+        assert.equal(await evaluate(`document.querySelector(${JSON.stringify(row)})?.firstElementChild?.dataset.mobileShortcut`), 'enter');
+      } finally {
+        await evaluate('window.fetch = window.__agentKeyboardFetch');
+      }
+    });
+
     await check('claude-opencode-pi-exact-chords-without-extra-opt-in', async () => {
       await profile('claude');
       await exact(chord('ctrl-x-ctrl-s'), '\x18\x13', 'Claude send queued now');

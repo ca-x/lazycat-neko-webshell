@@ -22,6 +22,15 @@ pub const KV_KEY_SESSIONS: &str = "sessions";
 pub const KV_KEY_WORKSPACES: &str = "workspaces";
 pub const KV_KEY_SETTINGS: &str = "settings";
 
+#[derive(Debug, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentKeyboardUsage {
+    pub agent: String,
+    pub group: String,
+    pub shortcut: String,
+    pub count: i64,
+}
+
 #[derive(Clone)]
 pub struct AppDatabase {
     conn: Arc<Mutex<Connection>>,
@@ -44,6 +53,15 @@ impl AppDatabase {
                 value BLOB NOT NULL,
                 updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
                 PRIMARY KEY (namespace, key)
+            );
+
+            CREATE TABLE IF NOT EXISTS agent_keyboard_usage (
+                user_id TEXT NOT NULL,
+                agent TEXT NOT NULL,
+                group_id TEXT NOT NULL,
+                shortcut TEXT NOT NULL,
+                use_count INTEGER NOT NULL DEFAULT 0 CHECK (use_count BETWEEN 0 AND 1000000),
+                PRIMARY KEY (user_id, agent, group_id, shortcut)
             );
 
             CREATE TABLE IF NOT EXISTS terminal_output_frames (
@@ -116,6 +134,60 @@ impl AppDatabase {
         )
         .optional()
         .map_err(TO_IO_ERROR)
+    }
+
+    pub fn load_agent_keyboard_usage(&self, user_id: &str) -> io::Result<Vec<AgentKeyboardUsage>> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT agent, group_id, shortcut, use_count FROM agent_keyboard_usage WHERE user_id = ?1",
+        ).map_err(TO_IO_ERROR)?;
+        let rows = stmt
+            .query_map(params![user_id], |row| {
+                Ok(AgentKeyboardUsage {
+                    agent: row.get(0)?,
+                    group: row.get(1)?,
+                    shortcut: row.get(2)?,
+                    count: row.get(3)?,
+                })
+            })
+            .map_err(TO_IO_ERROR)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(TO_IO_ERROR)
+    }
+
+    pub fn increment_agent_keyboard_usage(
+        &self,
+        user_id: &str,
+        agent: &str,
+        group: &str,
+        shortcut: &str,
+    ) -> io::Result<Option<i64>> {
+        let conn = self.lock()?;
+        let existing = conn.query_row(
+            "SELECT use_count FROM agent_keyboard_usage WHERE user_id = ?1 AND agent = ?2 AND group_id = ?3 AND shortcut = ?4",
+            params![user_id, agent, group, shortcut], |row| row.get::<_, i64>(0),
+        ).optional().map_err(TO_IO_ERROR)?;
+        if existing.is_none() {
+            let entries: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM agent_keyboard_usage WHERE user_id = ?1",
+                    params![user_id],
+                    |row| row.get(0),
+                )
+                .map_err(TO_IO_ERROR)?;
+            if entries >= 512 {
+                return Ok(None);
+            }
+        }
+        conn.execute(
+            "INSERT INTO agent_keyboard_usage (user_id, agent, group_id, shortcut, use_count) VALUES (?1, ?2, ?3, ?4, 1)
+             ON CONFLICT(user_id, agent, group_id, shortcut) DO UPDATE SET use_count = MIN(use_count + 1, 1000000)",
+            params![user_id, agent, group, shortcut],
+        ).map_err(TO_IO_ERROR)?;
+        conn.query_row(
+            "SELECT use_count FROM agent_keyboard_usage WHERE user_id = ?1 AND agent = ?2 AND group_id = ?3 AND shortcut = ?4",
+            params![user_id, agent, group, shortcut], |row| row.get(0),
+        ).map(Some).map_err(TO_IO_ERROR)
     }
 
     pub fn store_kv(&self, namespace: &str, key: &str, value: &[u8]) -> io::Result<()> {
@@ -847,6 +919,48 @@ mod tests {
         let _ = remove_database_file(&path);
         let database = AppDatabase::open(path.clone()).expect("test database");
         (database, path)
+    }
+
+    #[test]
+    fn agent_keyboard_usage_is_atomic_and_user_agent_scoped() {
+        let (database, path) = temp_database();
+        std::thread::scope(|scope| {
+            for _ in 0..10 {
+                let database = database.clone();
+                scope.spawn(move || {
+                    database
+                        .increment_agent_keyboard_usage("alice", "codex", "edit", "shift-left")
+                        .unwrap();
+                });
+            }
+        });
+        database
+            .increment_agent_keyboard_usage("alice", "claude", "edit", "shift-left")
+            .unwrap();
+        database
+            .increment_agent_keyboard_usage("bob", "codex", "edit", "shift-left")
+            .unwrap();
+        drop(database);
+        let database = AppDatabase::open(path.clone()).unwrap();
+        let alice = database.load_agent_keyboard_usage("alice").unwrap();
+        assert_eq!(alice.len(), 2);
+        assert_eq!(
+            alice.iter().find(|row| row.agent == "codex").unwrap().count,
+            10
+        );
+        assert_eq!(
+            alice
+                .iter()
+                .find(|row| row.agent == "claude")
+                .unwrap()
+                .count,
+            1
+        );
+        assert_eq!(
+            database.load_agent_keyboard_usage("bob").unwrap()[0].count,
+            1
+        );
+        remove_database_file(&path).unwrap();
     }
 
     #[test]
