@@ -179,15 +179,35 @@ export async function runMobileAgentKeyboardScenario() {
       for (const [selector, expected, label] of [
         [shortcut('enter'), '\r', 'send'], [chord('ctrl-j'), '\n', 'new line'], [shortcut('tab'), '\t', 'queue'],
         [chord('alt-up'), '\x1b[1;3A', 'retrieve/edit async question'], [chord('alt-down'), '\x1b[1;3B', 'return toward input'],
+        [chord('shift-left'), '\x1b[1;2D', 'retrieve/edit async question alternative'],
+        [chord('shift-right'), '\x1b[1;2C', 'return toward input alternative'],
+        [chord('shift-down'), '\x1b[1;2B', 'lower reasoning effort'],
+        [chord('shift-up'), '\x1b[1;2A', 'raise reasoning effort'],
         [chord('ctrl-bracket-right'), '\x1d', 'skip focused question'], [shortcut('escape'), '\x1b', 'interrupt/cancel'],
         [chord('alt-left'), '\x1b[1;3D', 'previous Agent'], [chord('alt-right'), '\x1b[1;3C', 'next Agent'],
         [chord('shift-tab'), '\x1b[Z', 'collaboration'], [chord('ctrl-t'), '\x14', 'transcript'],
+        [chord('ctrl-slash'), '\x1f', 'side conversation'],
       ]) await exact(selector, expected, `Codex ${label}`);
+    });
+
+    await check('agent-usage-promotes-within-category-on-return', async () => {
+      await profile('codex');
+      const row = `${main} [data-agent-group="send"] .mobile-agent-keyboard-keys`;
+      for (let index = 0; index < 3; index++) await exact(chord('shift-left'), '\x1b[1;2D', 'Codex used shortcut');
+      await tap(page('nav'));
+      await tap(page('main'));
+      assert.equal(await evaluate(`document.querySelector(${JSON.stringify(row)})?.firstElementChild?.dataset.mobileChord`), 'shift-left', 'frequently used key moves to the front');
+      assert.equal(await evaluate(`document.querySelector(${JSON.stringify(`${main} [data-agent-group="control"] .mobile-agent-keyboard-keys`)})?.firstElementChild?.dataset.mobileShortcut`), 'escape', 'other categories retain their order');
+      await profile('claude');
+      assert.equal(await evaluate(`document.querySelector(${JSON.stringify(`${main} [data-agent-group="send"] .mobile-agent-keyboard-keys`)})?.firstElementChild?.dataset.mobileShortcut`), 'enter', 'usage is isolated by Agent');
     });
 
     await check('claude-opencode-pi-exact-chords-without-extra-opt-in', async () => {
       await profile('claude');
       await exact(chord('ctrl-x-ctrl-s'), '\x18\x13', 'Claude send queued now');
+      await exact(chord('ctrl-x-enter'), '\x18\r', 'Claude queue without interrupting');
+      await exact(chord('ctrl-enter'), '\x1b[13;5u', 'Claude enhanced send queued now');
+      await exact(chord('shift-left'), '\x1b[1;2D', 'Claude selection or side answer');
       await exact(chord('alt-p'), '\x1bp', 'Claude choose model');
       await exact(chord('ctrl-b'), '\x02', 'Claude background task');
       await exact(chord('shift-tab'), '\x1b[Z', 'Claude permission mode');
@@ -196,6 +216,12 @@ export async function runMobileAgentKeyboardScenario() {
       await exact(chord('ctrl-x-enter'), '\x18\r', 'OpenCode queue');
       await exact(chord('ctrl-x-a'), '\x18a', 'OpenCode Agent list');
       await exact(chord('ctrl-x-m'), '\x18m', 'OpenCode model list');
+      await exact(chord('shift-tab'), '\x1b[Z', 'OpenCode v2 Agent cycle');
+      await exact(chord('ctrl-x-t'), '\x18t', 'OpenCode v2 terminal toggle');
+      await exact(chord('ctrl-x-i'), '\x18i', 'OpenCode v2 prompt images');
+      await exact(chord('ctrl-x-1'), '\x181', 'OpenCode v2 first tab');
+      await exact(chord('ctrl-shift-tab'), '\x1b[9;6u', 'OpenCode v2 previous tab');
+      await exact(chord('shift-right'), '\x1b[1;2C', 'OpenCode v2 extend selection');
       await exact(chord('ctrl-x-n'), '\x18n', 'OpenCode new session');
       await exact(shortcut('down'), '\x1b[B', 'OpenCode next input');
       await profile('pi');
@@ -203,6 +229,7 @@ export async function runMobileAgentKeyboardScenario() {
       await exact(chord('alt-up'), '\x1b[1;3A', 'Pi retrieve queued');
       await exact(chord('ctrl-l'), '\x0c', 'Pi choose model');
       await exact(chord('ctrl-p'), '\x10', 'Pi next model');
+      await exact(chord('ctrl-shift-p'), '\x1b[112;6u', 'Pi previous model');
       await exact(chord('ctrl-o'), '\x0f', 'Pi tool output');
     });
 

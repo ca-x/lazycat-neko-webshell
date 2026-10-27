@@ -25,7 +25,8 @@ import { renderMobileKeyboardPanels } from "./keyboard-layout-view.ts";
 import { renderMobileTypingKeyboard } from "./virtual-keyboard.ts";
 import type { MobileAgentKeyboardContext } from "./agent-keyboard-context.ts";
 import { renderMobileAgentKeyboard } from "./agent-keyboard-view.ts";
-import { mobileAgentName } from "./agent-keymap.ts";
+import { mobileAgentKeyboardGroups, mobileAgentName } from "./agent-keymap.ts";
+import { rankAgentKeyboardKeys, recordAgentKeyboardUse } from "./agent-keyboard-usage.ts";
 
 type Translate = (key: MessageKey, values?: Record<string, string | number>) => string;
 
@@ -95,11 +96,17 @@ export function createMobileKeyboardController(options: MobileKeyboardController
     const restore = takeKeyboardRestore(button);
     if (activation.kind === "shortcut" && button.closest(".mobile-agent-keyboard")) {
       const data = encodeMobileShortcutInput(activation.value, createMobileStickyState());
-      if (data) options.onKeyInput(data);
+      if (data) {
+        options.onKeyInput(data);
+        if (renderedContext) recordAgentKeyboardUse(renderedContext.agent, button.closest<HTMLElement>("[data-agent-group]")?.dataset.agentGroup ?? "", activation.value);
+      }
       clearSticky();
       restore();
     } else if (activation.kind === "shortcut") void runShortcut(activation.value, { keepModifiers: repeating }, restore);
-    else if (activation.kind === "chord") runChord(activation.value, restore);
+    else if (activation.kind === "chord") {
+      runChord(activation.value, restore);
+      if (renderedContext && button.closest(".mobile-agent-keyboard")) recordAgentKeyboardUse(renderedContext.agent, button.closest<HTMLElement>("[data-agent-group]")?.dataset.agentGroup ?? "", activation.value);
+    }
     else if (activation.kind === "page") activatePage(activation.value);
     else if (activation.kind === "phrase") void runPhrase(activation.value, restore);
     else if (activation.kind === "text") runText(activation.value, button.dataset.mobileAutoEnter === "true", restore);
@@ -192,6 +199,19 @@ export function createMobileKeyboardController(options: MobileKeyboardController
 
   function activatePage(page: string) {
     if (!options.root.querySelector(`[data-mobile-panel="${CSS.escape(page)}"]`)) return;
+    if (page === "main" && page !== activePage() && renderedContext) {
+      for (const group of mobileAgentKeyboardGroups(renderedContext.agent)) {
+        const row = options.root.querySelector<HTMLElement>(`[data-agent-group="${group.id}"] .mobile-agent-keyboard-keys`);
+        if (!row) continue;
+        const buttons = new Map(Array.from(row.querySelectorAll<HTMLButtonElement>("button"), (button) =>
+          [button.dataset.mobileChord ?? button.dataset.mobileShortcut, button]));
+        for (const entry of rankAgentKeyboardKeys(renderedContext.agent, group.id, group.keys)) {
+          const button = buttons.get(entry.key.value);
+          if (button) row.append(button);
+        }
+        row.scrollLeft = 0;
+      }
+    }
     if (page !== activePage()) stopRepeatInput();
     options.root.dataset.activePage = page;
     options.root.querySelectorAll<HTMLButtonElement>("[data-mobile-page]").forEach((button) => {
