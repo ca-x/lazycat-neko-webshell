@@ -5,18 +5,16 @@ use std::path::{Path, PathBuf};
 fn device_authentication_is_owned_by_the_shared_rust_sdk() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = read(root.join("Cargo.toml"));
-    assert!(
-        manifest.contains("lzc-sdk = {")
-            && manifest.contains("version = \"0.1.1\"")
-            && manifest.contains("features = [\"gateway\"]"),
-        "Neko must consume the crates.io release of the shared Rust SDK"
-    );
-
     let sdk_dependency = manifest
         .split("lzc-sdk = {")
         .nth(1)
         .and_then(|value| value.split('}').next())
         .expect("lzc-sdk dependency table");
+    assert!(
+        sdk_dependency.contains("version = \"")
+            && sdk_dependency.contains("features = [\"gateway\"]"),
+        "Neko must consume the crates.io release of the shared Rust SDK"
+    );
     assert!(
         !sdk_dependency.contains("path =") && !sdk_dependency.contains("git ="),
         "the SDK dependency must come from crates.io rather than a local path or Git"

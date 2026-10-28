@@ -1900,7 +1900,7 @@ dependencies = [
 
 [[package]]
 name = "lazycat-neko-webshell"
-version = "0.10.6"
+version = "0.10.7"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -2009,9 +2009,9 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lzc-sdk"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7ab29421d6cff85b8267b9012ca913240f8f4bbdcc9b41f5999c1ee42f966b9"
+checksum = "5d083dfebcf0ff6b1ea7fd35bfb06fd0ed23aa73038b5665c469482934146b48"
 dependencies = [
  "base64 0.22.1",
  "bytes",
