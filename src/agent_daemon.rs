@@ -351,14 +351,21 @@ fn run_herdr_command(
     Ok(stdout)
 }
 
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "Target-user execution requires audited libc identity changes before exec"
+)]
 fn configure_command_identity(command: &mut Command, uid: u32, gid: u32) {
+    // SAFETY: these libc queries take no pointers and have no preconditions.
     let same_user = unsafe { libc::geteuid() == uid };
+    // SAFETY: getegid only reads the current process identity.
     let same_group = unsafe { libc::getegid() == gid };
     if same_user && same_group {
         return;
     }
-    // Only async-signal-safe libc identity calls run between fork and exec.
+    // SAFETY: the callback captures only UID/GID values and calls only
+    // async-signal-safe libc identity functions between fork and exec. No locks,
+    // allocation, or inherited runtime state are accessed by the callback.
     unsafe {
         command.pre_exec(move || {
             if libc::setgroups(0, std::ptr::null()) != 0 {
@@ -1432,7 +1439,7 @@ mod tests {
 
     #[test]
     fn agent_compatibility_window_is_valid() {
-        assert_eq!(AGENT_VERSION, 21);
+        assert_eq!(AGENT_VERSION, 22);
         assert_eq!(MIN_SUPPORTED_AGENT_VERSION, 11);
     }
 

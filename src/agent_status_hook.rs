@@ -54,14 +54,20 @@ fn report(agent: &str) -> Option<()> {
     Some(())
 }
 
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "Foreground TTY queries and bounded descriptor polling require libc"
+)]
 fn foreground_group(tty: &File) -> Option<u32> {
     // SAFETY: tty owns a live descriptor; tcgetpgrp only queries that descriptor.
     let group = unsafe { libc::tcgetpgrp(tty.as_raw_fd()) };
     u32::try_from(group).ok().filter(|group| *group != 0)
 }
 
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "Foreground TTY queries and bounded descriptor polling require libc"
+)]
 fn read_payload(mut input: File) -> Option<Vec<u8>> {
     let deadline = Instant::now() + INPUT_BUDGET;
     let mut bytes = Vec::new();
@@ -74,8 +80,9 @@ fn read_payload(mut input: File) -> Option<Vec<u8>> {
             events: libc::POLLIN,
             revents: 0,
         };
+        let timeout_ms = i32::try_from(remaining.as_millis().max(1)).unwrap_or(i32::MAX);
         // SAFETY: poll points to one initialized pollfd; the descriptor stays alive.
-        let ready = unsafe { libc::poll(&raw mut poll, 1, remaining.as_millis().max(1) as i32) };
+        let ready = unsafe { libc::poll(&raw mut poll, 1, timeout_ms) };
         if ready <= 0 {
             return None;
         }

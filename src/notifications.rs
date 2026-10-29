@@ -181,13 +181,12 @@ impl NotificationHub {
             return Ok(persisted);
         }
         let notifications = serde_json::from_slice::<Vec<WebshellNotification>>(&bytes)
-            .map_err(|err| io::Error::other(err.to_string()))?;
+            .map_err(io::Error::other)?;
         Ok(PersistedNotifications { notifications })
     }
 
     fn save_unlocked(&self, persisted: &PersistedNotifications) -> io::Result<()> {
-        let bytes =
-            serde_json::to_vec(persisted).map_err(|err| io::Error::other(err.to_string()))?;
+        let bytes = serde_json::to_vec(persisted).map_err(io::Error::other)?;
         self.database
             .store_kv(KV_NAMESPACE_STATE, KV_KEY_NOTIFICATIONS, &bytes)
     }

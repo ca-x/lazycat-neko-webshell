@@ -73,7 +73,7 @@ pub async fn put_settings(State(state): State<Arc<AppState>>, body: Bytes) -> Re
 }
 
 fn write_settings(state: &AppState, value: &Value) -> io::Result<()> {
-    let bytes = serde_json::to_vec(value).map_err(|err| io::Error::other(err.to_string()))?;
+    let bytes = serde_json::to_vec(value).map_err(io::Error::other)?;
     state
         .database()
         .store_kv(KV_NAMESPACE_PREFERENCES, KV_KEY_SETTINGS, &bytes)

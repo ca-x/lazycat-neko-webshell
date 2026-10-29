@@ -100,7 +100,7 @@ impl PluginStore {
             return Ok(plugins);
         };
         let persisted = serde_json::from_slice::<PersistedPluginState>(&bytes)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         for record in persisted.plugins {
             let id = record.id.trim();
             if id.is_empty() {
@@ -140,8 +140,7 @@ impl PluginStore {
             version: 1,
             plugins,
         };
-        let bytes =
-            serde_json::to_vec(&persisted).map_err(|err| io::Error::other(err.to_string()))?;
+        let bytes = serde_json::to_vec(&persisted).map_err(io::Error::other)?;
         self.database
             .store_kv(KV_NAMESPACE_STATE, KV_KEY_PLUGINS, &bytes)
     }

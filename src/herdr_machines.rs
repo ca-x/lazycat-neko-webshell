@@ -1,4 +1,4 @@
-//! The installed Herdr client's machine catalog is separate from server SockAPI state.
+//! The installed Herdr client's machine catalog is separate from server `SockAPI` state.
 use anyhow::{bail, ensure};
 use serde::{Deserialize, Serialize};
 

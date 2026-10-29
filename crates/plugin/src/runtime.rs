@@ -7,6 +7,7 @@ use rutis::{BoxFuture, CordisError, Ctx, Effect, FiberState, Plugin, TypeKey};
 use crate::{InvokeReply, InvokeRequest, Manifest, PluginConfiguration, PluginError, Resources};
 use tokio::sync::{Mutex, RwLock};
 
+/// A trusted native plugin whose resources and lifetime are owned by the host.
 pub trait RuntimePlugin: Send + Sync + 'static {
     fn id(&self) -> &'static str;
 
@@ -26,9 +27,17 @@ pub trait RuntimePlugin: Send + Sync + 'static {
         Box::pin(async { Ok(()) })
     }
 
+    /// Return browser-visible metadata with credentials removed.
+    ///
+    /// # Errors
+    /// Returns a plugin-specific error if metadata cannot be read.
     fn public_metadata(&self) -> Result<HashMap<String, String>, PluginError> {
         Ok(HashMap::new())
     }
+    /// Validate or normalize metadata before the host saves it.
+    ///
+    /// # Errors
+    /// Returns a validation or plugin-specific preparation error.
     fn prepare_configuration(
         &self,
         metadata: HashMap<String, String>,
@@ -46,6 +55,19 @@ pub struct Registration {
     pub resources: Resources,
     pub plugin: Result<Arc<dyn RuntimePlugin>, PluginError>,
     pub configuration: PluginConfiguration,
+}
+
+impl std::fmt::Debug for Registration {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Registration")
+            .field("manifest", &self.manifest)
+            .field("resources", &self.resources)
+            .field("configuration_version", &self.configuration.version)
+            .field("enabled", &self.configuration.enabled)
+            .field("initialized", &self.plugin.is_ok())
+            .finish_non_exhaustive()
+    }
 }
 
 struct NativePlugin {
@@ -97,7 +119,23 @@ pub struct Runtime {
     shutdown_lock: Arc<Mutex<()>>,
 }
 
+impl std::fmt::Debug for Runtime {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Runtime")
+            .field("registered_plugins", &self.gates.len())
+            .field("failed_plugins", &self.failures.len())
+            .field("closing", &self.closing.load(Ordering::Acquire))
+            .finish_non_exhaustive()
+    }
+}
+
 impl Runtime {
+    /// Register native plugins and isolate individual startup failures.
+    ///
+    /// # Errors
+    /// Returns an error for duplicate/mismatched plugin IDs or host runtime setup
+    /// failures. Individual plugin failures remain available through [`Self::failures`].
     pub async fn start(registrations: Vec<Registration>) -> Result<Self, PluginError> {
         let mut ids = HashSet::new();
         for registration in &registrations {
@@ -157,6 +195,8 @@ impl Runtime {
         })
     }
 
+    #[must_use]
+    /// Startup failures keyed by plugin ID; healthy plugins remain usable.
     pub fn failures(&self) -> &HashMap<String, String> {
         &self.failures
     }
@@ -174,6 +214,12 @@ impl Runtime {
             })
     }
 
+    /// Invoke an enabled plugin while holding its lifecycle read gate.
+    /// Cancelling the caller does not detach ongoing work from runtime cleanup.
+    ///
+    /// # Errors
+    /// Returns an error if the runtime is closing, the plugin is absent or
+    /// disabled, or its operation fails.
     pub async fn invoke(
         &self,
         id: &str,
@@ -208,6 +254,12 @@ impl Runtime {
             .map_err(runtime_error)?
     }
 
+    /// Apply saved configuration after in-flight operations have drained.
+    /// Committed cleanup continues even if the initiating caller is cancelled.
+    ///
+    /// # Errors
+    /// Returns an error if the runtime is closing, the plugin is unknown, or
+    /// the plugin rejects the configuration or fails during cleanup.
     pub async fn configure(
         &self,
         id: &str,
@@ -241,9 +293,17 @@ impl Runtime {
             .map_err(runtime_error)?
     }
 
+    /// Read browser-visible metadata from a running plugin.
+    ///
+    /// # Errors
+    /// Returns an error if the plugin is unavailable or its metadata lookup fails.
     pub fn public_metadata(&self, id: &str) -> Result<HashMap<String, String>, PluginError> {
         self.plugin(id)?.public_metadata()
     }
+    /// Normalize configuration, preserving metadata for plugins that failed startup.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown plugin or rejected metadata.
     pub fn prepare_configuration(
         &self,
         id: &str,
@@ -264,6 +324,11 @@ impl Runtime {
         }
     }
 
+    /// Reject new work, drain active invocations, and dispose plugin resources.
+    /// Cleanup continues if the initiating caller is cancelled.
+    ///
+    /// # Errors
+    /// Returns an error if runtime shutdown or a plugin disposer fails.
     pub async fn shutdown(&self) -> Result<(), PluginError> {
         self.closing.store(true, Ordering::Release);
         let root = self.root.clone();

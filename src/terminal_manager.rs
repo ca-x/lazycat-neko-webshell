@@ -587,7 +587,7 @@ impl ManagedTerminal {
 
 impl Drop for ManagedTerminal {
     fn drop(&mut self) {
-        self.close();
+        self.signal_connection_close();
     }
 }
 
@@ -1177,6 +1177,35 @@ mod tests {
 
         assert_eq!(snapshot.oldest_sequence, Some(3));
         assert!(snapshot.replay_gap);
+    }
+
+    #[test]
+    fn dropping_a_terminal_does_not_wait_for_child_reaping() {
+        let mut terminal = ManagedTerminal::spawn(
+            TerminalSpec {
+                session_id: "drop-test".to_owned(),
+                host: "localhost".to_owned(),
+                selector: "local@test".to_owned(),
+                command: "/bin/sh".to_owned(),
+                args: vec!["-lc".to_owned(), "exec sleep 30".to_owned()],
+                cols: 80,
+                rows: 24,
+                output_frame_limit: 128,
+            },
+            Arc::new(OutputBuffer::new(128)),
+        )
+        .unwrap();
+        let stalled = crate::pty_io::ChildWait::default();
+        terminal.child_wait = stalled.clone();
+        let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+        let cleanup = thread::spawn(move || {
+            drop(terminal);
+            closed_tx.send(()).unwrap();
+        });
+        let closed = closed_rx.recv_timeout(Duration::from_millis(250));
+        stalled.complete();
+        cleanup.join().unwrap();
+        assert!(closed.is_ok(), "terminal drop waited for child reaping");
     }
 
     #[test]

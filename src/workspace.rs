@@ -282,7 +282,7 @@ impl WorkspaceStore {
 
     fn decode(bytes: &[u8]) -> io::Result<HashMap<String, WorkspaceRecord>> {
         let persisted = serde_json::from_slice::<PersistedWorkspaceState>(bytes)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         let mut workspaces = HashMap::new();
         for mut workspace in persisted.workspaces {
             if validate_selector(&workspace.selector).is_err() {
@@ -307,8 +307,7 @@ impl WorkspaceStore {
             version: 1,
             workspaces,
         };
-        let bytes =
-            serde_json::to_vec(&persisted).map_err(|err| io::Error::other(err.to_string()))?;
+        let bytes = serde_json::to_vec(&persisted).map_err(io::Error::other)?;
         self.database
             .store_kv(KV_NAMESPACE_STATE, KV_KEY_WORKSPACES, &bytes)
     }

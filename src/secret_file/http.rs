@@ -54,15 +54,16 @@ pub async fn create(
         )
             .into_response());
     }
-    super::validate_payload(&payload).map_err(error_response)?;
+    super::validate_payload(&payload).map_err(|error| error_response(&error))?;
     let session = authorize_file_session(&state, &target.session_id, &target.selector)
         .await
-        .map_err(error_response)?;
+        .map_err(|error| error_response(&error))?;
     let path = super::new_path();
-    let script = super::create_script(&path, payload.len()).map_err(error_response)?;
+    let script =
+        super::create_script(&path, payload.len()).map_err(|error| error_response(&error))?;
     super::execute(&state, &session, &script, &payload)
         .await
-        .map_err(error_response)?;
+        .map_err(|error| error_response(&error))?;
     Ok(success(path))
 }
 
@@ -70,13 +71,13 @@ pub async fn remove(
     State(state): State<Arc<AppState>>,
     Json(request): Json<DeleteRequest>,
 ) -> Result<Response, Response> {
-    let script = super::delete_script(&request.path).map_err(error_response)?;
+    let script = super::delete_script(&request.path).map_err(|error| error_response(&error))?;
     let session = authorize_file_session(&state, &request.session_id, &request.selector)
         .await
-        .map_err(error_response)?;
+        .map_err(|error| error_response(&error))?;
     super::execute(&state, &session, &script, &[])
         .await
-        .map_err(error_response)?;
+        .map_err(|error| error_response(&error))?;
     Ok(success(request.path))
 }
 
@@ -91,7 +92,7 @@ fn success(path: String) -> Response {
         .into_response()
 }
 
-fn error_response(error: ConnectError) -> Response {
+fn error_response(error: &ConnectError) -> Response {
     let status = match error.code {
         ErrorCode::InvalidArgument => StatusCode::BAD_REQUEST,
         ErrorCode::Unauthenticated => StatusCode::UNAUTHORIZED,

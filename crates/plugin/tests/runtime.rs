@@ -178,7 +178,7 @@ async fn duplicate_registrations_fail_before_starting_any_resources() {
     ])
     .await;
     assert_eq!(
-        result.err().expect("duplicate must fail").code,
+        result.expect_err("duplicate must fail").code,
         ErrorCode::InvalidArgument
     );
     assert_eq!(probe.stopped.load(Ordering::SeqCst), 0);
@@ -266,15 +266,12 @@ async fn cancelled_startup_stays_tracked_until_disable_can_clean_it_up() {
     let early = tokio::time::timeout(std::time::Duration::from_millis(30), &mut configure).await;
     plugin.release();
     plugin.finished.notified().await;
-    let completed_early = match early {
-        Ok(result) => {
-            result.unwrap().unwrap();
-            true
-        }
-        Err(_) => {
-            configure.await.unwrap().unwrap();
-            false
-        }
+    let completed_early = if let Ok(result) = early {
+        result.unwrap().unwrap();
+        true
+    } else {
+        configure.await.unwrap().unwrap();
+        false
     };
     let active_resources = plugin.resources.load(Ordering::SeqCst);
     runtime.shutdown().await.unwrap();
@@ -304,15 +301,12 @@ async fn shutdown_drains_actual_work_before_releasing_resources() {
     let early = tokio::time::timeout(std::time::Duration::from_millis(30), &mut shutdown).await;
     plugin.release();
     request.await.unwrap().unwrap();
-    let completed_early = match early {
-        Ok(result) => {
-            result.unwrap().unwrap();
-            true
-        }
-        Err(_) => {
-            shutdown.await.unwrap().unwrap();
-            false
-        }
+    let completed_early = if let Ok(result) = early {
+        result.unwrap().unwrap();
+        true
+    } else {
+        shutdown.await.unwrap().unwrap();
+        false
     };
     assert!(
         !completed_early,

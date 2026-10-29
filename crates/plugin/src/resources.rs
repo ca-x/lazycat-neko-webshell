@@ -16,11 +16,23 @@ pub struct Resources {
     services: HashMap<String, Arc<dyn Any + Send + Sync>>,
 }
 
+impl std::fmt::Debug for Resources {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Resources")
+            .field("grants", &self.grants)
+            .field("service_count", &self.services.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Resources {
     pub fn provide<T: Send + Sync + 'static>(&mut self, name: &str, service: T) {
         self.services.insert(name.to_owned(), Arc::new(service));
     }
 
+    #[must_use]
+    /// Copy only the services named by this plugin's capability grants.
     pub fn scoped(&self, grants: &[String]) -> Self {
         Self {
             grants: grants.iter().cloned().collect(),
@@ -33,6 +45,11 @@ impl Resources {
         }
     }
 
+    /// Retrieve a shared host service with the requested concrete type.
+    ///
+    /// # Errors
+    /// Returns permission denied for an ungranted name, or unavailable when the
+    /// service is missing or has a different concrete type.
     pub fn require<T: Send + Sync + 'static>(&self, name: &str) -> Result<Arc<T>, PluginError> {
         if !self.grants.contains(name) {
             return Err(PluginError::permission_denied(format!(
@@ -56,12 +73,14 @@ pub struct TargetIdentity {
     pub login_user: String,
 }
 impl TargetIdentity {
+    #[must_use]
+    /// Encode all identity fields as an unambiguous transient-upload owner key.
     pub fn upload_owner(&self) -> String {
-        serde_json::to_string(&(&self.selector, &self.login_user, &self.session_id))
-            .expect("string tuple serialization")
+        serde_json::json!([&self.selector, &self.login_user, &self.session_id]).to_string()
     }
 }
 
+#[derive(Debug)]
 pub enum FileOperation {
     List { path: String },
     Stat { path: String },
@@ -70,10 +89,18 @@ pub enum FileOperation {
 }
 
 pub trait TargetFiles: Send + Sync {
+    /// Resolve the host-authorized target, retaining its complete identity.
+    ///
+    /// # Errors
+    /// Returns an error for a missing session, target mismatch, or failed authorization.
     fn authorize<'a>(
         &'a self,
         target: &'a TargetRequest,
     ) -> BoxFuture<'a, Result<TargetIdentity, PluginError>>;
+    /// Execute a file operation after revalidating the target's authorization.
+    ///
+    /// # Errors
+    /// Returns a validation, authorization, transport, or target filesystem error.
     fn execute<'a>(
         &'a self,
         target: &'a TargetRequest,
@@ -82,6 +109,10 @@ pub trait TargetFiles: Send + Sync {
 }
 
 pub trait TargetContext: Send + Sync {
+    /// Resolve an existing or target-local session with its current authorization.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid, unavailable, or unauthorized target.
     fn resolve<'a>(
         &'a self,
         target: &'a TargetRequest,
@@ -90,18 +121,46 @@ pub trait TargetContext: Send + Sync {
 
 /// The host binds a namespace and maps legacy persisted keys before supplying this.
 pub trait PluginStorage: Send + Sync {
+    /// Load a value from this plugin's host-bound namespace.
+    ///
+    /// # Errors
+    /// Returns the host's storage or decoding error.
     fn load(&self, key: &str) -> io::Result<Option<Vec<u8>>>;
+    /// Persist a value in this plugin's host-bound namespace.
+    ///
+    /// # Errors
+    /// Returns the host's storage error without reporting a successful write.
     fn store(&self, key: &str, value: &[u8]) -> io::Result<()>;
 }
 
 pub trait AiPreferences: Send + Sync {
+    /// Read the host-owned AI configuration for this plugin.
+    ///
+    /// # Errors
+    /// Returns an I/O error when the configuration cannot be loaded.
     fn load(&self) -> io::Result<Vec<u8>>;
 }
 
 pub trait TunnelProfiles: Send + Sync {
+    /// Return profile metadata with credentials removed.
+    ///
+    /// # Errors
+    /// Returns a host storage or profile decoding error.
     fn public_metadata(&self) -> Result<HashMap<String, String>, PluginError>;
+    /// Validate and replace the saved tunnel profiles.
+    ///
+    /// # Errors
+    /// Returns a validation or persistence error.
     fn replace(&self, profiles: &str) -> Result<(), PluginError>;
+    /// Retrieve the token of an authorized ngrok profile.
+    ///
+    /// # Errors
+    /// Returns an error for a missing profile, token, or unreadable store.
     fn ngrok_token(&self, profile_id: &str) -> Result<String, PluginError>;
+    /// Record successful use of a tunnel profile.
+    ///
+    /// # Errors
+    /// Returns an error if the profile cannot be found or persisted.
     fn mark_used(&self, profile_id: &str) -> Result<(), PluginError>;
 }
 
@@ -156,12 +215,29 @@ pub struct NewNotification {
 }
 
 pub trait PluginNotifications: Send + Sync {
+    /// Add a notification scoped to this plugin.
+    ///
+    /// # Errors
+    /// Returns a host persistence or notification validation error.
     fn add(&self, input: NewNotification) -> io::Result<WebshellNotification>;
+    /// Look up a notification visible to this plugin.
+    ///
+    /// # Errors
+    /// Returns a host persistence or decoding error.
     fn notification(&self, id: &str) -> io::Result<Option<WebshellNotification>>;
+    /// Dismiss a visible notification, returning its updated state if present.
+    ///
+    /// # Errors
+    /// Returns a host persistence error.
     fn dismiss(&self, id: &str) -> io::Result<Option<WebshellNotification>>;
+    /// Mark a visible notification's action as handled.
+    ///
+    /// # Errors
+    /// Returns a host persistence error.
     fn mark_actioned(&self, id: &str) -> io::Result<Option<WebshellNotification>>;
 }
 
+#[must_use]
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -171,10 +247,18 @@ pub fn now_ms() -> u64 {
 }
 
 pub trait LightOsForward: Send + Sync {
+    /// Invoke forwarding against an authorized physical target.
+    ///
+    /// # Errors
+    /// Returns a validation, authorization, or forwarding process error.
     fn invoke<'a>(
         &'a self,
         target: &'a TargetRequest,
         operation: &'a str,
     ) -> BoxFuture<'a, Result<InvokeReply, PluginError>>;
+    /// Stop this plugin's active forwarding processes.
+    ///
+    /// # Errors
+    /// Returns a host error if forwarding state cannot be locked or cleaned up.
     fn stop_all(&self) -> Result<(), PluginError>;
 }

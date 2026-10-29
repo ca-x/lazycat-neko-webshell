@@ -43,7 +43,7 @@ impl RemoteProgramStore {
             .load_kv(KV_NAMESPACE_STATE, REMOTE_PROGRAMS_KEY)?
             .map(|bytes| {
                 serde_json::from_slice::<HashMap<String, RemoteProgramEntry>>(&bytes)
-                    .map_err(|error| io::Error::other(error.to_string()))
+                    .map_err(io::Error::other)
             })
             .transpose()?
             .unwrap_or_default();
@@ -175,7 +175,7 @@ fn persist_entries(
     database: &AppDatabase,
     entries: &HashMap<String, RemoteProgramEntry>,
 ) -> io::Result<()> {
-    let bytes = serde_json::to_vec(entries).map_err(|error| io::Error::other(error.to_string()))?;
+    let bytes = serde_json::to_vec(entries).map_err(io::Error::other)?;
     database.store_kv(KV_NAMESPACE_STATE, REMOTE_PROGRAMS_KEY, &bytes)
 }
 

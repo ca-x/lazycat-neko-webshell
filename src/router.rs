@@ -194,18 +194,6 @@ async fn runtime_info() -> Json<RuntimeInfo> {
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::runtime_info;
-
-    #[tokio::test]
-    async fn runtime_info_includes_a_content_revision() {
-        let info = runtime_info().await.0;
-        assert!(!info.revision.is_empty());
-        assert!(info.revision.contains(':'));
-    }
-}
-
 async fn lightos_admin_info() -> Result<Json<AdminInfo>, (StatusCode, String)> {
     if !lightos_features_enabled() {
         return Err((
@@ -256,4 +244,16 @@ async fn list_instances(
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
     instances.append(&mut ssh_instances);
     Ok((response_headers, Json(instances)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::runtime_info;
+
+    #[tokio::test]
+    async fn runtime_info_includes_a_content_revision() {
+        let info = runtime_info().await.0;
+        assert!(!info.revision.is_empty());
+        assert!(info.revision.contains(':'));
+    }
 }

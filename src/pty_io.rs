@@ -78,7 +78,8 @@ impl PtyWriter {
         Err(PtyInputError::Backpressure)
     }
 
-    pub fn close(&self) {
+    #[cfg(test)]
+    fn close(&self) {
         self.signal_close();
         self.wait();
     }
@@ -120,7 +121,9 @@ impl PtyWriter {
 
 impl Drop for PtyWriter {
     fn drop(&mut self) {
-        self.close();
+        // A PTY write can remain blocked after its child is killed. Dropping the
+        // JoinHandle detaches it; explicit close/wait owns synchronous cleanup.
+        self.signal_close();
     }
 }
 
@@ -579,6 +582,42 @@ mod tests {
         let (release_lock, release_condition) = &*release;
         *release_lock.lock().unwrap() = true;
         release_condition.notify_all();
+        assert!(writer.wait_timeout(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn dropping_a_stalled_writer_does_not_wait_for_io() {
+        let started = Arc::new((Mutex::new(false), Condvar::new()));
+        let release = Arc::new((Mutex::new(false), Condvar::new()));
+        let writer = PtyWriter::spawn(Box::new(BlockingWriter {
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+        }));
+        writer.send(vec![b'x']).unwrap();
+        let (started_lock, started_condition) = &*started;
+        let (did_start, _) = started_condition
+            .wait_timeout_while(
+                started_lock.lock().unwrap(),
+                Duration::from_secs(2),
+                |started| !*started,
+            )
+            .unwrap();
+        assert!(*did_start, "writer must be blocked before testing cleanup");
+        drop(did_start);
+
+        let (closed_tx, closed_rx) = mpsc::channel();
+        let cleanup = std::thread::spawn(move || {
+            drop(writer);
+            closed_tx.send(()).unwrap();
+        });
+        let closed = closed_rx.recv_timeout(Duration::from_millis(250));
+        // Unblock the worker even on the old implementation so the test can fail
+        // without leaving a stuck cleanup thread behind.
+        let (release_lock, release_condition) = &*release;
+        *release_lock.lock().unwrap() = true;
+        release_condition.notify_all();
+        cleanup.join().unwrap();
+        assert!(closed.is_ok(), "dropping a stalled writer waited for I/O");
     }
 
     #[test]

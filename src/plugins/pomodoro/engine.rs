@@ -235,14 +235,14 @@ impl PomodoroManager {
         let Some(bytes) = self.database.load(KV_KEY_POMODORO)? else {
             return Ok(idle_state(DEFAULT_DURATION_MINUTES, DEFAULT_TOTAL_ROUNDS));
         };
-        let mut state = serde_json::from_slice::<PersistedPomodoroState>(&bytes)
-            .map_err(|err| io::Error::other(err.to_string()))?;
+        let mut state =
+            serde_json::from_slice::<PersistedPomodoroState>(&bytes).map_err(io::Error::other)?;
         normalize_state_in_place(&mut state);
         Ok(state)
     }
 
     fn save_unlocked(&self, state: &PersistedPomodoroState) -> io::Result<()> {
-        let bytes = serde_json::to_vec(state).map_err(|err| io::Error::other(err.to_string()))?;
+        let bytes = serde_json::to_vec(state).map_err(io::Error::other)?;
         self.database.store(KV_KEY_POMODORO, &bytes)
     }
 }

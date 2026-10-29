@@ -6,6 +6,7 @@ pub(crate) const REPORT_ID: &str = "_neko_hook";
 pub const MAX_HOOK_BYTES: usize = 64 * 1024;
 
 /// No prompts, commands, paths, session stores or user-provided text are emitted.
+#[must_use]
 pub fn hook_report(agent: &str, payload: &[u8]) -> Option<Vec<u8>> {
     if payload.len() > MAX_HOOK_BYTES || !matches!(agent, "claude" | "codex") {
         return None;
@@ -17,7 +18,7 @@ pub fn hook_report(agent: &str, payload: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let state = match (agent, event) {
-        (_, "SessionStart") => "idle",
+        (_, "SessionStart") | ("codex", "Interrupt") => "idle",
         (_, "UserPromptSubmit" | "PreToolUse") => "working",
         ("codex", "PermissionRequest") => "blocked:kind=permission",
         ("claude", "Notification") => match payload.get("notification_type")?.as_str()? {
@@ -29,7 +30,6 @@ pub fn hook_report(agent: &str, payload: &[u8]) -> Option<Vec<u8>> {
             _ => return None,
         },
         (_, "Stop") => "done",
-        ("codex", "Interrupt") => "idle",
         (_, "SessionEnd") => "clear",
         // Tool completion does not mean that a turn has finished. Subagent
         // completion must not finish its parent's turn either.
@@ -45,6 +45,7 @@ pub fn hook_report(agent: &str, payload: &[u8]) -> Option<Vec<u8>> {
 
 /// Bind a helper to its own foreground Agent, with a revalidatable start identity.
 /// An inaccessible, detached, background or unrelated process is a quiet no-op.
+#[must_use]
 pub fn hook_identity(agent: &str, helper_pid: u32, group: u32) -> Option<(u32, u64)> {
     super::automatic::hook_identity(agent, helper_pid, group)
 }
@@ -55,11 +56,11 @@ mod tests {
     use crate::{BlockedKind, ProgramState, Tracker};
 
     fn emit(tracker: &mut Tracker, agent: &str, event: &str, extra: Value) {
+        let Value::Object(extra) = extra else {
+            panic!("hook test fields must be a JSON object");
+        };
         let mut payload = serde_json::json!({"session_id": "test", "hook_event_name": event});
-        payload
-            .as_object_mut()
-            .unwrap()
-            .extend(extra.as_object().unwrap().clone());
+        payload.as_object_mut().unwrap().extend(extra);
         if let Some(bytes) = hook_report(agent, &serde_json::to_vec(&payload).unwrap()) {
             assert!(tracker.observe(&bytes).is_empty());
         }

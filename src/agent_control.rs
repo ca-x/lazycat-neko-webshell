@@ -32,6 +32,12 @@ struct Entry {
     started: Instant,
 }
 
+impl Drop for Entry {
+    fn drop(&mut self) {
+        self.abort.abort();
+    }
+}
+
 #[derive(Default)]
 struct PoolState {
     entries: HashMap<(String, String), Entry>,
@@ -112,10 +118,7 @@ impl AgentControlPool {
         command: Command,
     ) -> Option<mpsc::Sender<Job>> {
         let key = (selector.to_owned(), username.to_owned());
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self.state.lock().expect("agent control pool lock poisoned");
         if state.closed {
             return None;
         }
@@ -142,20 +145,9 @@ impl AgentControlPool {
     }
 
     pub fn close(&self) {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self.state.lock().expect("agent control pool lock poisoned");
         state.closed = true;
-        for (_, entry) in state.entries.drain() {
-            entry.abort.abort();
-        }
-    }
-}
-
-impl Drop for AgentControlPool {
-    fn drop(&mut self) {
-        self.close();
+        state.entries.clear();
     }
 }
 
@@ -293,6 +285,45 @@ while True:
         command.args(["-u", "-c", ECHO, &encoded]);
         command.arg(mode);
         command
+    }
+
+    #[tokio::test]
+    async fn dropping_a_poisoned_pool_aborts_bridges_without_panicking() {
+        let pool = Arc::new(AgentControlPool::default());
+        let (alive_tx, alive_rx) = tokio::sync::oneshot::channel::<()>();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _alive = alive_tx;
+            started_tx.send(()).unwrap();
+            std::future::pending::<()>().await;
+        });
+        started_rx.await.unwrap();
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        pool.state.lock().unwrap().entries.insert(
+            ("target".into(), "user".into()),
+            super::Entry {
+                sender,
+                abort: task.abort_handle(),
+                started: std::time::Instant::now(),
+            },
+        );
+        let poisoned = Arc::clone(&pool);
+        assert!(
+            std::thread::spawn(move || {
+                let _state = poisoned.state.lock().unwrap();
+                panic!("intentional control-pool poison for cleanup test");
+            })
+            .join()
+            .is_err()
+        );
+        drop(pool);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), alive_rx)
+                .await
+                .expect("dropping the pool must abort its bridge tasks")
+                .is_err()
+        );
+        assert!(task.await.unwrap_err().is_cancelled());
     }
 
     #[tokio::test]

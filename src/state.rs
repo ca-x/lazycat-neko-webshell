@@ -304,7 +304,7 @@ impl SessionStore {
 
     fn decode(bytes: &[u8]) -> io::Result<HashMap<String, SessionRecord>> {
         let persisted = serde_json::from_slice::<PersistedSessionState>(bytes)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         let mut sessions = HashMap::new();
         for session in persisted.sessions {
             let session = session.normalize_for_startup();
@@ -328,8 +328,7 @@ impl SessionStore {
             version: 1,
             sessions,
         };
-        let bytes =
-            serde_json::to_vec(&persisted).map_err(|err| io::Error::other(err.to_string()))?;
+        let bytes = serde_json::to_vec(&persisted).map_err(io::Error::other)?;
         self.database
             .store_kv(KV_NAMESPACE_STATE, KV_KEY_SESSIONS, &bytes)
     }

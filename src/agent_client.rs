@@ -166,9 +166,7 @@ impl RemoteAgentLock {
 
 fn selector_ensure_lock(selector: &str) -> Arc<AsyncMutex<()>> {
     let locks = AGENT_ENSURE_LOCKS.get_or_init(|| StdMutex::new(HashMap::new()));
-    let mut locks = locks
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut locks = locks.lock().expect("agent ensure lock registry poisoned");
     locks.retain(|_, lock| lock.strong_count() > 0);
     if let Some(lock) = locks.get(selector).and_then(Weak::upgrade) {
         return lock;
@@ -180,9 +178,7 @@ fn selector_ensure_lock(selector: &str) -> Arc<AsyncMutex<()>> {
 
 fn agent_was_recently_ensured(selector: &str, minimum_version: u64, now: Instant) -> bool {
     let ready = AGENT_READY_CACHE.get_or_init(|| StdMutex::new(HashMap::new()));
-    let mut ready = ready
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut ready = ready.lock().expect("agent ready cache lock poisoned");
     ready.retain(|_, entry| agent_ready_cache_entry_is_fresh(entry.verified_at, now));
     ready
         .get(selector)
@@ -191,9 +187,7 @@ fn agent_was_recently_ensured(selector: &str, minimum_version: u64, now: Instant
 
 fn mark_agent_ensured(selector: &str, minimum_version: u64) {
     let ready = AGENT_READY_CACHE.get_or_init(|| StdMutex::new(HashMap::new()));
-    let mut ready = ready
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut ready = ready.lock().expect("agent ready cache lock poisoned");
     let now = Instant::now();
     ready.retain(|_, entry| agent_ready_cache_entry_is_fresh(entry.verified_at, now));
     let minimum_version = ready.get(selector).map_or(minimum_version, |entry| {
@@ -212,7 +206,7 @@ fn invalidate_agent_ensured(selector: &str) {
     let ready = AGENT_READY_CACHE.get_or_init(|| StdMutex::new(HashMap::new()));
     ready
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .expect("agent ready cache lock poisoned")
         .remove(selector);
 }
 
@@ -224,7 +218,7 @@ fn recent_agent_ensure_failure(
     let failures = AGENT_ENSURE_FAILURES.get_or_init(|| StdMutex::new(HashMap::new()));
     let mut failures = failures
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .expect("agent ensure failure cache lock poisoned");
     failures.retain(|_, entry| {
         now.saturating_duration_since(entry.failed_at) < AGENT_ENSURE_FAILURE_TTL
     });
@@ -238,7 +232,7 @@ fn mark_agent_ensure_failure(selector: &str, minimum_version: u64, message: Stri
     let failures = AGENT_ENSURE_FAILURES.get_or_init(|| StdMutex::new(HashMap::new()));
     let mut failures = failures
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .expect("agent ensure failure cache lock poisoned");
     let minimum_version = failures.get(selector).map_or(minimum_version, |entry| {
         entry.minimum_version.min(minimum_version)
     });
@@ -256,7 +250,7 @@ fn clear_agent_ensure_failure(selector: &str, satisfied_version: u64) {
     let failures = AGENT_ENSURE_FAILURES.get_or_init(|| StdMutex::new(HashMap::new()));
     let mut failures = failures
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .expect("agent ensure failure cache lock poisoned");
     if failures
         .get(selector)
         .is_some_and(|entry| entry.minimum_version <= satisfied_version)
@@ -524,10 +518,11 @@ pub(crate) async fn ensure_agent_at_least(
     // A stronger feature requirement is about to mutate the shared target
     // agent. Prevent weaker callers from trusting a pre-upgrade cache entry.
     invalidate_agent_ensured(selector);
-    let remote_lock = RemoteAgentLock::acquire(selector).await.map_err(|err| {
-        mark_agent_ensure_failure(selector, minimum_version, err.to_string());
-        err
-    })?;
+    let remote_lock = RemoteAgentLock::acquire(selector)
+        .await
+        .inspect_err(|err| {
+            mark_agent_ensure_failure(selector, minimum_version, err.to_string());
+        })?;
     let rollback_payload = match probe_installed_agent_payload(selector).await {
         Ok(installed) => {
             reusable_agent_rollback_payload(installed, &expected).or(running_rollback_payload)

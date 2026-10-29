@@ -45,6 +45,7 @@ export PROTOC="${protoc_bin}"
 "${PROTOC}" --version
 
 cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features --locked -- -W clippy::pedantic -D warnings
 cargo test --workspace --locked
 
 missing_packages=()

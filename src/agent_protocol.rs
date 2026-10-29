@@ -12,7 +12,7 @@ pub const AGENT_PROTOCOL_VERSION: &str = "lazycat-neko-webshell-agent-v4";
 // Bump when target-local agent code or one of its runtime dependencies changes.
 // Existing targets may keep an older agent until the provider raises its
 // minimum supported version.
-pub const AGENT_VERSION: u64 = 21;
+pub const AGENT_VERSION: u64 = 22;
 // Bump only when the provider can no longer safely use an older agent. Protocol
 // compatibility is checked before this version floor.
 pub const MIN_SUPPORTED_AGENT_VERSION: u64 = 11;
@@ -283,22 +283,6 @@ pub fn detach_frame() -> AgentFrame {
         r#type: Some(AgentFrameType::AGENT_FRAME_TYPE_DETACH.into()),
         ..Default::default()
     }
-}
-
-pub fn replay_start_frame(
-    session_id: impl Into<String>,
-    selector: impl Into<String>,
-    pane_id: impl Into<String>,
-    replay_after: u64,
-) -> AgentFrame {
-    control_frame(AgentControl {
-        r#type: Some(AgentControlType::AGENT_CONTROL_TYPE_REPLAY_START.into()),
-        session_id: Some(session_id.into()),
-        selector: Some(selector.into()),
-        pane_id: Some(pane_id.into()),
-        replay_after: Some(clamped_i64(replay_after)),
-        ..Default::default()
-    })
 }
 
 pub fn replay_start_frame_with_metadata(

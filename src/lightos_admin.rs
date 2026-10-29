@@ -52,7 +52,7 @@ impl LightOsAdminError {
         }
     }
 
-    fn upstream_request(error: reqwest::Error) -> Self {
+    fn upstream_request(error: &reqwest::Error) -> Self {
         let status = if error.is_timeout() {
             StatusCode::GATEWAY_TIMEOUT
         } else {
@@ -180,7 +180,7 @@ async fn fetch_admin_json(
         .headers(headers)
         .send()
         .await
-        .map_err(LightOsAdminError::upstream_request)?;
+        .map_err(|error| LightOsAdminError::upstream_request(&error))?;
     let status = response.status();
     if delegated && status != StatusCode::OK {
         let status = match status {

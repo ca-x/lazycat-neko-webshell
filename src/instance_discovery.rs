@@ -236,8 +236,7 @@ fn combine(
         let status = errors
             .iter()
             .find(|e| e.status == StatusCode::UNAUTHORIZED || e.status == StatusCode::FORBIDDEN)
-            .map(|e| e.status)
-            .unwrap_or(StatusCode::BAD_GATEWAY);
+            .map_or(StatusCode::BAD_GATEWAY, |e| e.status);
         return Err(LightOsAdminError {
             status,
             message: errors

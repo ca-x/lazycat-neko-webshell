@@ -148,8 +148,7 @@ pub async fn execute(
             session
                 .metadata
                 .get(crate::state::METADATA_LOGIN_USER)
-                .map(String::as_str)
-                .unwrap_or("root"),
+                .map_or("root", String::as_str),
             script,
         );
         let mut command = Command::new(crate::config::LIGHTOSCTL);
@@ -202,7 +201,7 @@ pub async fn run(mut command: Command, payload: &[u8]) -> Result<Vec<u8>, Connec
             }
             Ok(())
         };
-        let (_, bytes, (), status) = tokio::try_join!(input, output, errors, child.wait())?;
+        let ((), bytes, (), status) = tokio::try_join!(input, output, errors, child.wait())?;
         if !status.success() {
             return Err(std::io::Error::other("command failed"));
         }

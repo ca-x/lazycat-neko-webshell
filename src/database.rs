@@ -13,7 +13,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::config::{DEFAULT_DATABASE_FILE, ENV_DATABASE_FILE};
 use crate::terminal_manager::OutputFrame;
 
-const TO_IO_ERROR: fn(rusqlite::Error) -> io::Error = |err| io::Error::other(err.to_string());
+const TO_IO_ERROR: fn(rusqlite::Error) -> io::Error = io::Error::other;
 
 pub const KV_NAMESPACE_STATE: &str = "state";
 pub const KV_NAMESPACE_PREFERENCES: &str = "preferences";
@@ -919,6 +919,26 @@ mod tests {
         let _ = remove_database_file(&path);
         let database = AppDatabase::open(path.clone()).expect("test database");
         (database, path)
+    }
+
+    #[test]
+    fn database_io_errors_preserve_the_sqlite_cause() {
+        let (database, path) = temp_database();
+        database
+            .conn
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TABLE app_kv")
+            .unwrap();
+        let error = database.load_kv("state", "test").unwrap_err();
+        drop(database);
+        remove_database_file(&path).unwrap();
+        assert!(
+            error
+                .get_ref()
+                .is_some_and(<dyn std::error::Error + Send + Sync>::is::<rusqlite::Error>),
+            "database I/O errors must retain their typed SQLite cause"
+        );
     }
 
     #[test]

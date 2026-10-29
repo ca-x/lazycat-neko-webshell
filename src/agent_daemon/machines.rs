@@ -25,9 +25,16 @@ const MAX_INPUT: usize = 16 * 1024;
 /// The child owns a session/process group. Clean up SSH helpers on every exit path.
 struct ProcessGroup(u32);
 impl Drop for ProcessGroup {
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "Bounded process-group cleanup and nonblocking descriptor I/O require libc"
+    )]
     fn drop(&mut self) {
-        if let Ok(pid) = i32::try_from(self.0) {
+        if let Ok(pid) = i32::try_from(self.0)
+            && pid > 0
+        {
+            // SAFETY: this guard owns the process group created for the command.
+            // Its positive ID targets that group, never the caller's group.
             unsafe {
                 libc::kill(-pid, libc::SIGKILL);
             }
@@ -181,16 +188,26 @@ fn capture_with_timeout(
         .stderr(Stdio::piped())
         .process_group(0);
     let mut child = command.spawn()?;
-    let _group = ProcessGroup(child.id());
+    let group = ProcessGroup(child.id());
     let (tx, rx) = mpsc::sync_channel(16);
     for (stderr, reader) in [
         (
             false,
-            Box::new(child.stdout.take().unwrap()) as Box<dyn Read + Send>,
+            Box::new(
+                child
+                    .stdout
+                    .take()
+                    .context("missing piped machine stdout")?,
+            ) as Box<dyn Read + Send>,
         ),
         (
             true,
-            Box::new(child.stderr.take().unwrap()) as Box<dyn Read + Send>,
+            Box::new(
+                child
+                    .stderr
+                    .take()
+                    .context("missing piped machine stderr")?,
+            ) as Box<dyn Read + Send>,
         ),
     ] {
         let tx = tx.clone();
@@ -240,9 +257,11 @@ fn capture_with_timeout(
                 status = child.try_wait()?;
             }
         }
-        Ok(status.unwrap().success())
+        Ok(status
+            .context("machine command ended without an exit status")?
+            .success())
     })();
-    drop(_group);
+    drop(group);
     let _ = child.wait();
     Ok((result?, output.0, output.1))
 }
@@ -259,6 +278,61 @@ enum SetupEvent {
     OutputClosed,
     Closed,
     Error(String),
+}
+
+fn spawn_setup_input(input_tx: mpsc::SyncSender<SetupEvent>, input_cancelled: Arc<AtomicBool>) {
+    thread::spawn(move || {
+        let mut input = io::stdin().lock();
+        loop {
+            let mut line = Vec::new();
+            match input
+                .by_ref()
+                .take((MAX_INPUT + 1) as u64)
+                .read_until(b'\n', &mut line)
+            {
+                Ok(0) | Err(_) => {
+                    input_cancelled.store(true, Ordering::Release);
+                    let _ = input_tx.send(SetupEvent::Closed);
+                    break;
+                }
+                Ok(n) if n > MAX_INPUT => {
+                    input_cancelled.store(true, Ordering::Release);
+                    let _ = input_tx.send(SetupEvent::Error("setup input limit exceeded".into()));
+                    break;
+                }
+                Ok(_) => {
+                    if let Ok(message) = serde_json::from_slice(&line) {
+                        if input_tx.send(SetupEvent::Input(message)).is_err() {
+                            break;
+                        }
+                    } else {
+                        input_cancelled.store(true, Ordering::Release);
+                        let _ = input_tx.send(SetupEvent::Error("invalid setup input".into()));
+                        break;
+                    }
+                }
+            }
+        }
+    });
+}
+
+fn spawn_setup_output(mut reader: Box<dyn Read + Send>, tx: mpsc::SyncSender<SetupEvent>) {
+    thread::spawn(move || {
+        let mut bytes = [0; 4096];
+        loop {
+            match reader.read(&mut bytes) {
+                Ok(0) | Err(_) => {
+                    let _ = tx.send(SetupEvent::OutputClosed);
+                    break;
+                }
+                Ok(n) => {
+                    if tx.send(SetupEvent::Output(bytes[..n].to_vec())).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
 }
 
 fn setup(login: &str, action: &MachineAction) -> anyhow::Result<()> {
@@ -279,64 +353,14 @@ fn setup(login: &str, action: &MachineAction) -> anyhow::Result<()> {
         &serde_json::to_string(action)?,
     ]);
     let mut child = pair.slave.spawn_command(command)?;
-    let _group = ProcessGroup(child.process_id().context("missing setup process id")?);
+    let group = ProcessGroup(child.process_id().context("missing setup process id")?);
     drop(pair.slave);
     let writer = crate::pty_io::PtyWriter::spawn(pair.master.take_writer()?);
-    let mut reader = pair.master.try_clone_reader()?;
+    let reader = pair.master.try_clone_reader()?;
     let (tx, rx) = mpsc::sync_channel(16);
     let cancelled = Arc::new(AtomicBool::new(false));
-    let input_cancelled = cancelled.clone();
-    let input_tx = tx.clone();
-    thread::spawn(move || {
-        let mut input = io::stdin().lock();
-        loop {
-            let mut line = Vec::new();
-            match input
-                .by_ref()
-                .take((MAX_INPUT + 1) as u64)
-                .read_until(b'\n', &mut line)
-            {
-                Ok(0) | Err(_) => {
-                    input_cancelled.store(true, Ordering::Release);
-                    let _ = input_tx.send(SetupEvent::Closed);
-                    break;
-                }
-                Ok(n) if n > MAX_INPUT => {
-                    input_cancelled.store(true, Ordering::Release);
-                    let _ = input_tx.send(SetupEvent::Error("setup input limit exceeded".into()));
-                    break;
-                }
-                Ok(_) => match serde_json::from_slice(&line) {
-                    Ok(message) => {
-                        if input_tx.send(SetupEvent::Input(message)).is_err() {
-                            break;
-                        }
-                    }
-                    Err(_) => {
-                        input_cancelled.store(true, Ordering::Release);
-                        let _ = input_tx.send(SetupEvent::Error("invalid setup input".into()));
-                        break;
-                    }
-                },
-            }
-        }
-    });
-    thread::spawn(move || {
-        let mut bytes = [0; 4096];
-        loop {
-            match reader.read(&mut bytes) {
-                Ok(0) | Err(_) => {
-                    let _ = tx.send(SetupEvent::OutputClosed);
-                    break;
-                }
-                Ok(n) => {
-                    if tx.send(SetupEvent::Output(bytes[..n].to_vec())).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
+    spawn_setup_input(tx.clone(), Arc::clone(&cancelled));
+    spawn_setup_output(reader, tx);
     let deadline = Instant::now()
         + Duration::from_secs(if matches!(action, MachineAction::Test { .. }) {
             60
@@ -380,14 +404,14 @@ fn setup(login: &str, action: &MachineAction) -> anyhow::Result<()> {
                 Err(mpsc::RecvTimeoutError::Disconnected) => bail!("machine setup disconnected"),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
-            if let Some(status) = child.try_wait()? {
-                if output_closed {
-                    return Ok(status.exit_code());
-                }
+            if let Some(status) = child.try_wait()?
+                && output_closed
+            {
+                return Ok(status.exit_code());
             }
         }
     })();
-    drop(_group);
+    drop(group);
     let _ = child.wait();
     let exit_deadline = Instant::now() + Duration::from_secs(2);
     match result {
@@ -410,10 +434,19 @@ struct NonblockingOutput {
     flags: i32,
 }
 impl NonblockingOutput {
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "Bounded process-group cleanup and nonblocking descriptor I/O require libc"
+    )]
     fn new(fd: i32) -> io::Result<Self> {
+        // SAFETY: F_GETFL takes no extra argument and does not dereference memory.
+        // Invalid descriptors are reported as OS errors below.
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-        if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        if flags < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: F_SETFL takes integer flags obtained for this descriptor.
+        if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(Self { fd, flags })
@@ -428,7 +461,10 @@ impl NonblockingOutput {
         bytes.push(b'\n');
         self.write(&bytes, deadline, cancelled)
     }
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "Bounded process-group cleanup and nonblocking descriptor I/O require libc"
+    )]
     fn write(
         &self,
         mut bytes: &[u8],
@@ -441,9 +477,12 @@ impl NonblockingOutput {
                 "machine setup cancelled"
             );
             ensure!(Instant::now() < deadline, "machine setup output timed out");
+            // SAFETY: bytes remains readable for its full length during write;
+            // the descriptor belongs to this helper's output stream.
             let written = unsafe { libc::write(self.fd, bytes.as_ptr().cast(), bytes.len()) };
-            if written > 0 {
-                bytes = &bytes[written as usize..];
+            if let Ok(written) = usize::try_from(written) {
+                ensure!(written != 0, "machine setup output stopped accepting bytes");
+                bytes = &bytes[written..];
                 continue;
             }
             let error = io::Error::last_os_error();
@@ -459,8 +498,13 @@ impl NonblockingOutput {
     }
 }
 impl Drop for NonblockingOutput {
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "Bounded process-group cleanup and nonblocking descriptor I/O require libc"
+    )]
     fn drop(&mut self) {
+        // SAFETY: restore only integer status flags on the output descriptor,
+        // which remains open for this guard's lifetime. Cleanup is best effort.
         unsafe {
             libc::fcntl(self.fd, libc::F_SETFL, self.flags);
         }

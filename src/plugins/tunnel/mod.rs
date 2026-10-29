@@ -66,7 +66,9 @@ impl TunnelManager {
         for handle in &handles {
             let _ = handle.stop_tx.send(true);
         }
-        drop(handles); // Each handle joins its worker after signaling cancellation.
+        for handle in handles {
+            handle.stop_and_wait();
+        }
         Ok(())
     }
 
@@ -153,8 +155,8 @@ impl TunnelManager {
             .remove(tunnel_id)
             .ok_or_else(|| anyhow!("tunnel session not found: {tunnel_id}"))?;
         let mut info = handle.snapshot();
-        let _ = handle.stop_tx.send(true);
         "stopping".clone_into(&mut info.status);
+        handle.stop_and_wait();
         json_response(
             "complete",
             &serde_json::json!({
@@ -168,13 +170,17 @@ impl TunnelManager {
 impl Drop for TunnelHandle {
     fn drop(&mut self) {
         let _ = self.stop_tx.send(true);
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
     }
 }
 
 impl TunnelHandle {
+    fn stop_and_wait(mut self) {
+        let _ = self.stop_tx.send(true);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+
     fn snapshot(&self) -> TunnelSessionInfo {
         let mut info = self.info.clone();
         info.status = self
@@ -344,4 +350,75 @@ fn provider_descriptors() -> Vec<serde_json::Value> {
             "experimental": false,
         }),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_stop_waits_for_tunnel_worker_cleanup() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+        let finished = Arc::new(AtomicBool::new(false));
+        let worker_finished = Arc::clone(&finished);
+        let worker = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while !*stop_rx.borrow() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "stop was not signaled"
+                );
+                std::thread::yield_now();
+            }
+            std::thread::sleep(Duration::from_millis(20));
+            worker_finished.store(true, Ordering::Release);
+        });
+        let manager = TunnelManager::default();
+        manager
+            .sessions
+            .lock()
+            .unwrap()
+            .insert("test".into(), test_handle(stop_tx, worker));
+        manager.stop_all().unwrap();
+        assert!(finished.load(Ordering::Acquire));
+        assert!(manager.sessions.lock().unwrap().is_empty());
+    }
+
+    fn test_handle(
+        stop_tx: tokio::sync::watch::Sender<bool>,
+        worker: std::thread::JoinHandle<()>,
+    ) -> TunnelHandle {
+        TunnelHandle {
+            info: TunnelSessionInfo {
+                id: "test".into(),
+                provider: "test".into(),
+                public_url: String::new(),
+                upstream_url: String::new(),
+                status: "running".into(),
+                created_at_ms: 0,
+            },
+            status: Arc::new(Mutex::new("running".into())),
+            stop_tx,
+            worker: Some(worker),
+        }
+    }
+
+    #[test]
+    fn dropping_a_tunnel_signals_stop_without_waiting_for_its_worker() {
+        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+        let (release_tx, release_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || release_rx.recv().unwrap());
+        let handle = test_handle(stop_tx, worker);
+        let (closed_tx, closed_rx) = mpsc::channel();
+        let cleanup = std::thread::spawn(move || {
+            drop(handle);
+            closed_tx.send(()).unwrap();
+        });
+        let closed = closed_rx.recv_timeout(Duration::from_millis(250));
+        release_tx.send(()).unwrap();
+        cleanup.join().unwrap();
+        assert!(closed.is_ok(), "tunnel drop waited for its worker");
+        assert!(*stop_rx.borrow(), "tunnel drop must request cancellation");
+    }
 }

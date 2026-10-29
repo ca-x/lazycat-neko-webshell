@@ -157,7 +157,7 @@ impl HerdrNotificationSender {
         let mut deliveries = self
             .deliveries
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .expect("Herdr notification delivery lock poisoned");
         deliveries.decision(user_id, device_id, title, body, now)
     }
 

@@ -1,17 +1,39 @@
-use super::*;
+use super::{
+    AuthorizedHerdrTarget, HERDR_STREAM_CONNECTIONS, HerdrBridgeError, HerdrQuery,
+    authorize_herdr_target_at_least, herdr_target_stream_connections, origin_allowed,
+    send_herdr_socket_message, try_acquire_herdr_stream_permit,
+};
 use crate::herdr_machines::{
     MACHINE_SETUP_SECONDS, MAX_MACHINE_OUTPUT, MIN_MACHINE_AGENT_VERSION, MachineAction,
     MachineCatalog,
 };
+use anyhow::anyhow;
+use axum::{
+    Json,
+    extract::{Query, WebSocketUpgrade, ws::Message},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+};
+use futures::{SinkExt, StreamExt};
+use serde_json::{Value, json};
 use std::process::Stdio;
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock, Mutex, Weak},
+    time::Duration,
+};
 use tokio::io::AsyncReadExt as _;
+use tokio::{
+    io::{AsyncWriteExt, BufReader},
+    time::timeout,
+};
 
 static MUTATIONS: LazyLock<Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 fn mutation_lock(target: &AuthorizedHerdrTarget) -> Arc<tokio::sync::Mutex<()>> {
     let mut locks = MUTATIONS
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .expect("Herdr machine mutation registry poisoned");
     locks.retain(|_, lock| lock.strong_count() > 0);
     let key = format!("{}:{}", target.selector, target.login_user);
     if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
@@ -21,7 +43,7 @@ fn mutation_lock(target: &AuthorizedHerdrTarget) -> Arc<tokio::sync::Mutex<()>> 
     locks.insert(key, Arc::downgrade(&lock));
     lock
 }
-fn error(status: StatusCode, message: impl ToString) -> HerdrBridgeError {
+fn error(status: StatusCode, message: &(impl std::fmt::Display + ?Sized)) -> HerdrBridgeError {
     HerdrBridgeError {
         status,
         message: message.to_string(),
@@ -41,7 +63,7 @@ pub(crate) async fn mutate(
 ) -> Result<Json<MachineCatalog>, HerdrBridgeError> {
     action
         .args()
-        .map_err(|err| error(StatusCode::BAD_REQUEST, err))?;
+        .map_err(|err| error(StatusCode::BAD_REQUEST, &err))?;
     if matches!(
         action,
         MachineAction::Add { .. } | MachineAction::Test { .. } | MachineAction::List {}
@@ -62,7 +84,7 @@ pub(crate) async fn mutate(
         let catalog = request(&target, MachineAction::List {}).await?;
         action
             .check_removal(&catalog.machines)
-            .map_err(|err| error(StatusCode::CONFLICT, err))?;
+            .map_err(|err| error(StatusCode::CONFLICT, &err))?;
     }
     request(&target, action).await.map(Json)
 }
@@ -72,7 +94,7 @@ async fn request(
     action: MachineAction,
 ) -> Result<MachineCatalog, HerdrBridgeError> {
     let payload =
-        serde_json::to_string(&action).map_err(|err| error(StatusCode::BAD_REQUEST, err))?;
+        serde_json::to_string(&action).map_err(|err| error(StatusCode::BAD_REQUEST, &err))?;
     let mut command = target.agent.interactive_command(&[
         "herdr-machines",
         "--login-user",
@@ -87,7 +109,7 @@ async fn request(
         .stderr(Stdio::piped());
     let mut child = command
         .spawn()
-        .map_err(|err| error(StatusCode::BAD_GATEWAY, err))?;
+        .map_err(|err| error(StatusCode::BAD_GATEWAY, &err))?;
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut out = child
@@ -115,7 +137,7 @@ async fn request(
                 "Herdr machine request timed out",
             )
         })?
-        .map_err(|err| error(StatusCode::BAD_GATEWAY, err))?;
+        .map_err(|err| error(StatusCode::BAD_GATEWAY, &err))?;
     if stdout.len() > MAX_MACHINE_OUTPUT || stderr.len() > MAX_MACHINE_OUTPUT {
         return Err(error(
             StatusCode::BAD_GATEWAY,
@@ -131,7 +153,7 @@ async fn request(
     serde_json::from_slice(&stdout).map_err(|err| {
         error(
             StatusCode::BAD_GATEWAY,
-            format!("invalid Herdr machine response: {err}"),
+            &format!("invalid Herdr machine response: {err}"),
         )
     })
 }

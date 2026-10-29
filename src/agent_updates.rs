@@ -49,7 +49,7 @@ async fn authorize(selector: &str) -> Result<String, HttpError> {
         })
 }
 
-fn failure(error: anyhow::Error) -> HttpError {
+fn failure(error: &anyhow::Error) -> HttpError {
     let code = match error.to_string().as_str() {
         "target_changed" => "target_changed",
         "provider_older" => "provider_older",
@@ -78,7 +78,7 @@ pub(crate) async fn get_update(
     updates::inspect(name, &username)
         .await
         .map(Json)
-        .map_err(failure)
+        .map_err(|error| failure(&error))
 }
 
 pub(crate) async fn post_update(
@@ -89,7 +89,7 @@ pub(crate) async fn post_update(
     // Complete the bounded transaction even if a browser navigates away mid-request.
     tokio::spawn(updates::update(request, username))
         .await
-        .map_err(|error| failure(error.into()))?
+        .map_err(|error| failure(&error.into()))?
         .map(Json)
-        .map_err(failure)
+        .map_err(|error| failure(&error))
 }

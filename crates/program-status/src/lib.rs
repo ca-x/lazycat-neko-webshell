@@ -55,6 +55,18 @@ pub struct Tracker {
     hook_active: bool,
 }
 
+impl std::fmt::Debug for Tracker {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Tracker")
+            .field("revision", &self.revision)
+            .field("record_count", &self.records.len())
+            .field("native_seen", &self.native_seen)
+            .field("hook_active", &self.hook_active)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Tracker {
     /// Inspect live bytes; the caller continues broadcasting the original bytes.
     /// Returned bytes are support replies for the PTY, never user input.

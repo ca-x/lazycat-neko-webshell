@@ -195,8 +195,7 @@ async fn store_font(
 
     let dir = ensure_font_dir().await?;
     tokio::fs::write(font_data_path(&dir, &metadata), normalized.bytes).await?;
-    let metadata_bytes = serde_json::to_vec_pretty(&metadata)
-        .map_err(|err| std::io::Error::other(err.to_string()))?;
+    let metadata_bytes = serde_json::to_vec_pretty(&metadata).map_err(std::io::Error::other)?;
     tokio::fs::write(font_metadata_path(&dir, &metadata.id), metadata_bytes).await?;
     Ok(metadata)
 }
@@ -221,7 +220,7 @@ async fn read_font_file(id: &str) -> Result<(FontMetadata, Bytes), FontError> {
 async fn read_single_font_metadata(dir: &FsPath, id: &str) -> Result<FontMetadata, FontError> {
     let bytes = tokio::fs::read(font_metadata_path(dir, id)).await?;
     serde_json::from_slice::<FontMetadata>(&bytes)
-        .map_err(|err| FontError::Io(std::io::Error::other(err.to_string())))
+        .map_err(|err| FontError::Io(std::io::Error::other(err)))
 }
 
 async fn ensure_font_dir() -> std::io::Result<PathBuf> {

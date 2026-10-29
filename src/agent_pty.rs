@@ -165,21 +165,27 @@ impl AgentPty {
     }
 
     pub fn close(&self) {
+        if self.signal_close() {
+            self.child_wait.wait();
+            self.writer.wait();
+        }
+    }
+
+    fn signal_close(&self) -> bool {
         self.writer.signal_close();
         let Some(mut killer) = self.killer.lock().ok().and_then(|mut killer| killer.take()) else {
-            return;
+            return false;
         };
         if let Err(err) = killer.kill() {
             warn!(error = %err, "agent pty child was already closed");
         }
-        self.child_wait.wait();
-        self.writer.wait();
+        true
     }
 }
 
 impl Drop for AgentPty {
     fn drop(&mut self) {
-        self.close();
+        self.signal_close();
     }
 }
 
@@ -303,6 +309,23 @@ fn shell_script_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dropping_an_agent_pty_does_not_wait_for_child_reaping() {
+        let (events, _receiver) = mpsc::sync_channel(16);
+        let mut pty = AgentPty::spawn("drop-test", "", 80, 24, events).unwrap();
+        let stalled = ChildWait::default();
+        pty.child_wait = stalled.clone();
+        let (closed_tx, closed_rx) = mpsc::channel();
+        let cleanup = thread::spawn(move || {
+            drop(pty);
+            closed_tx.send(()).unwrap();
+        });
+        let closed = closed_rx.recv_timeout(std::time::Duration::from_millis(250));
+        stalled.complete();
+        cleanup.join().unwrap();
+        assert!(closed.is_ok(), "agent PTY drop waited for child reaping");
+    }
 
     #[test]
     fn quotes_shell_values() {

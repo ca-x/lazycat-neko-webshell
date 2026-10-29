@@ -269,16 +269,16 @@ fn notification_resource_cannot_modify_another_plugins_notification() {
     );
 }
 
-#[tokio::test]
-async fn a_cancelled_committed_disable_finishes_without_blocking_other_plugin_settings() {
+mod cancelled_disable {
+    use super::*;
     use neko_plugin::{
         BoxFuture, InvokeReply, InvokeRequest, PluginConfiguration, PluginError, RuntimePlugin,
     };
     use tokio::sync::Notify;
-    struct PendingFile {
-        entered: Arc<Notify>,
-        release: Arc<Notify>,
-        cleaned: Arc<Notify>,
+    pub(super) struct PendingFile {
+        pub(super) entered: Arc<Notify>,
+        pub(super) release: Arc<Notify>,
+        pub(super) cleaned: Arc<Notify>,
     }
     impl RuntimePlugin for PendingFile {
         fn id(&self) -> &'static str {
@@ -303,14 +303,14 @@ async fn a_cancelled_committed_disable_finishes_without_blocking_other_plugin_se
             })
         }
     }
-    struct Noise;
+    pub(super) struct Noise;
     impl RuntimePlugin for Noise {
         fn id(&self) -> &'static str {
             "white-noise"
         }
     }
-    fn registration(plugin: Arc<dyn RuntimePlugin>) -> neko_plugin::Registration {
-        let entry = super::catalog::ENTRIES
+    pub(super) fn registration(plugin: Arc<dyn RuntimePlugin>) -> neko_plugin::Registration {
+        let entry = super::super::catalog::ENTRIES
             .iter()
             .find(|entry| entry.id == plugin.id())
             .unwrap();
@@ -321,6 +321,12 @@ async fn a_cancelled_committed_disable_finishes_without_blocking_other_plugin_se
             configuration: true.into(),
         }
     }
+}
+
+#[tokio::test]
+async fn a_cancelled_committed_disable_finishes_without_blocking_other_plugin_settings() {
+    use cancelled_disable::{Noise, PendingFile, registration};
+    use neko_plugin::InvokeRequest;
     let state = state();
     let pending = Arc::new(PendingFile {
         entered: Arc::default(),

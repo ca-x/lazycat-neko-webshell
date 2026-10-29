@@ -1,4 +1,4 @@
-//! Catflap's typed discovery contract. MicroVM identities never become PTY selectors.
+//! Catflap's typed discovery contract. `MicroVM` identities never become PTY selectors.
 use crate::{
     instance_discovery::Discovery,
     proto::lazycat::webshell::v1::{Instance, InstanceKind},

@@ -1,4 +1,4 @@
-//! Contracts for statically linked, trusted WebShell plugins.
+//! Contracts for statically linked, trusted `WebShell` plugins.
 //! Platform authority and terminal ownership stay with the host.
 mod resources;
 mod runtime;
@@ -75,6 +75,10 @@ pub struct InvokeReply {
 }
 
 impl InvokeReply {
+    /// Encode a JSON result with the host's standard content type.
+    ///
+    /// # Errors
+    /// Returns an internal error if JSON serialization fails.
     pub fn json(status: &str, value: &serde_json::Value) -> Result<Self, PluginError> {
         Ok(Self {
             status: status.to_owned(),

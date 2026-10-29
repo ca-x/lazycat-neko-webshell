@@ -170,6 +170,10 @@ enum TerminalServerMessage<'a> {
     },
 }
 
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "Serde skip_serializing_if callbacks receive a reference to the field"
+)]
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -1158,18 +1162,18 @@ async fn serve_agent_terminal(
     drop(stdin);
     frame_reader.shutdown().await;
 
-    let child_result = match timeout(AGENT_ATTACH_CLEANUP_TIMEOUT, child.wait()).await {
-        Ok(result) => Some(result),
-        Err(_) => {
-            warn!(
-                selector = %target.selector,
-                pane_id,
-                "agent attach child cleanup timed out"
-            );
-            // This is the local lightosctl attach process. The target agent owns the PTY.
-            let _ = timeout(AGENT_ATTACH_CLEANUP_TIMEOUT, child.kill()).await;
-            None
-        }
+    let child_result = if let Ok(result) = timeout(AGENT_ATTACH_CLEANUP_TIMEOUT, child.wait()).await
+    {
+        Some(result)
+    } else {
+        warn!(
+            selector = %target.selector,
+            pane_id,
+            "agent attach child cleanup timed out"
+        );
+        // This is the local lightosctl attach process. The target agent owns the PTY.
+        let _ = timeout(AGENT_ATTACH_CLEANUP_TIMEOUT, child.kill()).await;
+        None
     };
     let stderr_text = match timeout(AGENT_ATTACH_CLEANUP_TIMEOUT, &mut stderr_task).await {
         Ok(Ok(text)) => text,

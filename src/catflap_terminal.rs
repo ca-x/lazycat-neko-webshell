@@ -1,4 +1,4 @@
-//! Delegated MicroVM terminal bridge; Catflap owns sessions and target authorization.
+//! Delegated `MicroVM` terminal bridge; Catflap owns sessions and target authorization.
 use crate::{http_body::read_limited_body, lightos_admin};
 use axum::{
     Json,
@@ -6,7 +6,7 @@ use axum::{
         OriginalUri, Path, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
 use futures::{SinkExt, StreamExt};
@@ -98,7 +98,7 @@ fn error(status: StatusCode) -> ApiError {
         format!("Catflap terminal request failed (HTTP {})", status.as_u16()),
     )
 }
-fn network_error(e: reqwest::Error) -> ApiError {
+fn network_error(e: &reqwest::Error) -> ApiError {
     error(if e.is_timeout() {
         StatusCode::GATEWAY_TIMEOUT
     } else {
@@ -108,6 +108,15 @@ fn network_error(e: reqwest::Error) -> ApiError {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CreateSession {
+    session_id: String,
+    cols: u16,
+    rows: u16,
+}
+
+// Upstream responses can gain fields independently of this provider. Keep the
+// browser request strict while accepting additional response metadata.
+#[derive(Deserialize)]
+struct CreatedSession {
     session_id: String,
     cols: u16,
     rows: u16,
@@ -133,7 +142,7 @@ async fn create_at(
     uuid(vm)?;
     body.validate()?;
     let mut upstream = delegated(headers)?;
-    upstream.insert("x-catflap-request", "1".parse().unwrap());
+    upstream.insert("x-catflap-request", HeaderValue::from_static("1"));
     let client =
         lightos_admin::admin_http_client(headers, DEADLINE).map_err(|e| (e.status, e.message))?;
     let response = client
@@ -144,20 +153,14 @@ async fn create_at(
         .json(body)
         .send()
         .await
-        .map_err(network_error)?;
+        .map_err(|error| network_error(&error))?;
     if response.status() != StatusCode::OK {
         return Err(error(response.status()));
     }
     let bytes = read_limited_body(response, 16 * 1024, "terminal session")
         .await
         .map_err(|_| error(StatusCode::BAD_GATEWAY))?;
-    #[derive(Deserialize)]
-    struct Created {
-        session_id: String,
-        cols: u16,
-        rows: u16,
-    }
-    let created: Created =
+    let created: CreatedSession =
         serde_json::from_slice(&bytes).map_err(|_| error(StatusCode::BAD_GATEWAY))?;
     if created.session_id != body.session_id
         || created.cols != body.cols
@@ -182,7 +185,7 @@ pub(crate) async fn close(
     local_request(&headers)?;
     uuid(&session)?;
     let mut upstream = delegated(&headers)?;
-    upstream.insert("x-catflap-request", "1".parse().unwrap());
+    upstream.insert("x-catflap-request", HeaderValue::from_static("1"));
     let client =
         lightos_admin::admin_http_client(&headers, DEADLINE).map_err(|e| (e.status, e.message))?;
     let response = client
@@ -193,7 +196,7 @@ pub(crate) async fn close(
         .headers(upstream)
         .send()
         .await
-        .map_err(network_error)?;
+        .map_err(|error| network_error(&error))?;
     if response.status() != StatusCode::NO_CONTENT {
         return Err(error(response.status()));
     }
@@ -237,7 +240,7 @@ fn upstream_request(
         .map_err(|_| error(StatusCode::BAD_GATEWAY))?;
     request
         .headers_mut()
-        .insert("sec-websocket-protocol", PROTOCOL.parse().unwrap());
+        .insert("sec-websocket-protocol", HeaderValue::from_static(PROTOCOL));
     request.headers_mut().insert(
         "x-hc-user-ticket",
         headers
@@ -309,7 +312,7 @@ async fn relay(mut browser: WebSocket, base: String, session: String, headers: H
             message = browser.recv() => {
                 let message = match message {
                     Some(Ok(Message::Binary(bytes))) => UpstreamMessage::Binary(bytes),
-                    Some(Ok(Message::Text(text))) => match control(text.as_str()) { Some(text) => UpstreamMessage::Text(text.into()), None => { notify(&mut browser, false).await; break; } },
+                    Some(Ok(Message::Text(text))) => if let Some(text) = control(text.as_str()) { UpstreamMessage::Text(text.into()) } else { notify(&mut browser, false).await; break; },
                     Some(Ok(Message::Ping(_)|Message::Pong(_))) => continue,
                     _ => break,
                 };
@@ -410,7 +413,12 @@ mod tests {
                         assert_eq!(headers["x-catflap-request"], "1");
                         assert_eq!(body.session_id, SESSION);
                         assert_eq!((body.cols, body.rows), (91, 27));
-                        Json(body)
+                        Json(serde_json::json!({
+                            "session_id": body.session_id,
+                            "cols": body.cols,
+                            "rows": body.rows,
+                            "output_gap": true,
+                        }))
                     },
                 ),
             );

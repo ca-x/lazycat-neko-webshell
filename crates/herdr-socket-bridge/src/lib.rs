@@ -1,3 +1,5 @@
+//! Bounded, newline-delimited bridges to a target user's Herdr Unix socket.
+
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::fs::FileTypeExt;
@@ -10,11 +12,17 @@ pub const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_GRAPHICS_STREAM_HEADER_BYTES: usize = 64 * 1024;
 pub const MAX_GRAPHICS_STREAM_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
+/// Search hints supplied by the host when selecting a Herdr socket.
+#[derive(Clone, Copy, Debug)]
 pub struct SocketSearch<'a> {
     pub explicit: Option<&'a Path>,
     pub login_user: &'a str,
 }
 
+/// Locate an explicit socket or search the configured user homes.
+///
+/// # Errors
+/// Returns `NotFound` when an explicit path is not a socket or no socket is found.
 pub fn find_herdr_socket(search: SocketSearch<'_>) -> io::Result<PathBuf> {
     if let Some(explicit) = search.explicit {
         return require_unix_socket(explicit);
@@ -62,11 +70,19 @@ pub fn find_herdr_socket(search: SocketSearch<'_>) -> io::Result<PathBuf> {
     ))
 }
 
+/// Relay stdin and newline-delimited responses until the socket closes.
+///
+/// # Errors
+/// Returns connection or I/O errors, including oversized or incomplete responses.
 pub fn bridge_stdio(socket_path: &Path) -> io::Result<()> {
     let stream = UnixStream::connect(socket_path)?;
     bridge_with_io(stream, io::stdin(), io::stdout())
 }
 
+/// Send one newline-delimited stdin request and write one response to stdout.
+///
+/// # Errors
+/// Returns connection or I/O errors, including oversized or incomplete messages.
 pub fn request_stdio(socket_path: &Path) -> io::Result<()> {
     let stream = UnixStream::connect(socket_path)?;
     request_with_io(
@@ -221,6 +237,8 @@ pub struct LoginIdentity {
     pub gid: u32,
 }
 
+#[must_use]
+/// Resolve a login name using the system account database, then `/etc/passwd`.
 pub fn login_identity(login_user: &str) -> Option<LoginIdentity> {
     let login_user = login_user.trim();
     if login_user.is_empty() {
@@ -245,28 +263,27 @@ pub fn login_identity(login_user: &str) -> Option<LoginIdentity> {
     passwd_identity(&std::fs::read_to_string("/etc/passwd").ok()?, login_user)
 }
 
+#[must_use]
+/// Resolve the home directory of an existing login user.
 pub fn login_home(login_user: &str) -> Option<PathBuf> {
     login_identity(login_user).map(|identity| identity.home)
 }
 
 fn passwd_identity(passwd: &str, login_user: &str) -> Option<LoginIdentity> {
-    passwd
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split(':');
-            let username = fields.next()?;
-            let _password = fields.next()?;
-            let uid = fields.next()?.parse().ok()?;
-            let gid = fields.next()?.parse().ok()?;
-            let _gecos = fields.next()?;
-            let home = fields.next()?;
-            (username == login_user && !home.is_empty()).then(|| LoginIdentity {
-                home: PathBuf::from(home),
-                uid,
-                gid,
-            })
+    passwd.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        let username = fields.next()?;
+        let _password = fields.next()?;
+        let uid = fields.next()?.parse().ok()?;
+        let gid = fields.next()?.parse().ok()?;
+        let _gecos = fields.next()?;
+        let home = fields.next()?;
+        (username == login_user && !home.is_empty()).then(|| LoginIdentity {
+            home: PathBuf::from(home),
+            uid,
+            gid,
         })
-        .next()
+    })
 }
 
 #[cfg(test)]

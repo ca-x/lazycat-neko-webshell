@@ -71,7 +71,7 @@ async fn run(
                 mark_status(&status, "stopped");
                 return Ok(());
             },
-            _ = tokio::time::sleep(Duration::from_millis(250)) => {},
+            () = tokio::time::sleep(Duration::from_millis(250)) => {},
         }
         if forwarder.join().is_finished() {
             mark_status(&status, "stopped");

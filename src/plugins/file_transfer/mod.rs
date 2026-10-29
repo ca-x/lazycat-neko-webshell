@@ -43,79 +43,7 @@ impl RuntimePlugin for FileTransferPlugin {
                     data: request.payload,
                 },
                 "upload_begin" | "upload_chunk" | "upload_finish" | "upload_cancel" => {
-                    let owner = self
-                        .resource
-                        .files
-                        .authorize(&request.target)
-                        .await?
-                        .upload_owner();
-                    let value = match request.operation.as_str() {
-                        "upload_begin" => {
-                            let path = path()?;
-                            let name = metadata
-                                .get("name")
-                                .filter(|value| !value.trim().is_empty())
-                                .map_or_else(
-                                    || {
-                                        path.rsplit('/')
-                                            .find(|part| !part.is_empty())
-                                            .unwrap_or("upload")
-                                    },
-                                    String::as_str,
-                                );
-                            self.resource.uploads.begin(
-                                &owner,
-                                &path,
-                                name,
-                                number(metadata, "size")?,
-                            )
-                        }
-                        "upload_chunk" => self.resource.uploads.append(
-                            &owner,
-                            required(metadata, "uploadId")?,
-                            number(metadata, "offset")?,
-                            &request.payload,
-                        ),
-                        "upload_cancel" => self
-                            .resource
-                            .uploads
-                            .cancel(&owner, required(metadata, "uploadId")?),
-                        _ => {
-                            let upload = self
-                                .resource
-                                .uploads
-                                .finish(&owner, required(metadata, "uploadId")?)?;
-                            let mut reply = self
-                                .resource
-                                .files
-                                .execute(
-                                    &request.target,
-                                    FileOperation::Write {
-                                        path: upload.path,
-                                        data: upload.data,
-                                    },
-                                )
-                                .await?;
-                            reply.metadata.insert("operation".into(), "upload".into());
-                            return Ok(reply);
-                        }
-                    }
-                    .map_err(|error| transfer_error(error, &request.operation))?;
-                    let mut reply = InvokeReply::json(
-                        if request.operation == "upload_cancel" {
-                            "cancelled"
-                        } else {
-                            "uploading"
-                        },
-                        &value,
-                    )?;
-                    reply
-                        .metadata
-                        .insert("operation".into(), request.operation.clone());
-                    if request.operation == "upload_begin" {
-                        reply.metadata.insert("path".into(), path()?);
-                    }
-                    return Ok(reply);
+                    return self.upload(request).await;
                 }
                 _ => {
                     return Err(PluginError::invalid_argument(format!(
@@ -149,6 +77,83 @@ impl RuntimePlugin for FileTransferPlugin {
     }
 }
 
+impl FileTransferPlugin {
+    async fn upload(&self, request: InvokeRequest) -> Result<InvokeReply, PluginError> {
+        let metadata = &request.target.metadata;
+        let path = || required(metadata, "path").map(str::to_owned);
+        let owner = self
+            .resource
+            .files
+            .authorize(&request.target)
+            .await?
+            .upload_owner();
+        let value = match request.operation.as_str() {
+            "upload_begin" => {
+                let path = path()?;
+                let name = metadata
+                    .get("name")
+                    .filter(|value| !value.trim().is_empty())
+                    .map_or_else(
+                        || {
+                            path.rsplit('/')
+                                .find(|part| !part.is_empty())
+                                .unwrap_or("upload")
+                        },
+                        String::as_str,
+                    );
+                self.resource
+                    .uploads
+                    .begin(&owner, &path, name, number(metadata, "size")?)
+            }
+            "upload_chunk" => self.resource.uploads.append(
+                &owner,
+                required(metadata, "uploadId")?,
+                number(metadata, "offset")?,
+                &request.payload,
+            ),
+            "upload_cancel" => self
+                .resource
+                .uploads
+                .cancel(&owner, required(metadata, "uploadId")?),
+            _ => {
+                let upload = self
+                    .resource
+                    .uploads
+                    .finish(&owner, required(metadata, "uploadId")?)?;
+                let mut reply = self
+                    .resource
+                    .files
+                    .execute(
+                        &request.target,
+                        FileOperation::Write {
+                            path: upload.path,
+                            data: upload.data,
+                        },
+                    )
+                    .await?;
+                reply.metadata.insert("operation".into(), "upload".into());
+                return Ok(reply);
+            }
+        }
+        .map_err(|error| transfer_error(error, &request.operation))?;
+        let mut reply = InvokeReply::json(
+            if request.operation == "upload_cancel" {
+                "cancelled"
+            } else {
+                "uploading"
+            },
+            &value,
+        )?;
+        reply
+            .metadata
+            .insert("operation".into(), request.operation.clone());
+        if request.operation == "upload_begin" {
+            reply.metadata.insert("path".into(), path()?);
+        }
+        Ok(reply)
+    }
+}
+
 fn required<'a>(
     metadata: &'a std::collections::HashMap<String, String>,
     key: &str,
@@ -169,7 +174,7 @@ fn number(
         .map_err(|_| PluginError::invalid_argument(format!("metadata.{key} must be a number")))
 }
 fn transfer_error(error: PluginError, operation: &str) -> PluginError {
-    let message = error.to_string();
+    let message = error.message;
     if message.contains("file size is outside the supported transfer limit") {
         PluginError::invalid_argument(format!(
             "{message}; max upload size is {} MB",

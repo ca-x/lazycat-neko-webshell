@@ -192,10 +192,10 @@ impl Automatic {
 // Shell command-start marks can share a read with the first agent output.
 // The bounded startup buffer also handles marks split across PTY reads.
 fn command_output_tail(data: &[u8]) -> &[u8] {
+    const MARK: &[u8] = b"\x1b]133;C";
     if !data.contains(&0x1b) {
         return data;
     }
-    const MARK: &[u8] = b"\x1b]133;C";
     let mut start = 0;
     for (index, _) in data
         .windows(MARK.len())
@@ -383,7 +383,10 @@ mod tests {
         ] {
             assert_eq!(
                 w1::agents::identify_from_command(
-                    &argv.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                    &argv
+                        .iter()
+                        .map(std::string::ToString::to_string)
+                        .collect::<Vec<_>>(),
                     None
                 ),
                 Some(AgentKind::Codex)
