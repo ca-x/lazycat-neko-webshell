@@ -89,6 +89,8 @@ You can scroll back through terminal history. Desktop uses the mouse wheel. Mobi
 
 You can also adjust the terminal theme, font, font size, line height, cursor style, background image, opacity, and blur. The app theme and terminal theme are separate, so you can mix light and dark preferences.
 
+Six Ghostty palettes from [Inkstone](https://github.com/Konata9/inkstone) v0.3.4 are included: Xuanmo, Xuanmo Dimmed, Xuanzhi, Xuanzhi Dimmed, Canghai, and Qingci. Select an `Inkstone` entry from the recommended terminal themes without downloading or importing a file. Inkstone is MIT-licensed; its copyright and license notice ships with the app at `licenses/inkstone-0.3.4-LICENSE.txt`.
+
 ## Agent status in standard WebShell
 
 Native WebShell detects foreground coding agents such as Codex, Claude Code, OpenCode, and Gemini, including Node/npx wrappers. Tabs reuse Herdr's Agent icons, activity colors, and glyphs; selecting a tab jumps to the relevant pane. The tab tooltip shows progress, a blocked reason, and a summary.

@@ -88,6 +88,8 @@ Neko Webshell 支持多标签和分屏。每个标签可以有自己的终端窗
 
 你也可以调整终端主题、字体、字号、行高、光标样式、背景图、透明度和模糊效果。软件界面的配色和终端配色分开设置，深色和浅色使用习惯都可以照顾到。
 
+内置 [墨观 Inkstone](https://github.com/Konata9/inkstone) v0.3.4 的六套 Ghostty 配色：玄墨、玄墨 Dimmed、宣纸、宣纸 Dimmed、沧海和青瓷。在主题设置的推荐列表中选择对应的 `Inkstone` 主题即可使用，无需下载或导入。Inkstone 采用 MIT 许可，应用内附带其版权与许可声明（`licenses/inkstone-0.3.4-LICENSE.txt`）。
+
 ## 普通 WebShell 的 Agent 状态
 
 原生 WebShell 会自动识别当前前台运行的 Codex、Claude Code、OpenCode、Gemini 等 Agent，包括 Node/npx 等包装启动方式。标签复用 Herdr 的 Agent 图标、状态颜色和符号，点击标签可跳到对应窗格；标签提示显示进度、等待原因和摘要。

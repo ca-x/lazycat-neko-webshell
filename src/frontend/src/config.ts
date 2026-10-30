@@ -1,3 +1,4 @@
+import { INKSTONE_THEMES } from "./inkstone-themes.ts";
 import { DEFAULT_HC_HISTORY_LINES } from "./hc/settings.ts";
 import type { FontPreset, InterfaceStyleId, Settings, TerminalTheme } from "./types";
 import { DEFAULT_AI_PROVIDER } from "./plugins/ai-chat/settings/provider-profile-state";
@@ -75,6 +76,7 @@ export const THEMES: TerminalTheme[] = [
   },
   { id: "github-dark", label: "GitHub Dark", ghosttyName: "GitHub Dark", className: "theme-github-dark" },
   { id: "monokai", label: "Monokai", ghosttyName: "Monokai Classic", className: "theme-monokai" },
+  ...INKSTONE_THEMES,
   { id: "light", label: "Classic Light", ghosttyName: "Builtin Light", className: "theme-light" },
 ];
 
