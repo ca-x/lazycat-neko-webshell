@@ -30,6 +30,20 @@ The top area handles instance switching, new tabs, layout actions, and menus. Th
 
 Native WebShell sessions are held by an agent running inside the target instance. Browser refreshes, closing the WebShell page, and WebShell backend restarts should not stop a running shell program. When you reopen the page, the workspace is restored and recent output is replayed. If the target instance stops or the agent is killed, those sessions are lost.
 
+## Optional HC Backend
+
+HC is an optional persistent terminal backend, currently available only for LightOS target instances. Install **hc 0.1.14 or newer** on the target yourself and place the executable in the target login user's `$HOME/.local/bin`, `$HOME/bin`, `/usr/local/bin`, or `/usr/bin`. WebShell searches those directories in that order, rather than arbitrary PATH entries. WebShell does not install or update hc. Enabling HC does not replace the native Agent or change its version.
+
+Under **Settings → Terminal → Session backend**, select **HC (persistent terminal)** as the new tab backend, then create a new tab. HC appears only when the backend advertises it for the current target. SSH targets, remote clients, and MicroVMs are not supported yet. Native `webshell` remains the default. Backend selection affects new sessions only; existing tabs and panes keep their backend, and splits inherit the original pane's backend. A missing or incompatible hc produces an error instead of converting an HC session to native WebShell.
+
+**HC history lines**, in the same settings group, controls the scrollback requested on each attach. Its range is **0 to 10000**, with a default of **1000**; 0 requests no scrollback. Changes take effect on the next attach or reconnect without immediately reconnecting or restarting the process. The history control remains available for restored HC panes even if the current target temporarily stops advertising HC for new sessions. HC owns the terminal, screen, and scrollback. Reconnecting refreshes the current screen; disconnecting the browser only detaches it. Explicitly closing a pane ends its terminal.
+
+At HC session creation, **Restart sessions after provider restart** (`autoRestartSessions`) is saved as the session's `restartable` metadata and mapped to hc's `keep`. With retention enabled, `holder_lost`, `stopped_by_restart`, `server_stop`, `host_shutdown`, or `signaled` can trigger recovery and reconnection. hc restarts a shell; it does not rerun the original command. A real exit code (including 0) or an explicit terminal kill is always final. Signal termination without an exit code is also final when `keep` is not enabled.
+
+hc retains the final screen of a finished terminal. When reopening that session, WebShell reads a plain-text screen snapshot and history through `terminal.read`. The original ANSI colors and styling are not preserved, and the finished program is not rerun.
+
+HC Agent status uses only OSC 7501 reports sent by the program. It does not use native WebShell's foreground-process or screen inference; native detection keeps its existing behavior. HC does not use the native Agent's history recording, export, or recovery APIs, and terminal MCP session access is not available for HC yet. HC history lines controls attach-time scrollback display only. HC does not support native single-controller mode.
+
 ## Generic WebShell And SSH Backend
 
 The default runtime mode is `lightos`. It loads LightOS terminal initialization and shows LightOS Home, Herdr, LightOS port forwarding, and other LightOS-only entries. Generic deployments can use:
@@ -77,7 +91,7 @@ You can also adjust the terminal theme, font, font size, line height, cursor sty
 
 ## Agent status in standard WebShell
 
-Standard WebShell detects foreground coding agents such as Codex, Claude Code, OpenCode, and Gemini, including Node/npx wrappers. Tabs reuse Herdr's Agent icons, activity colors, and glyphs; selecting a tab jumps to the relevant pane. The tab tooltip shows progress, a blocked reason, and a summary.
+Native WebShell detects foreground coding agents such as Codex, Claude Code, OpenCode, and Gemini, including Node/npx wrappers. Tabs reuse Herdr's Agent icons, activity colors, and glyphs; selecting a tab jumps to the relevant pane. The tab tooltip shows progress, a blocked reason, and a summary.
 
 Native OSC 7501 reports and output from commands such as `w1 codex` take precedence over screen inference. Working, blocked (permission/question/auth), done, error, and clear records are supported. Returning to the shell clears the previous process's status. Reconnection restores the current table without answering historical probes. Screen rules can depend on the Agent CLI version; native reports are more precise.
 
@@ -206,7 +220,8 @@ A compact dialog shows the random file name and full path, with buttons to inser
 Settings include:
 
 - App language and interface style.
-- Default terminal type for new tabs: native WebShell, Herdr, or zellij.
+- Default terminal type for new tabs: native WebShell, HC, Herdr, zellij, or SSH, according to target availability.
+- HC history lines on attach (0 to 10000, default 1000).
 - Terminal theme, font, font size, line height, and cursor.
 - Programming ligatures, font hinting, and terminal effects.
 - Terminal background image, opacity, and blur.

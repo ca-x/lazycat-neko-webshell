@@ -108,6 +108,9 @@ export function defaultTabDisplayName(tab: TerminalTab, tabs: TerminalTab[], tr:
   if (tab.panes.some((pane) => pane.sessionBackend === "webshell")) {
     return tr("tab.terminalSession", { index: tabBackendOrdinal(tab, tabs, "webshell") });
   }
+  if (tab.panes.some((pane) => pane.sessionBackend === "hc")) {
+    return `HC ${tabBackendOrdinal(tab, tabs, "hc")}`;
+  }
   if (tab.panes.some((pane) => pane.sessionBackend === "ssh")) {
     return `SSH ${tabBackendOrdinal(tab, tabs, "ssh")}`;
   }

@@ -306,6 +306,9 @@ impl CapabilityService for CapabilityServiceImpl {
                 ..Default::default()
             });
         }
+        crate::workspace::prepare_close_session(&self.state, &session_id)
+            .await
+            .map_err(|error| ConnectError::internal(error.to_string()))?;
         match close_workspace_session(&self.state, &session_id) {
             Ok(closed) => {
                 self.state

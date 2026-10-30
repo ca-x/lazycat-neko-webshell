@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { canConnectPane } from "./pane-reconnect-policy.ts";
 import { createPaneConnectionLifecycle } from "./pane-connection-lifecycle.ts";
 
 function pane() {
@@ -12,7 +13,7 @@ function pane() {
   };
 }
 
-function setup(online) {
+function setup(online, overrides = {}) {
   const statuses = [];
   const timers = [];
   let connects = 0;
@@ -30,6 +31,7 @@ function setup(online) {
       return timers.length;
     },
     clearTimer: () => undefined,
+    ...overrides,
   });
   return { lifecycle, statuses, timers, connects: () => connects };
 }
@@ -54,4 +56,27 @@ test("projects connection lifecycle states and clears retry state on success", (
   subject.lifecycle.markConnected(target);
   assert.equal(target.connectionState, "connected");
   assert.deepEqual(subject.statuses.at(-1), ["status.shellReady", "ok"]);
+});
+
+test("HC retries transport before ready without native auto-restart but stops on final exit", () => {
+  for (const online of [true, false]) {
+    for (const status of [undefined, "starting", "stopped", "exited"]) {
+      const target = { ...pane(), sessionId: "hc-id", sessionBackend: "hc", sessionStatus: status,
+        hasConnected: false, processExitObserved: false, exited: status === "exited" };
+      const subject = setup(online, { canConnect: pane => canConnectPane(pane, false) });
+      subject.lifecycle.scheduleReconnect(target);
+      assert.equal(subject.timers.length, 1);
+      assert.equal(subject.timers[0].delay, online ? 800 : 5000);
+      subject.timers[0].callback();
+      assert.equal(subject.connects(), 1);
+      target.processExitObserved = true;
+      subject.lifecycle.scheduleReconnect(target);
+      assert.equal(subject.timers.length, 1);
+    }
+  }
+  const native = { ...pane(), sessionStatus: "starting" };
+  const subject = setup(true);
+  subject.lifecycle.scheduleReconnect(native);
+  assert.equal(subject.timers.length, 0);
+  assert.equal(native.connectionState, "idle");
 });

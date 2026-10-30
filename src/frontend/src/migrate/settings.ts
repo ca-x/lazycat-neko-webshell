@@ -1,3 +1,4 @@
+import { normalizeHcHistoryLines } from "../hc/settings.ts";
 import { DEFAULT_SETTINGS, INTERFACE_STYLE_IDS, MAX_CUSTOM_THEME_SOURCE_BYTES, MAX_OUTPUT_BUFFER_LIMIT, MIN_OUTPUT_BUFFER_LIMIT } from "../config";
 import { normalizeBooleanSetting } from "../boolean-setting";
 import { normalizeMobileQuickPhrases } from "../mobile/quick-input";
@@ -13,7 +14,8 @@ import {
 } from "../plugins/ai-chat/voice-speech-profiles";
 import { normalizeFontHintTarget } from "../terminal-fonts/options";
 import { normalizeTerminalShaderEffect } from "../terminal-shaders/options";
-import type { AiProviderProfile, CustomTerminalTheme, InterfaceStyleId, SessionBackendId, Settings } from "../types";
+import type { AiProviderProfile, CustomTerminalTheme, InterfaceStyleId, Settings } from "../types";
+import { normalizeSessionMode as normalizeSessionBackendId } from "../session-backends.ts";
 import { clampNumber } from "../utils";
 
 export function migrateSettings(value: Partial<Settings>): Settings {
@@ -92,6 +94,7 @@ export function migrateSettings(value: Partial<Settings>): Settings {
       clampNumber(value.sshConfigBackupLimit, 1, 100, DEFAULT_SETTINGS.sshConfigBackupLimit),
     ),
     defaultSessionBackend: normalizeSessionBackendId(value.defaultSessionBackend),
+    hcHistoryLines: normalizeHcHistoryLines(value.hcHistoryLines),
     instanceTabDisplay: value.instanceTabDisplay === "by-instance" ? "by-instance" : "combined",
     terminalSingleControllerMode: value.terminalSingleControllerMode ?? DEFAULT_SETTINGS.terminalSingleControllerMode,
     terminalBlurObservers: value.terminalBlurObservers ?? DEFAULT_SETTINGS.terminalBlurObservers,
@@ -185,10 +188,6 @@ function normalizeActiveAiProviderProfileId(value: unknown, profiles: AiProvider
   const id = typeof value === "string" ? value : "";
   if (profiles.some((profile) => profile.id === id)) return id;
   return profiles[0]?.id ?? "";
-}
-
-function normalizeSessionBackendId(value: unknown): SessionBackendId {
-  return value === "herdr" || value === "zellij" || value === "ssh" ? value : DEFAULT_SETTINGS.defaultSessionBackend;
 }
 
 function normalizeHexColor(value: unknown, fallback: string): string {

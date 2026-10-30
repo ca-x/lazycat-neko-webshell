@@ -5,7 +5,9 @@ export type TerminalServerEvent =
   | { type: "error"; message?: string; fatal?: boolean; retryable?: boolean }
   | {
     type: "process-exit";
-    exit_code?: number;
+    exit_code?: number | null;
+    signal?: string | number | null;
+    reason?: string | null;
     message?: string;
     technical_message?: string;
     error_code?: string;

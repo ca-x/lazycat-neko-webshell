@@ -83,3 +83,24 @@ test("allows handoff recovery after the observed-exit latch is cleared", () => {
     closing: false,
   }, false), true);
 });
+
+test("HC real exits remain final even with auto-restart and stale running state", () => {
+  const pane = { sessionId: "hc-session", sessionBackend: "hc", sessionStatus: "running", processExitObserved: true };
+  assert.equal(canConnectPane(pane, true), false);
+  assert.equal(shouldConnectRestoredPane(pane, true), false);
+  assert.equal(canConnectPane({ ...pane, processExitObserved: false }, false), true);
+});
+
+test("restored exited HC attaches for its final screen until a real exit is observed", () => {
+  for (const autoRestart of [false, true]) {
+    const pane = { sessionId: "hc-final", sessionBackend: "hc", sessionStatus: "exited", exited: true, processExitObserved: false };
+    assert.equal(shouldConnectRestoredPane(pane, autoRestart), true);
+    assert.equal(canConnectPane(pane, autoRestart), true);
+    pane.processExitObserved = true;
+    assert.equal(shouldConnectRestoredPane(pane, autoRestart), false);
+    assert.equal(canConnectPane(pane, autoRestart), false);
+    assert.equal(shouldConnectRestoredPane({ ...pane, sessionStatus: "running", exited: false }, autoRestart), false);
+  }
+  assert.equal(shouldConnectRestoredPane({ sessionBackend: "hc", sessionId: "id", sessionStatus: "closed" }, true), false);
+  assert.equal(shouldConnectRestoredPane({ sessionBackend: "hc", sessionStatus: "exited" }, true), false);
+});

@@ -193,7 +193,7 @@ export type HerdrRuntimeGuardState = {
 
 export type HerdrAction = "focus_workspace" | "focus_tab" | "focus_pane" | "create_tab" | "close_workspace" | "create_workspace";
 
-export type SessionBackendId = "webshell" | "herdr" | "zellij" | "ssh";
+export type SessionBackendId = "webshell" | "hc" | "herdr" | "zellij" | "ssh";
 
 export type SessionBackendInfo = {
   id: SessionBackendId;
@@ -426,6 +426,7 @@ export type Settings = {
   outputBufferLimit: number;
   sshConfigBackupLimit: number;
   defaultSessionBackend: SessionBackendId;
+  hcHistoryLines: number;
   instanceTabDisplay: "combined" | "by-instance";
   terminalSingleControllerMode: boolean;
   terminalBlurObservers: boolean;

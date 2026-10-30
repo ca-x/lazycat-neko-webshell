@@ -90,3 +90,37 @@ test("pending identity recovery survives passive snapshots and is replayed by th
   f.apply(snapshot());
   assert.equal(p.workspaceRefreshPending, false); assert.deepEqual(f.replayed, [p]);
 });
+
+test("HC restoration pins server reply authority and reuses its own session", () => {
+  const f = fixture();
+  const state = snapshot([{ ...pane("p1"), session_backend: "hc" }]);
+  const [tab] = f.apply(state);
+  const restored = tab.panes[0];
+  assert.equal(restored.sessionBackend, "hc");
+  assert.equal(restored.terminalReplyAuthority, "server");
+  f.apply(state);
+  assert.equal(tab.panes[0], restored);
+  assert.equal(f.disposed.length, 0);
+});
+
+test("unknown restored backend fails closed instead of spawning native", () => {
+  const f = fixture();
+  assert.throws(() => f.apply(snapshot([{ ...pane("p1"), session_backend: "future" }])));
+});
+
+test("HC can restore an exited session without ever authorizing a command restart", () => {
+  const f = fixture();
+  const state = snapshot([{ ...pane("p1"), session_backend: "hc", status: "exited" }]);
+  const [tab] = f.apply(state);
+  const restored = tab.panes[0];
+  assert.equal(restored.sessionBackend, "hc");
+  assert.equal(restored.exited, true);
+  assert.equal(f.lifetime.mayRestart(restored), false);
+  f.lifetime.markPassive(restored, true);
+  assert.equal(f.lifetime.mayRestart(restored), false);
+  f.lifetime.markPassive(restored, false);
+  assert.equal(f.lifetime.mayRestart(restored), false);
+  f.apply(state);
+  assert.equal(tab.panes[0], restored);
+  assert.equal(f.lifetime.mayRestart(restored), false);
+});

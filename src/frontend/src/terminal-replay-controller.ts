@@ -1,3 +1,4 @@
+import { resetHcTerminalForReplay } from "./hc/backend.ts";
 import type { TerminalTraceHook } from "./diagnostics/terminal-trace.ts";
 import type { TerminalPane } from "./types.ts";
 import {
@@ -66,6 +67,7 @@ export function createTerminalReplayController(options: TerminalReplayController
 
   function validate(pane: TerminalPane, socket?: WebSocket, timeoutMs = 30_000): void {
     const state = replaceState(pane, socket, timeoutMs, true);
+    resetHcTerminalForReplay(pane);
     options.trace?.(pane, "replay-validated");
     queueFlush(pane, state);
   }

@@ -33,7 +33,9 @@ export function shouldConnectRestoredPane(
   autoRestart: boolean,
 ): boolean {
   if (!pane.sessionId || pane.sessionStatus === "closed") return false;
-  if (pane.sessionBackend === "herdr") {
+  // Persistent backends can attach to a finished terminal for its final screen.
+  // Only an observed process-exit closes this renderer's attach lifecycle.
+  if (pane.sessionBackend === "herdr" || pane.sessionBackend === "hc") {
     return pane.processExitObserved !== true;
   }
   if (pane.sessionStatus === "exited") return false;
@@ -52,7 +54,7 @@ export function canConnectPane(
   autoRestart: boolean,
 ): boolean {
   if (pane.closing || pane.fatalErrorObserved === true || !pane.sessionId) return false;
-  if (pane.sessionBackend === "herdr" && pane.processExitObserved === true) {
+  if ((pane.sessionBackend === "herdr" || pane.sessionBackend === "hc") && pane.processExitObserved === true) {
     return false;
   }
   return pane.exited !== true || shouldConnectRestoredPane(pane, autoRestart);

@@ -85,6 +85,7 @@ export function createPaneConnectionLifecycle(options: PaneConnectionLifecycleOp
       pane.sessionStatus !== "running"
       && !options.autoRestartEnabled()
       && !options.isHerdr(pane)
+      && pane.sessionBackend !== "hc"
     ) {
       markIdle(pane);
       return;

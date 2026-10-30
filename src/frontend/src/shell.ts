@@ -1,3 +1,4 @@
+import { renderHcHistorySettings } from "./hc/settings-view.ts";
 import { renderSettingsNavigation, renderSettingsSectionIntro } from "./settings/navigation-view";
 import "./diagnostics/settings.css";
 import { renderTerminalDiagnosticsSettings } from "./diagnostics/settings-view";
@@ -86,6 +87,8 @@ export type ShellElements = {
   interfaceStyleSelect: HTMLSelectElement;
   sessionBackendSettings: HTMLDivElement;
   defaultSessionBackend: HTMLSelectElement;
+  hcHistorySettings: HTMLDivElement;
+  hcHistoryLines: HTMLInputElement;
   instanceTabDisplay: HTMLSelectElement;
   sessionBackendHelp: HTMLParagraphElement;
   sshProfileSettings: HTMLDivElement;
@@ -388,7 +391,8 @@ export function renderShell(app: HTMLElement): ShellElements {
                     <option value="webshell" data-i18n="backend.webshell">WebShell native</option>
                   </select>
                 </label>
-                <p id="sessionBackendHelp" class="settings-help" data-i18n="setting.defaultSessionBackendHelp">The + button uses this backend. If Herdr already has an engine pane, + creates a new Herdr workspace inside that session.</p>
+                ${renderHcHistorySettings()}
+                <p id="sessionBackendHelp" class="settings-help" data-i18n="setting.defaultSessionBackendHelp">Applies to new sessions only; existing sessions keep their backend. HC requires an installed hc on a LightOS target. The + button uses this backend. If Herdr already has an engine pane, + creates a new Herdr workspace inside that session.</p>
               </div>
               <label class="field">
                 <span data-i18n="field.instanceTabDisplay">Instance tabs</span>
@@ -643,6 +647,8 @@ export function renderShell(app: HTMLElement): ShellElements {
     interfaceStyleSelect: qs<HTMLSelectElement>("#interfaceStyleSelect"),
     sessionBackendSettings: qs<HTMLDivElement>("#sessionBackendSettings"),
     defaultSessionBackend: qs<HTMLSelectElement>("#defaultSessionBackend"),
+    hcHistorySettings: qs<HTMLDivElement>("#hcHistorySettings"),
+    hcHistoryLines: qs<HTMLInputElement>("#hcHistoryLines"),
     instanceTabDisplay: qs<HTMLSelectElement>("#instanceTabDisplay"),
     sessionBackendHelp: qs<HTMLParagraphElement>("#sessionBackendHelp"),
     sshProfileSettings: qs<HTMLDivElement>("#sshProfileSettings"),

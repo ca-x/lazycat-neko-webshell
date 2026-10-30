@@ -1,3 +1,4 @@
+import { hcAttachOptions } from "./hc/backend.ts";
 import type { TerminalThemeSocketColors } from "./terminal-theme-wire";
 
 export type WebshellSocketUrlOptions = {
@@ -12,10 +13,12 @@ export type WebshellSocketUrlOptions = {
   outputLimit: number;
   terminalReplyAuthority: "client" | "server";
   controlMode?: "single";
+  hcHistoryLines?: number;
   theme?: TerminalThemeSocketColors;
 };
 
 export function webshellTerminalSocketUrl(options: WebshellSocketUrlOptions): URL {
+  options = hcAttachOptions(options);
   const url = new URL("./ws/terminal", window.location.href);
   url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("backend", options.sessionBackend || "webshell");
@@ -26,6 +29,9 @@ export function webshellTerminalSocketUrl(options: WebshellSocketUrlOptions): UR
     }
   } else {
     url.searchParams.set("session_id", options.sessionId);
+  }
+  if (options.sessionBackend === "hc") {
+    url.searchParams.set("hc_history_lines", String(options.hcHistoryLines));
   }
   url.searchParams.set("pane_id", options.paneId);
   url.searchParams.set("cols", String(options.cols));

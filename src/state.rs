@@ -377,6 +377,7 @@ pub fn session_command_for_backend_id(
     backend_id: &str,
 ) -> (String, Vec<String>) {
     match backend_id {
+        "hc" => ("hc".to_owned(), Vec::new()),
         "herdr" => program_session_command_for_user(selector, login_user, herdr_launch_script()),
         "zellij" => {
             program_session_command_for_user(selector, login_user, &zellij_launch_script(selector))
@@ -420,6 +421,10 @@ pub fn sync_session_login_user(session: &mut SessionRecord, login_user: &str) ->
         .get(METADATA_SESSION_BACKEND)
         .map_or("webshell", String::as_str)
         .to_owned();
+    // HC's saved login is part of its core scope, not a refreshable launch default.
+    if backend_id == "hc" {
+        return false;
+    }
     let mut changed = false;
     if backend_id != "ssh" {
         let (command, args) =
@@ -865,6 +870,86 @@ mod tests {
         assert!(!script.contains(
             "setpriv --reuid \"$uid\" --regid \"$gid\" --init-groups \"$__webshell_shell\""
         ));
+    }
+
+    #[test]
+    fn startup_preserves_hc_identity_without_a_native_launch_command() {
+        let metadata = HashMap::from([
+            ("sessionBackend".to_owned(), "hc".to_owned()),
+            (METADATA_LOGIN_USER.to_owned(), "alice".to_owned()),
+            ("hcAddress".to_owned(), "t7".to_owned()),
+            ("hcCoreId".to_owned(), "saved-core".to_owned()),
+            ("hcCreationAttempted".to_owned(), "true".to_owned()),
+        ]);
+        let session = SessionRecord {
+            id: "hc-session".into(),
+            host: "demo".into(),
+            selector: "demo@owner".into(),
+            status: "running".into(),
+            cols: 80,
+            rows: 24,
+            command: String::new(),
+            args: vec![],
+            metadata: metadata.clone(),
+        }
+        .normalize_for_startup();
+        assert_eq!(session.command, "hc");
+        assert!(session.args.is_empty());
+        assert_eq!(session.status, "stopped");
+        for (key, value) in metadata {
+            assert_eq!(session.metadata.get(&key), Some(&value));
+        }
+    }
+
+    #[test]
+    fn sync_session_login_user_cannot_relabel_hc_identity() {
+        for saved_login in [Some("alice"), None] {
+            let mut session = test_session("hc-session", "running", Some(false));
+            session.command = "hc".to_owned();
+            session.args.clear();
+            session
+                .metadata
+                .insert("sessionBackend".into(), "hc".into());
+            session.metadata.insert("hcAddress".into(), "t7".into());
+            session
+                .metadata
+                .insert("hcCoreId".into(), "saved-core".into());
+            session
+                .metadata
+                .insert("hcCreationAttempted".into(), "true".into());
+            if let Some(login) = saved_login {
+                session
+                    .metadata
+                    .insert(METADATA_LOGIN_USER.into(), login.into());
+            }
+            let before = serde_json::to_value(&session).unwrap();
+            for login in ["bob", "", "alice", " bob "] {
+                assert!(!sync_session_login_user(&mut session, login));
+                assert_eq!(
+                    serde_json::to_value(&session).unwrap(),
+                    before,
+                    "HC metadata and command must remain unchanged for login {login:?}"
+                );
+            }
+            let normalized = session.normalize_for_startup();
+            assert_eq!(normalized.command, "hc");
+            assert!(normalized.args.is_empty());
+            assert_eq!(
+                normalized
+                    .metadata
+                    .get(METADATA_LOGIN_USER)
+                    .map(String::as_str),
+                saved_login
+            );
+            assert_eq!(
+                normalized.metadata.get("hcAddress").map(String::as_str),
+                Some("t7")
+            );
+            assert_eq!(
+                normalized.metadata.get("hcCoreId").map(String::as_str),
+                Some("saved-core")
+            );
+        }
     }
 
     #[test]

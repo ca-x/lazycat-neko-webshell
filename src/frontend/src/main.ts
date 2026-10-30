@@ -362,13 +362,18 @@ import { activateFontPanel, activateSettingsPanel, bindSettingsTabControls } fro
 import {
   normalizeSessionMode,
   preferredAvailableBackend,
+  resolveNewSessionBackend,
+  HcBackendUnavailableError,
   renderSessionBackendSelectOptions,
   selectableSessionBackends,
   sessionBackendInstalled,
   sessionBackendIsSelectable,
   sessionBackendLabel,
+  sessionBackendSupportsLocalSplit,
   type SessionMode,
 } from "./session-backends";
+import { normalizeHcHistoryLines } from "./hc/settings";
+import { hcHistorySettingsVisible, syncHcHistorySettings } from "./hc/settings-view";
 import { renderShell } from "./shell";
 import { createSshNewTabMenuController } from "./ssh-backend/new-tab-menu";
 import { createSshProfileSettingsController } from "./ssh-backend/settings-controller";
@@ -447,6 +452,7 @@ import {
   terminalAppearanceContext,
 } from "./terminal-appearance";
 import { MAX_PENDING_INPUT_BYTES, monotonicSequence, parseTerminalServerMessage } from "./terminal-protocol";
+import { observeTerminalProcessExit } from "./terminal-process-exit";
 import { createTerminalReplayController } from "./terminal-replay-controller";
 import { matchesTerminalReplayIdentity } from "./terminal-replay-identity";
 import {
@@ -1660,6 +1666,11 @@ function bindSettings() {
     settings.defaultSessionBackend = sessionBackendIsSelectable(sessionBackendsState, backend) ? backend : "webshell";
     saveSettings();
     applySettings();
+  });
+  elements.hcHistoryLines.addEventListener("change", () => {
+    settings.hcHistoryLines = normalizeHcHistoryLines(elements.hcHistoryLines.value);
+    elements.hcHistoryLines.value = String(settings.hcHistoryLines);
+    saveSettings();
   });
   elements.instanceTabDisplay.addEventListener("change", () => {
     settings.instanceTabDisplay = elements.instanceTabDisplay.value === "by-instance" ? "by-instance" : "combined";
@@ -3441,11 +3452,16 @@ function currentTheme(): TerminalTheme {
 
 function updateSessionBackendSettings() {
   const selectable = selectableSessionBackends(sessionBackendsState);
+  const hasHcHistorySettings = hcHistorySettingsVisible(
+    selectable.some((backend) => backend.id === "hc"), allPanes(), selectedSelector,
+  );
+  syncHcHistorySettings(elements, settings, hasHcHistorySettings);
   const hasOptionalBackend = selectable.some((backend) => backend.id !== "webshell");
   const hasHerdr = runtimeInfo.lightosFeaturesEnabled
     && !isRemoteClientSelector(selectedSelector)
     && selectable.some((backend) => backend.id === "herdr");
-  elements.sessionBackendSettings.hidden = !hasOptionalBackend;
+  elements.sessionBackendSettings.hidden = !hasOptionalBackend && !hasHcHistorySettings
+    && settings.defaultSessionBackend !== "hc";
   elements.herdrHighlightSettings.hidden = !hasHerdr;
   elements.herdrNotificationSettings.hidden = !hasHerdr;
   elements.herdrActiveBackgroundDark.value = normalizeHexColorInput(
@@ -3456,15 +3472,8 @@ function updateSessionBackendSettings() {
     settings.herdrActiveBackgroundLight,
     DEFAULT_SETTINGS.herdrActiveBackgroundLight,
   );
-  if (!hasOptionalBackend) {
-    elements.defaultSessionBackend.innerHTML = renderSessionBackendSelectOptions(selectable, tr);
-    elements.defaultSessionBackend.value = "webshell";
-    renderNewTabMenu();
-    updateHerdrWorkspaceEntry();
-    return;
-  }
   const selected = preferredAvailableBackend(sessionBackendsState, settings.defaultSessionBackend);
-  elements.defaultSessionBackend.innerHTML = renderSessionBackendSelectOptions(selectable, tr);
+  elements.defaultSessionBackend.innerHTML = renderSessionBackendSelectOptions(selectable, tr, selected);
   elements.defaultSessionBackend.value = selected;
   renderNewTabMenu();
   updateHerdrWorkspaceEntry();
@@ -4352,7 +4361,7 @@ function appendAIContext(pane: TerminalPane, text: string) {
   if (!text) return;
   pane.aiContextText = appendAIContextText(pane.aiContextText, text);
   updateAIContextLcd(pane);
-  if (pane.sessionBackend === "webshell") {
+  if (pane.sessionBackend === "webshell" || pane.sessionBackend === "hc") {
     observeWorkingDirectory(pane, text);
   }
 }
@@ -5494,6 +5503,7 @@ async function applyWorkspaceState(workspace: WorkspaceState, options: ApplyWork
         && !pane.socket && !pane.hasConnected) connectPanePty(pane);
     }
   } else connectWorkspacePanes();
+  updateSessionBackendSettings();
   scheduleTerminalSizeRefresh();
   return true;
 }
@@ -5616,10 +5626,8 @@ async function createTerminalTab(
   requestedMode?: SessionMode,
   options: { label?: string } = {},
 ): Promise<TerminalTab | undefined> {
-  const mode = requestedMode && sessionBackendIsSelectable(sessionBackendsState, requestedMode)
-    ? requestedMode
-    : preferredBackendForNewTab();
   try {
+    const mode = resolveNewSessionBackend(sessionBackendsState, preferredBackendForNewTab(), requestedMode);
     const remoteHerdr = isRemoteClientSelector(selector) && mode === "herdr";
     if (mode === "herdr" && !remoteHerdr) {
       const existing = findPaneBySessionBackend(selector, "herdr");
@@ -5642,17 +5650,17 @@ async function createTerminalTab(
     }
     return activeTab();
   } catch (error) {
-    setGlobalStatus(tr("status.connectFailed", { message: errorMessage(error) }), "error");
+    setGlobalStatus(error instanceof HcBackendUnavailableError
+      ? tr("status.hcUnavailable")
+      : tr("status.connectFailed", { message: errorMessage(error) }), "error");
     return undefined;
   }
 }
 
 function preferredBackendForNewTab(): SessionMode {
-  if (isSshSelector(selectedSelector) && (!sessionBackendsState || sessionBackendIsSelectable(sessionBackendsState, "ssh"))) {
-    return "ssh";
-  }
-  const preferred = normalizeSessionMode(settings.defaultSessionBackend);
-  return preferredAvailableBackend(sessionBackendsState, preferred);
+  return preferredAvailableBackend(
+    sessionBackendsState, normalizeSessionMode(settings.defaultSessionBackend), isSshSelector(selectedSelector),
+  );
 }
 
 function makeTab(selector: string, restoredId?: string): TerminalTab {
@@ -5789,7 +5797,7 @@ async function createPane(tab: TerminalTab, placement: SplitPlacement) {
     splitZellijPane(pane, placement);
     return;
   }
-  if (!pane || (pane.sessionBackend !== "webshell" && pane.sessionBackend !== "ssh")) {
+  if (!pane || !sessionBackendSupportsLocalSplit(pane.sessionBackend)) {
     if (pane) setBackendActionUnavailable(pane);
     return;
   }
@@ -5913,7 +5921,7 @@ async function mountTerminal(pane: TerminalPane) {
     scrollbackLimit: settings.scrollbackLimit,
     touchSelectionMode: settings.touchSelectionMode,
     transport,
-    forwardTerminalReplies: pane.terminalReplyAuthority !== "server",
+    forwardTerminalReplies: pane.sessionBackend !== "hc" && pane.terminalReplyAuthority !== "server",
     beforeInput: ({ text, source }) => transformMobileStickyInput(text, source),
     beforeRenderOutput: ({ text }) => { mobileExperience.observe(pane, text); return remoteClipboard.beforeRenderOutput(text); },
     contextMenuItems: () => nativePaneContextMenuItems({
@@ -6126,6 +6134,7 @@ async function openSocketPrepared(pane: TerminalPane) {
     after: replayAfter,
     outputLimit: settings.outputBufferLimit,
     terminalReplyAuthority: pane.terminalReplyAuthority,
+    hcHistoryLines: settings.hcHistoryLines,
     controlMode: attach.controlMode,
     theme: terminalThemeSocketColors(currentAppearanceContext().resttyTheme),
   });
@@ -6235,6 +6244,7 @@ function syncOutputBufferLimitToServer() {
 }
 
 function sendOutputBufferLimit(pane: TerminalPane) {
+  if (pane.sessionBackend === "hc") return;
   if (pane.socket?.readyState !== WebSocket.OPEN) return;
   pane.socket.send(webshellOutputBufferMessage(settings.outputBufferLimit));
 }
@@ -6346,7 +6356,7 @@ function handleServerText(pane: TerminalPane, text: string) {
         REPLAY_INPUT_LOCK_TIMEOUT_MS,
       ),
     );
-    pane.allowGeneratedInputDuringReplay = event.allow_generated_input === true;
+    pane.allowGeneratedInputDuringReplay = pane.sessionBackend !== "hc" && event.allow_generated_input === true;
   } else if (event.type === "error") {
     terminalTrace.record(pane, "error", undefined, "server");
     clearReplayInputLock(pane);
@@ -6371,9 +6381,8 @@ function handleServerText(pane: TerminalPane, text: string) {
       pane.socket?.close();
       return;
     }
-    pane.processExitObserved = true;
+    const exitMessage = observeTerminalProcessExit(pane, event, tr);
     paneConnectionLifecycle.markFatal(pane);
-    pane.exited = true;
     if (
       pane.sessionBackend === "herdr"
       && normalizeSelector(pane.selector) === normalizeSelector(selectedSelector)
@@ -6381,13 +6390,7 @@ function handleServerText(pane: TerminalPane, text: string) {
       void herdrRuntimeGuard.refresh();
     }
     clearPendingInput(pane);
-    pane.sessionStatus = "exited";
-    pane.transport?.notifyExit(event.exit_code ?? -1);
-    setPaneStatus(
-      pane,
-      event.message || tr("status.processExited", { code: event.exit_code ?? -1 }),
-      "error",
-    );
+    setPaneStatus(pane, exitMessage, "error");
     const tab = tabForPane(pane);
     if (tab) {
       const cleanup = () => exitedPaneCleanupController.handle({
@@ -6399,7 +6402,7 @@ function handleServerText(pane: TerminalPane, text: string) {
           selector: normalizeSelector(pane.selector),
           paneId: pane.workspacePaneId,
           recoveryId: pane.id,
-          exitCode: event.exit_code,
+          exitCode: event.exit_code ?? undefined,
         });
       } else {
         void cleanup();
@@ -7138,6 +7141,7 @@ function sendPaneBytes(pane: TerminalPane, bytes: Uint8Array): boolean {
 }
 
 function sendHistoryRecording(pane: TerminalPane, enabled: boolean) {
+  if (pane.sessionBackend === "hc") return;
   if (pane.socket?.readyState !== WebSocket.OPEN || pane.closing) return;
   pane.socket.send(webshellHistoryRecordingMessage(enabled));
 }

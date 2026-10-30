@@ -1,3 +1,4 @@
+import { DEFAULT_HC_HISTORY_LINES } from "./hc/settings.ts";
 import type { FontPreset, InterfaceStyleId, Settings, TerminalTheme } from "./types";
 import { DEFAULT_AI_PROVIDER } from "./plugins/ai-chat/settings/provider-profile-state";
 import { defaultAiVoiceProviderProfiles } from "./plugins/ai-chat/voice-profiles";
@@ -175,6 +176,7 @@ export const DEFAULT_SETTINGS: Settings = {
   outputBufferLimit: 4096,
   sshConfigBackupLimit: 10,
   defaultSessionBackend: "webshell",
+  hcHistoryLines: DEFAULT_HC_HISTORY_LINES,
   instanceTabDisplay: "combined",
   terminalSingleControllerMode: false,
   terminalBlurObservers: false,

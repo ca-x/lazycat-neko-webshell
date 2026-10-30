@@ -27,6 +27,7 @@ mod config;
 mod database;
 mod embedded_frontend;
 mod fonts;
+mod hc;
 mod herdr;
 mod herdr_machines;
 mod herdr_notifications;

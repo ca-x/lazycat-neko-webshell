@@ -63,9 +63,9 @@ export function paneReplayAfter(pane: PaneReplayCursor): number {
   const sequence = Number.isFinite(pane.lastOutputSequence)
     ? Math.max(0, Math.trunc(pane.lastOutputSequence))
     : 0;
-  return pane.sessionBackend === "herdr" ? 0 : sequence;
+  return (pane.sessionBackend === "herdr" || pane.sessionBackend === "hc") ? 0 : sequence;
 }
 
 export function resetPaneReplayCursorForNewRenderer(pane: PaneReplayCursor) {
-  if (pane.sessionBackend === "herdr") pane.lastOutputSequence = 0;
+  if (pane.sessionBackend === "herdr" || pane.sessionBackend === "hc") pane.lastOutputSequence = 0;
 }

@@ -1,8 +1,8 @@
 import type { MessageKey } from "../i18n";
 import type { TerminalServerEvent } from "../terminal-protocol";
 import type { Settings, TerminalPane, Tone } from "../types";
-import { webshellReleaseControlMessage, webshellTakeControlMessage } from "../webshell-backend";
-import { renderTerminalControlOverlayView } from "./overlay-view";
+import { webshellReleaseControlMessage, webshellTakeControlMessage } from "../webshell-backend.ts";
+import { renderTerminalControlOverlayView } from "./overlay-view.ts";
 
 type Translate = (key: MessageKey, values?: Record<string, string | number>) => string;
 
@@ -72,7 +72,7 @@ export function createTerminalControlController(deps: TerminalControlControllerD
   }
 
   function modeFor(pane: TerminalPane | undefined): ControlMode {
-    if (!enabled() || !paneSessionId(pane)) return "unknown";
+    if (!enabled() || pane?.sessionBackend === "hc" || !paneSessionId(pane)) return "unknown";
     const state = stateFor(pane);
     if (!state) return "unknown";
     return state.controller ? "controller" : "observer";
@@ -94,7 +94,7 @@ export function createTerminalControlController(deps: TerminalControlControllerD
 
   async function prepareAttach(pane: TerminalPane): Promise<AttachControlParams> {
     const size = localSize(pane);
-    if (!enabled() || !pane.sessionId) {
+    if (!enabled() || pane.sessionBackend === "hc" || !pane.sessionId) {
       return size;
     }
     return {
@@ -104,7 +104,7 @@ export function createTerminalControlController(deps: TerminalControlControllerD
   }
 
   async function takeControl(pane: TerminalPane | undefined = deps.activePane()): Promise<boolean> {
-    if (!enabled() || !pane?.sessionId || pane.socket?.readyState !== WebSocket.OPEN) return false;
+    if (!enabled() || pane?.sessionBackend === "hc" || !pane?.sessionId || pane.socket?.readyState !== WebSocket.OPEN) return false;
     const requestId = nextRequestId("take-control");
     try {
       setPendingRequest(pane, "take-control", requestId);
@@ -120,7 +120,7 @@ export function createTerminalControlController(deps: TerminalControlControllerD
   }
 
   async function releaseControl(pane: TerminalPane | undefined = deps.activePane()): Promise<boolean> {
-    if (!enabled() || !pane?.sessionId || pane.socket?.readyState !== WebSocket.OPEN) return false;
+    if (!enabled() || pane?.sessionBackend === "hc" || !pane?.sessionId || pane.socket?.readyState !== WebSocket.OPEN) return false;
     const requestId = nextRequestId("release-control");
     try {
       setPendingRequest(pane, "release-control", requestId);
@@ -140,7 +140,7 @@ export function createTerminalControlController(deps: TerminalControlControllerD
   }
 
   function canWrite(pane: TerminalPane | undefined, options: { report?: boolean } = {}): boolean {
-    if (!enabled()) return true;
+    if (!enabled() || pane?.sessionBackend === "hc") return true;
     if (modeFor(pane) === "controller") return true;
     if (options.report !== false) {
       deps.onStatus(deps.tr("status.terminalControlObserver"), "neutral");

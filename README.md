@@ -29,6 +29,20 @@ Neko Webshell 是浏览器里的 WebShell 工作台。它默认面向 LazyCat / 
 
 原生 WebShell 会话由目标实例内的后台 agent 持有。浏览器刷新、关闭 WebShell 页面，甚至 WebShell 后端重启后，正在运行的 shell 程序也会尽量保留；重新打开页面时会恢复工作区并回放最近输出。目标实例停止或 agent 被杀掉时，对应会话会丢失。
 
+## 可选 HC 后端
+
+HC 是可选的持久终端后端，当前仅支持 LightOS 目标实例。请先自行在目标实例安装 **hc 0.1.14 或更新版本**，可执行文件必须位于目标登录用户的 `$HOME/.local/bin`、`$HOME/bin`、`/usr/local/bin` 或 `/usr/bin`；WebShell 按这个固定顺序查找，不搜索任意 PATH 目录。WebShell 不会安装或更新 hc，启用 HC 也不会替换原生 Agent 或改变其版本。
+
+在「设置 → 终端 → 会话后端」中，将新建入口后端选为「HC（持久终端）」，再通过新建标签入口创建会话。HC 只在后端为当前目标提供该选项时显示；SSH、远程客户端和 MicroVM 暂不支持。默认仍为原生 `webshell`。后端选择只影响新会话，已有标签和窗格保留原后端，分屏继承原窗格的后端。HC 缺失或不兼容时会显示错误，不会将 HC 会话自动改成原生会话。
+
+同一设置组中的「HC 历史行数」控制每次连接时请求的回滚历史，范围为 **0 至 10000**，默认 **1000**；0 表示不请求回滚历史。修改后在下次连接或重连时生效，不会立即重连或重启进程。已有 HC 窗格时，即使当前目标暂时不再提供 HC 新建选项，仍可调整历史行数。HC 自己持有终端、屏幕和回滚历史；重新连接会刷新当前画面，浏览器断开只分离连接。显式关闭窗格会结束对应终端。
+
+创建 HC 会话时，「Provider 重启后自动恢复会话」（`autoRestartSessions`）会保存为该会话的 `restartable` 元数据，并映射到 hc 的 `keep`。开启保留后，`holder_lost`、`stopped_by_restart`、`server_stop`、`host_shutdown` 或 `signaled` 可触发恢复与重连；hc 重新启动的是 shell，不会重新执行原来的命令。真实退出码（包括 0）和显式结束终端始终表示最终退出；没有开启 `keep` 时，被信号终止且没有退出码也属于最终退出。
+
+hc 保留已结束终端的最终屏幕。重新打开这类会话时，WebShell 通过 `terminal.read` 读取纯文本屏幕快照和历史，不保留原来的 ANSI 颜色或样式，也不会重新运行已结束的程序。
+
+HC 的 Agent 状态仅使用程序主动发送的 OSC 7501 上报，不执行原生 WebShell 的前台进程或屏幕推断。原生 WebShell 的自动识别保持原有行为。HC 不接入原生 Agent 的历史记录、历史导出或恢复接口，也暂不提供终端 MCP 会话访问；HC 历史行数只用于连接时的回滚显示。HC 不支持原生的单控制者模式。
+
 ## 通用 WebShell 和 SSH 后端
 
 默认运行模式是 `lightos`，会加载 LightOS 终端初始化，并显示 LightOS Home、Herdr、LightOS 端口转发等入口。通用部署可以设置：
@@ -76,7 +90,7 @@ Neko Webshell 支持多标签和分屏。每个标签可以有自己的终端窗
 
 ## 普通 WebShell 的 Agent 状态
 
-普通 WebShell 会自动识别当前前台运行的 Codex、Claude Code、OpenCode、Gemini 等 Agent，包括 Node/npx 等包装启动方式。标签复用 Herdr 的 Agent 图标、状态颜色和符号，点击标签可跳到对应窗格；标签提示显示进度、等待原因和摘要。
+原生 WebShell 会自动识别当前前台运行的 Codex、Claude Code、OpenCode、Gemini 等 Agent，包括 Node/npx 等包装启动方式。标签复用 Herdr 的 Agent 图标、状态颜色和符号，点击标签可跳到对应窗格；标签提示显示进度、等待原因和摘要。
 
 原生 OSC 7501 和 `w1 codex` 等命令的上报优先于屏幕推断，支持工作、等待授权/回答/登录、完成、错误与清除状态。程序退出回到 shell 后清理对应状态；重连时恢复当前状态，不重新执行历史中的能力探测。屏幕规则可能受 Agent CLI 版本影响，原生上报更准确。
 
@@ -207,7 +221,8 @@ unzip -o /tmp/sounds.zip -d /lzcapp/var
 设置里可以调整：
 
 - 界面语言和界面风格。
-- 默认新建终端类型：原生 WebShell、Herdr 或 zellij。
+- 默认新建终端类型：原生 WebShell、HC、Herdr、zellij 或 SSH（按目标提供的选项显示）。
+- HC 连接时的历史行数（0 至 10000，默认 1000）。
 - 终端主题、字体、字号、行高、光标。
 - 编程连字、字体微调和终端特效。
 - 终端背景图、透明度和模糊效果。

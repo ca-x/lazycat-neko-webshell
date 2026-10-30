@@ -491,6 +491,14 @@ impl TerminalControlService {
                     })?;
             }
             ResolvedTarget::Native(_) => {
+                crate::workspace::prepare_close_session(&self.state, session_id)
+                    .await
+                    .map_err(|_| {
+                        TerminalMcpError::new(
+                            "BACKEND_OPERATION_FAILED",
+                            "Failed to confirm hc terminal termination",
+                        )
+                    })?;
                 let closed = close_workspace_session(&self.state, session_id)
                     .map_err(|error| map_workspace_error(&error))?;
                 self.state

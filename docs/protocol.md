@@ -26,6 +26,16 @@ input:<bytes>
 resize:<cols>,<rows>
 ```
 
+## HC terminal transport
+
+`/ws/terminal?backend=hc&session_id=...&pane_id=...&hc_history_lines=1000` attaches an existing provider-owned HC session on a LightOS target. The saved session and pane must match; selecting another backend cannot reinterpret the session. The target must already have a compatible `hc` executable. HC is launched as the authorized login user through non-PTY `lightosctl exec -i`, in a dedicated provider/selector/user scope.
+
+Each attach replaces the browser screen: `replay-start`, `ready`, and `replay-complete` identify the session, pane and selector before HC's ordered initial paint and live bytes. HC has no paint-end marker; its sequence is not a native output cursor. The browser suppresses generated terminal replies throughout the HC connection because HC owns probe responses. `hc_history_lines` is bounded to 0–10000. Finished sessions use `terminal.read` for a final plain-text snapshot, followed by `process-exit`; its `exit_code` may be null and its `signal` and `reason` preserve termination information.
+
+Program status is an app-owned replacement table from the atomic event subscription snapshot, followed by changed tables decoded from newline-delimited HC events. Event sequence numbers are scoped to the current core process. Missed events or transport loss require another attach and fresh snapshot. Credits acknowledge bounded WebSocket delivery, not renderer consumption.
+
+Creation intent, concrete terminal identity and confirmed-close tombstones live in a separate per-session SQLite journal, insulated from replaceable workspace/session snapshots. Intent is persisted before the single `terminal.run` request. Reconnect reconciles exact provider/session labels and the saved core/address, including finished terminals; an ambiguous creation result never repeats the command. Browser disconnect only detaches. Explicit close confirms `terminal.kill` or an already finished terminal before deleting local layout/session state. HC has no native history-export, terminal MCP or single-controller interface in this release.
+
 ## Control Plane
 
 `lazycat.webshell.v1.CapabilityService` owns typed control APIs:

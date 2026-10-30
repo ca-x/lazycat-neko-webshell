@@ -181,6 +181,7 @@ pub(crate) struct WorkspaceTerminalDefaults {
 #[serde(rename_all = "lowercase")]
 pub(crate) enum SessionBackend {
     Webshell,
+    Hc,
     Herdr,
     Zellij,
     Ssh,
@@ -401,7 +402,7 @@ fn merge_passive_workspace(state: &AppState, mut workspace: WorkspaceState) -> W
 pub async fn put_workspace_action(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(request): Json<WorkspaceActionRequest>,
+    Json(mut request): Json<WorkspaceActionRequest>,
 ) -> Response {
     let selector = request.name.trim().to_owned();
     let (cols, rows) = match request_size(request.cols, request.rows) {
@@ -426,6 +427,10 @@ pub async fn put_workspace_action(
     };
     let output_limit = normalize_output_frame_limit(request.output_limit);
     let auto_restart = request.auto_restart.unwrap_or(false);
+
+    if let Err(message) = inherit_session_backend(&state, &selector, &mut request) {
+        return (StatusCode::BAD_REQUEST, message).into_response();
+    }
 
     if !workspace_action_uses_legacy_store(&state, &selector, &request) {
         let action = match agent_action_from_workspace_request(&request) {
@@ -469,6 +474,9 @@ pub async fn put_workspace_action(
         Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
     };
 
+    if let Err(error) = prepare_hc_close_action(&state, &selector, &defaults, &mut request).await {
+        return bad_gateway(error.to_string());
+    }
     match apply_workspace_action(&state, &selector, &defaults, &request) {
         Ok((workspace, closed_sessions)) => {
             state
@@ -557,7 +565,12 @@ fn workspace_action_uses_legacy_store(
         return true;
     }
     match request.session_backend {
-        Some(SessionBackend::Herdr | SessionBackend::Zellij | SessionBackend::Ssh) => return true,
+        Some(
+            SessionBackend::Herdr
+            | SessionBackend::Zellij
+            | SessionBackend::Ssh
+            | SessionBackend::Hc,
+        ) => return true,
         Some(SessionBackend::Webshell) => return false,
         None => {}
     }
@@ -933,6 +946,14 @@ pub fn close_workspace_session(
         let mut sessions = state.sessions.write().map_err(|_| {
             WorkspaceSessionError::Internal("session store lock poisoned".to_owned())
         })?;
+        if sessions.get(session_id).is_some_and(|session| {
+            session.metadata.get("sessionBackend").map(String::as_str) == Some("hc")
+                && session.metadata.get("hcClosing").map(String::as_str) != Some("true")
+        }) {
+            return Err(WorkspaceSessionError::Internal(
+                "hc terminal termination must be confirmed before removing its session".to_owned(),
+            ));
+        }
 
         if let Some(selector) = workspace_selector_for_session(&workspaces, session_id) {
             let workspace = workspaces.get_mut(&selector).ok_or_else(|| {
@@ -963,6 +984,101 @@ pub fn close_workspace_session(
     })
 }
 
+fn inherit_session_backend(
+    state: &AppState,
+    selector: &str,
+    request: &mut WorkspaceActionRequest,
+) -> Result<(), String> {
+    let workspaces = state
+        .workspaces
+        .read()
+        .map_err(|_| "workspace store lock poisoned")?;
+    let Some(workspace) = workspaces.get(selector) else {
+        return Ok(());
+    };
+    let sessions = state
+        .sessions
+        .read()
+        .map_err(|_| "session store lock poisoned")?;
+    if let Some(backend) = workspace.action_backend(request, &sessions)? {
+        if request
+            .session_backend
+            .is_some_and(|explicit| explicit != backend)
+        {
+            return Err("session backend does not match the existing tab".to_owned());
+        }
+        // The tab owns its backend; a changed new-tab default cannot change a split.
+        request.session_backend = Some(backend);
+    }
+    Ok(())
+}
+
+async fn prepare_hc_close_action(
+    state: &Arc<AppState>,
+    selector: &str,
+    defaults: &WorkspaceTerminalDefaults,
+    request: &mut WorkspaceActionRequest,
+) -> anyhow::Result<()> {
+    if !matches!(
+        request.action,
+        WorkspaceAction::CloseTab | WorkspaceAction::ClosePane
+    ) {
+        return Ok(());
+    }
+    let to_close = {
+        let workspaces = state
+            .workspaces
+            .read()
+            .map_err(|_| anyhow::anyhow!("workspace store lock poisoned"))?;
+        let Some(workspace) = workspaces.get(selector) else {
+            return Ok(());
+        };
+        if request.tab_id.is_none() {
+            request.tab_id.clone_from(&workspace.active_tab_id);
+        }
+        let mut preview = workspace.clone();
+        let mut sessions = state
+            .sessions
+            .read()
+            .map_err(|_| anyhow::anyhow!("session store lock poisoned"))?
+            .clone();
+        let saved = sessions.clone();
+        let mut closed = Vec::new();
+        preview
+            .apply_action(request, &mut sessions, defaults, &mut closed)
+            .map_err(anyhow::Error::msg)?;
+        closed
+            .into_iter()
+            .filter_map(|id| saved.get(&id).cloned())
+            .filter(|session| {
+                session.metadata.get("sessionBackend").map(String::as_str) == Some("hc")
+            })
+            .collect::<Vec<_>>()
+    };
+    for session in to_close {
+        crate::hc::close(Arc::clone(state), &session).await?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn prepare_close_session(
+    state: &Arc<AppState>,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    let session = state
+        .sessions
+        .read()
+        .map_err(|_| anyhow::anyhow!("session store lock poisoned"))?
+        .get(session_id)
+        .cloned();
+    if let Some(session) = session
+        && session.metadata.get("sessionBackend").map(String::as_str) == Some("hc")
+    {
+        crate::hc::close(Arc::clone(state), &session).await?;
+    }
+    Ok(())
+}
+
 fn apply_workspace_action(
     state: &AppState,
     selector: &str,
@@ -977,6 +1093,16 @@ fn apply_workspace_action(
         let mut sessions = state.sessions.write().map_err(|_| {
             WorkspaceActionError::Internal("session store lock poisoned".to_owned())
         })?;
+        if let Some(workspace) = workspaces.get(selector) {
+            workspace
+                .validate_action_ownership_and_close(request, &sessions, defaults)
+                .map_err(WorkspaceActionError::BadRequest)?;
+        } else if !matches!(
+            request.action,
+            WorkspaceAction::CreateTab | WorkspaceAction::SetTabPinned
+        ) {
+            return Err(WorkspaceActionError::BadRequest("tab not found".to_owned()));
+        }
         let workspace = workspaces
             .entry(selector.to_owned())
             .or_insert_with(|| WorkspaceRecord::new(selector));
@@ -1123,6 +1249,135 @@ impl WorkspaceRecord {
             }
         }
         self.repair();
+        Ok(())
+    }
+
+    fn action_backend(
+        &self,
+        request: &WorkspaceActionRequest,
+        sessions: &HashMap<String, SessionRecord>,
+    ) -> Result<Option<SessionBackend>, String> {
+        if matches!(
+            request.action,
+            WorkspaceAction::CreateTab | WorkspaceAction::SetTabPinned
+        ) {
+            return Ok(None);
+        }
+        let tab_id = request.tab_id.as_ref().or(self.active_tab_id.as_ref());
+        let Some(tab) = self.tabs.iter().find(|tab| Some(&tab.id) == tab_id) else {
+            return Ok(None);
+        };
+        let mut owner = None;
+        for pane in &tab.panes {
+            let session = sessions
+                .get(&pane.session_id)
+                .ok_or("tab session is missing")?;
+            if session.selector != self.selector {
+                return Err("tab session selector does not match its workspace".to_owned());
+            }
+            let backend = match session
+                .metadata
+                .get("sessionBackend")
+                .map_or("webshell", String::as_str)
+            {
+                "webshell" => SessionBackend::Webshell,
+                "hc" => SessionBackend::Hc,
+                "herdr" => SessionBackend::Herdr,
+                "zellij" => SessionBackend::Zellij,
+                "ssh" => SessionBackend::Ssh,
+                _ => return Err("unknown existing session backend".to_owned()),
+            };
+            if owner.is_some_and(|owner| owner != backend) {
+                return Err("tab contains conflicting session backends".to_owned());
+            }
+            owner = Some(backend);
+        }
+        Ok(owner)
+    }
+
+    fn validate_action_ownership_and_close(
+        &self,
+        request: &WorkspaceActionRequest,
+        sessions: &HashMap<String, SessionRecord>,
+        defaults: &WorkspaceTerminalDefaults,
+    ) -> Result<(), String> {
+        if !matches!(
+            request.action,
+            WorkspaceAction::CreateTab | WorkspaceAction::SetTabPinned
+        ) {
+            let tab_id = self.request_tab_id(request)?;
+            if !self.tabs.iter().any(|tab| tab.id == tab_id) {
+                return Err("tab not found".to_owned());
+            }
+        }
+        if let Some(backend) = self.action_backend(request, sessions)?
+            && (request
+                .session_backend
+                .is_some_and(|explicit| explicit != backend)
+                || (request.action == WorkspaceAction::SplitPane
+                    && defaults.session_backend != backend))
+        {
+            return Err("session backend does not match the existing tab".to_owned());
+        }
+        if self.action_backend(request, sessions)? == Some(SessionBackend::Hc) {
+            let tab_id = self.request_tab_id(request)?;
+            let tab = self
+                .tabs
+                .iter()
+                .find(|tab| tab.id == tab_id)
+                .ok_or("tab not found")?;
+            if tab.panes.iter().any(|pane| {
+                sessions.get(&pane.session_id).is_some_and(|session| {
+                    session
+                        .metadata
+                        .get(METADATA_LOGIN_USER)
+                        .map_or("", String::as_str)
+                        != defaults.login_user
+                })
+            }) {
+                return Err("hc target login identity changed".to_owned());
+            }
+        }
+        if !matches!(
+            request.action,
+            WorkspaceAction::CloseTab | WorkspaceAction::ClosePane
+        ) {
+            return Ok(());
+        }
+        let tab_id = self.request_tab_id(request)?;
+        let tab = self
+            .tabs
+            .iter()
+            .find(|tab| tab.id == tab_id)
+            .ok_or("tab not found")?;
+        let pane_id = if request.action == WorkspaceAction::ClosePane {
+            let id = required_pane_id(request)?;
+            if !tab.panes.iter().any(|pane| pane.id == id) {
+                return Err("pane not found".to_owned());
+            }
+            Some(id)
+        } else {
+            None
+        };
+        // Called with both final mutation locks held. Check the current deletion set,
+        // including any panes added while remote termination was being confirmed.
+        for pane in tab
+            .panes
+            .iter()
+            .filter(|pane| pane_id.is_none_or(|id| pane.id == id))
+        {
+            let session = sessions
+                .get(&pane.session_id)
+                .ok_or("tab session is missing")?;
+            if session.metadata.get("sessionBackend").map(String::as_str) == Some("hc")
+                && session.metadata.get("hcClosing").map(String::as_str) != Some("true")
+            {
+                return Err(
+                    "hc terminal termination must be confirmed before removing its session"
+                        .to_owned(),
+                );
+            }
+        }
         Ok(())
     }
 
@@ -1318,15 +1573,15 @@ impl WorkspaceRecord {
             .find_tab_index(tab_id)
             .map(|(index, _)| index)
             .ok_or_else(|| "tab not found".to_owned())?;
-        if self.tabs[tab_index].panes.len() <= 1 {
-            return self.close_tab(tab_id, sessions, closed_sessions);
-        }
-        let tab = &mut self.tabs[tab_index];
-        let pane_index = tab
+        let pane_index = self.tabs[tab_index]
             .panes
             .iter()
             .position(|pane| pane.id == pane_id)
             .ok_or_else(|| "pane not found".to_owned())?;
+        if self.tabs[tab_index].panes.len() <= 1 {
+            return self.close_tab(tab_id, sessions, closed_sessions);
+        }
+        let tab = &mut self.tabs[tab_index];
         let removed = tab.panes.remove(pane_index);
         sessions.remove(&removed.session_id);
         closed_sessions.push(removed.session_id);
@@ -1652,6 +1907,11 @@ fn ensure_pane_session(
     defaults: &WorkspaceTerminalDefaults,
 ) -> bool {
     if let Some(session) = sessions.get_mut(&pane.session_id) {
+        // HC's login is part of its core scope. Keep it for attach's identity check;
+        // refreshing it here would redirect an existing session to another core.
+        if session.metadata.get("sessionBackend").map(String::as_str) == Some("hc") {
+            return false;
+        }
         return sync_session_login_user(session, &defaults.login_user);
     }
     sessions.insert(
@@ -1673,9 +1933,7 @@ fn session_record(
 fn session_backend_from_session(session: Option<&SessionRecord>) -> String {
     session
         .and_then(|session| session.metadata.get("sessionBackend"))
-        .map(String::as_str)
-        .filter(|backend| matches!(*backend, "webshell" | "herdr" | "zellij" | "ssh"))
-        .unwrap_or("webshell")
+        .map_or("webshell", String::as_str)
         .to_owned()
 }
 
@@ -1706,6 +1964,7 @@ fn session_record_with_metadata(
         "sessionBackend".to_owned(),
         match defaults.session_backend {
             SessionBackend::Webshell => "webshell",
+            SessionBackend::Hc => "hc",
             SessionBackend::Herdr => "herdr",
             SessionBackend::Zellij => "zellij",
             SessionBackend::Ssh => "ssh",
@@ -1743,6 +2002,13 @@ fn session_command_for_backend(
 ) -> Result<(String, Vec<String>), String> {
     match backend {
         SessionBackend::Webshell => Ok(default_session_command_for_user(selector, login_user)),
+        SessionBackend::Hc => {
+            if ssh_backend::is_ssh_selector(selector) || lightos_admin::is_client_selector(selector)
+            {
+                return Err("hc currently supports LightOS targets only".to_owned());
+            }
+            Ok(("hc".to_owned(), Vec::new()))
+        }
         SessionBackend::Herdr => Ok(session_command_for_backend_id(
             selector, login_user, "herdr",
         )),
@@ -2047,6 +2313,413 @@ enum WorkspaceActionError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn action_request(
+        action: &str,
+        tab: Option<&str>,
+        pane: Option<&str>,
+    ) -> WorkspaceActionRequest {
+        serde_json::from_value(serde_json::json!({
+            "name": "demo@owner", "action": action, "tab_id": tab, "pane_id": pane,
+        }))
+        .unwrap()
+    }
+
+    fn create_test_tab(state: &AppState, backend: SessionBackend) -> WorkspaceTabState {
+        let defaults = test_defaults(state, "", backend);
+        let (workspace, _) = apply_workspace_action(
+            state,
+            "demo@owner",
+            &defaults,
+            &action_request("create_tab", None, None),
+        )
+        .unwrap();
+        workspace.tabs.into_iter().last().unwrap()
+    }
+
+    fn confirm_hc_close(state: &AppState, id: &str) {
+        state
+            .sessions
+            .write()
+            .unwrap()
+            .get_mut(id)
+            .unwrap()
+            .metadata
+            .insert("hcClosing".into(), "true".into());
+    }
+
+    fn stores_snapshot(state: &AppState) -> (serde_json::Value, serde_json::Value) {
+        (
+            serde_json::to_value(&*state.workspaces.read().unwrap()).unwrap(),
+            serde_json::to_value(&*state.sessions.read().unwrap()).unwrap(),
+        )
+    }
+
+    #[test]
+    fn hc_close_rechecks_all_current_tab_sessions_before_deletion() {
+        let state = test_app_state();
+        let defaults = test_defaults(&state, "", SessionBackend::Hc);
+        let tab = create_test_tab(&state, SessionBackend::Hc);
+        // The close preparation confirmed the original pane before another request split it.
+        confirm_hc_close(&state, &tab.panes[0].session_id);
+        let split = action_request("split_pane", Some(&tab.id), Some(&tab.panes[0].id));
+        let (workspace, _) =
+            apply_workspace_action(&state, "demo@owner", &defaults, &split).unwrap();
+        let new_session = workspace.tabs[0].panes[1].session_id.clone();
+        let close = action_request("close_tab", Some(&tab.id), None);
+        let before = stores_snapshot(&state);
+        assert!(apply_workspace_action(&state, "demo@owner", &defaults, &close).is_err());
+        assert_eq!(
+            stores_snapshot(&state),
+            before,
+            "failed close must leave both stores intact"
+        );
+        confirm_hc_close(&state, &new_session);
+        let (workspace, closed) =
+            apply_workspace_action(&state, "demo@owner", &defaults, &close).unwrap();
+        assert!(workspace.tabs.is_empty());
+        assert_eq!(closed.len(), 2);
+        assert!(state.sessions.read().unwrap().is_empty());
+    }
+
+    #[test]
+    fn hc_close_pane_requires_true_confirmation_and_exact_pane_identity() {
+        for split in [false, true] {
+            let state = test_app_state();
+            let defaults = test_defaults(&state, "", SessionBackend::Hc);
+            let tab = create_test_tab(&state, SessionBackend::Hc);
+            if split {
+                apply_workspace_action(
+                    &state,
+                    "demo@owner",
+                    &defaults,
+                    &action_request("split_pane", Some(&tab.id), Some(&tab.panes[0].id)),
+                )
+                .unwrap();
+            }
+            let close = action_request("close_pane", Some(&tab.id), Some(&tab.panes[0].id));
+            for value in [None, Some("false")] {
+                if let Some(value) = value {
+                    state
+                        .sessions
+                        .write()
+                        .unwrap()
+                        .get_mut(&tab.panes[0].session_id)
+                        .unwrap()
+                        .metadata
+                        .insert("hcClosing".into(), value.into());
+                }
+                let before = stores_snapshot(&state);
+                assert!(apply_workspace_action(&state, "demo@owner", &defaults, &close).is_err());
+                assert_eq!(stores_snapshot(&state), before);
+            }
+            confirm_hc_close(&state, &tab.panes[0].session_id);
+            let before = stores_snapshot(&state);
+            let mut preview = state
+                .workspaces
+                .read()
+                .unwrap()
+                .get("demo@owner")
+                .unwrap()
+                .clone();
+            let mut preview_sessions = state.sessions.read().unwrap().clone();
+            let mut preview_closed = Vec::new();
+            assert!(
+                preview
+                    .apply_action(
+                        &action_request("close_pane", Some(&tab.id), Some("wrong-pane")),
+                        &mut preview_sessions,
+                        &defaults,
+                        &mut preview_closed,
+                    )
+                    .is_err()
+            );
+            assert!(
+                preview_closed.is_empty(),
+                "preparation must not kill a different pane"
+            );
+            assert!(
+                apply_workspace_action(
+                    &state,
+                    "demo@owner",
+                    &defaults,
+                    &action_request("close_pane", Some(&tab.id), Some("wrong-pane"))
+                )
+                .is_err()
+            );
+            assert_eq!(stores_snapshot(&state), before);
+            let (workspace, closed) =
+                apply_workspace_action(&state, "demo@owner", &defaults, &close).unwrap();
+            assert_eq!(closed, vec![tab.panes[0].session_id.clone()]);
+            assert_eq!(workspace.tabs.len(), usize::from(split));
+            assert_eq!(state.sessions.read().unwrap().len(), usize::from(split));
+        }
+    }
+
+    #[test]
+    fn close_confirmation_is_scoped_to_target_tab_pane_and_selector() {
+        let state = test_app_state();
+        let hc = create_test_tab(&state, SessionBackend::Hc);
+        let native = create_test_tab(&state, SessionBackend::Webshell);
+        let hc_defaults = test_defaults(&state, "", SessionBackend::Hc);
+        apply_workspace_action(
+            &state,
+            "other@owner",
+            &hc_defaults,
+            &action_request("create_tab", None, None),
+        )
+        .unwrap();
+        let defaults = test_defaults(&state, "", SessionBackend::Webshell);
+        let (_, closed) = apply_workspace_action(
+            &state,
+            "demo@owner",
+            &defaults,
+            &action_request("close_tab", Some(&native.id), None),
+        )
+        .unwrap();
+        assert_eq!(closed, vec![native.panes[0].session_id.clone()]);
+        confirm_hc_close(&state, &hc.panes[0].session_id);
+        apply_workspace_action(
+            &state,
+            "demo@owner",
+            &hc_defaults,
+            &action_request("close_tab", Some(&hc.id), None),
+        )
+        .unwrap();
+        assert_eq!(
+            state.sessions.read().unwrap().len(),
+            1,
+            "other selector remains intact"
+        );
+    }
+
+    #[test]
+    fn hc_split_inherits_backend_and_preserves_existing_session_identity() {
+        let state = test_app_state();
+        let tab = create_test_tab(&state, SessionBackend::Hc);
+        let original =
+            serde_json::to_value(state.sessions.read().unwrap().get(&tab.panes[0].session_id))
+                .unwrap();
+        let mut split = action_request("split_pane", Some(&tab.id), Some(&tab.panes[0].id));
+        inherit_session_backend(&state, "demo@owner", &mut split).unwrap();
+        assert_eq!(split.session_backend, Some(SessionBackend::Hc));
+        assert!(workspace_action_uses_legacy_store(
+            &state,
+            "demo@owner",
+            &split
+        ));
+        let defaults = test_defaults(&state, "", split.session_backend.unwrap());
+        let (workspace, _) =
+            apply_workspace_action(&state, "demo@owner", &defaults, &split).unwrap();
+        assert!(
+            workspace.tabs[0]
+                .panes
+                .iter()
+                .all(|pane| pane.session_backend == "hc")
+        );
+        assert_eq!(
+            serde_json::to_value(state.sessions.read().unwrap().get(&tab.panes[0].session_id))
+                .unwrap(),
+            original
+        );
+        let mut create = action_request("create_tab", None, None);
+        inherit_session_backend(&state, "demo@owner", &mut create).unwrap();
+        assert_eq!(
+            create.session_backend, None,
+            "new tabs use the requested default"
+        );
+    }
+
+    #[test]
+    fn explicit_backend_cannot_change_hc_or_native_tab_ownership() {
+        for (owner, requested) in [
+            (SessionBackend::Hc, SessionBackend::Webshell),
+            (SessionBackend::Hc, SessionBackend::Herdr),
+            (SessionBackend::Hc, SessionBackend::Zellij),
+            (SessionBackend::Webshell, SessionBackend::Hc),
+        ] {
+            let state = test_app_state();
+            let tab = create_test_tab(&state, owner);
+            let defaults = test_defaults(&state, "", requested);
+            for action in ["split_pane", "rename_tab", "close_pane", "close_tab"] {
+                let mut request = action_request(action, Some(&tab.id), Some(&tab.panes[0].id));
+                request.session_backend = Some(requested);
+                let before = stores_snapshot(&state);
+                assert!(inherit_session_backend(&state, "demo@owner", &mut request).is_err());
+                assert!(apply_workspace_action(&state, "demo@owner", &defaults, &request).is_err());
+                assert_eq!(
+                    stores_snapshot(&state),
+                    before,
+                    "ownership must remain immutable: {action}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_split_remains_native_when_hc_becomes_default() {
+        let state = test_app_state();
+        let tab = create_test_tab(&state, SessionBackend::Webshell);
+        let mut split = action_request("split_pane", Some(&tab.id), Some(&tab.panes[0].id));
+        inherit_session_backend(&state, "demo@owner", &mut split).unwrap();
+        assert_eq!(split.session_backend, Some(SessionBackend::Webshell));
+        assert!(!workspace_action_uses_legacy_store(
+            &state,
+            "demo@owner",
+            &split
+        ));
+        let before = stores_snapshot(&state);
+        let wrong_defaults = test_defaults(&state, "", SessionBackend::Hc);
+        assert!(apply_workspace_action(&state, "demo@owner", &wrong_defaults, &split).is_err());
+        assert_eq!(stores_snapshot(&state), before);
+    }
+
+    #[test]
+    fn explicit_hc_split_cannot_create_sessions_for_an_unknown_native_tab() {
+        for existing_workspace in [false, true] {
+            let state = test_app_state();
+            if existing_workspace {
+                create_test_tab(&state, SessionBackend::Hc);
+            }
+            let defaults = test_defaults(&state, "", SessionBackend::Hc);
+            let mut split =
+                action_request("split_pane", Some("native-agent-tab"), Some("native-pane"));
+            split.session_backend = Some(SessionBackend::Hc);
+            let before = stores_snapshot(&state);
+            assert!(apply_workspace_action(&state, "demo@owner", &defaults, &split).is_err());
+            assert_eq!(stores_snapshot(&state), before);
+        }
+    }
+
+    #[test]
+    fn hc_close_session_also_requires_true_confirmation() {
+        let state = test_app_state();
+        let tab = create_test_tab(&state, SessionBackend::Hc);
+        let id = &tab.panes[0].session_id;
+        state
+            .sessions
+            .write()
+            .unwrap()
+            .get_mut(id)
+            .unwrap()
+            .metadata
+            .insert("hcClosing".into(), "false".into());
+        let before = stores_snapshot(&state);
+        assert!(close_workspace_session(&state, id).is_err());
+        assert_eq!(stores_snapshot(&state), before);
+        confirm_hc_close(&state, id);
+        assert_eq!(
+            close_workspace_session(&state, id)
+                .unwrap()
+                .closed_session_ids,
+            vec![id.clone()]
+        );
+        assert!(state.sessions.read().unwrap().is_empty());
+    }
+
+    #[test]
+    fn hc_login_identity_is_immutable_across_repair_and_mutations() {
+        let state = test_app_state();
+        let alice = test_defaults(&state, "alice", SessionBackend::Hc);
+        let created = create_workspace_session(
+            &state,
+            "demo@owner",
+            &alice,
+            HashMap::from([
+                ("hcAddress".into(), "t7".into()),
+                ("hcCoreId".into(), "original-core".into()),
+            ]),
+        )
+        .unwrap();
+        let original = serde_json::to_value(&created.session).unwrap();
+        let tab = state
+            .workspaces
+            .read()
+            .unwrap()
+            .get("demo@owner")
+            .unwrap()
+            .tabs[0]
+            .clone();
+        let bob = test_defaults(&state, "bob", SessionBackend::Hc);
+        let mut repaired = state
+            .workspaces
+            .read()
+            .unwrap()
+            .get("demo@owner")
+            .unwrap()
+            .clone();
+        let mut sessions = state.sessions.read().unwrap().clone();
+        assert!(
+            !repaired.ensure_ready(&mut sessions, &bob),
+            "repair must not refresh hc login metadata"
+        );
+        assert_eq!(
+            serde_json::to_value(sessions.get(&created.session.id)).unwrap(),
+            original
+        );
+        for action in [
+            "split_pane",
+            "rename_tab",
+            "activate_tab",
+            "close_pane",
+            "close_tab",
+        ] {
+            let before = stores_snapshot(&state);
+            let request = action_request(action, Some(&tab.id), Some(&tab.panes[0].id));
+            assert!(
+                matches!(apply_workspace_action(&state, "demo@owner", &bob, &request),
+                Err(WorkspaceActionError::BadRequest(message)) if message.contains("login identity changed"))
+            );
+            assert_eq!(
+                stores_snapshot(&state),
+                before,
+                "changed login must fail before mutation: {action}"
+            );
+        }
+        // New sessions can use the new login without changing existing scopes.
+        let new_hc = create_workspace_session(&state, "demo@owner", &bob, HashMap::new()).unwrap();
+        assert_eq!(
+            new_hc
+                .session
+                .metadata
+                .get(METADATA_LOGIN_USER)
+                .map(String::as_str),
+            Some("bob")
+        );
+        let native = test_defaults(&state, "bob", SessionBackend::Webshell);
+        let native_tab =
+            create_workspace_session(&state, "demo@owner", &native, HashMap::new()).unwrap();
+        let native_id = state
+            .workspaces
+            .read()
+            .unwrap()
+            .get("demo@owner")
+            .unwrap()
+            .tabs
+            .last()
+            .unwrap()
+            .id
+            .clone();
+        apply_workspace_action(
+            &state,
+            "demo@owner",
+            &native,
+            &action_request("rename_tab", Some(&native_id), None),
+        )
+        .unwrap();
+        assert_eq!(
+            native_tab
+                .session
+                .metadata
+                .get(METADATA_LOGIN_USER)
+                .map(String::as_str),
+            Some("bob")
+        );
+        assert_eq!(
+            serde_json::to_value(state.sessions.read().unwrap().get(&created.session.id)).unwrap(),
+            original
+        );
+    }
 
     #[test]
     fn workspace_split_and_rename_are_persisted() {

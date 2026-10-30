@@ -1,6 +1,6 @@
 import type { TerminalPane, TerminalTab, WorkspacePaneState } from "./types";
 import { normalizeSelector } from "./workspace-selection.ts";
-import { normalizeSessionMode } from "./session-backends.ts";
+import { restoredSessionBackend } from "./session-backends.ts";
 import { normalizeTerminalReplyAuthority } from "./terminal-reply-authority.ts";
 
 export function createWorkspacePaneLifetime(options: {
@@ -22,10 +22,10 @@ export function createWorkspacePaneLifetime(options: {
     markPassive(pane: TerminalPane, value: boolean) {
       if (value) passive.add(pane); else passive.delete(pane);
     },
-    mayRestart: (pane: TerminalPane) => !passive.has(pane),
+    mayRestart: (pane: TerminalPane) => pane.sessionBackend !== "hc" && !passive.has(pane),
     restore(tab: TerminalTab, state: WorkspacePaneState, existing?: TerminalPane, replay = false): TerminalPane {
-      const backend = normalizeSessionMode(state.session_backend);
-      const authority = normalizeTerminalReplyAuthority(state.terminal_reply_authority);
+      const backend = restoredSessionBackend(state.session_backend);
+      const authority = backend === "hc" ? "server" : normalizeTerminalReplyAuthority(state.terminal_reply_authority);
       const reusable = existing && !disposed.has(existing)
         && normalizeSelector(existing.selector) === normalizeSelector(tab.selector)
         && existing.sessionId === state.session_id

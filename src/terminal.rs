@@ -73,6 +73,7 @@ pub struct TerminalQuery {
     fg: Option<String>,
     bg: Option<String>,
     cursor: Option<String>,
+    hc_history_lines: Option<u16>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -365,13 +366,49 @@ enum ReplayInputDisposition {
 pub async fn terminal_ws(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Query(query): Query<TerminalQuery>,
+    Query(mut query): Query<TerminalQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
     if !origin_allowed(&headers) {
         return (StatusCode::FORBIDDEN, "invalid websocket origin").into_response();
     }
     let ws = ws.max_message_size(TERMINAL_WEBSOCKET_MAX_MESSAGE_BYTES);
+    for value in [
+        &mut query.backend,
+        &mut query.session_id,
+        &mut query.pane_id,
+    ] {
+        *value = value
+            .take()
+            .map(|text| text.trim().to_owned())
+            .filter(|text| !text.is_empty());
+    }
+
+    if let Err(error) = validate_saved_session_backend(
+        &state,
+        query.backend.as_deref().unwrap_or("webshell").trim(),
+        query.session_id.as_deref(),
+        query.pane_id.as_deref(),
+    ) {
+        return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+    }
+
+    if query.backend.as_deref() == Some("hc") {
+        return crate::hc::upgrade(
+            state,
+            crate::hc::AttachRequest {
+                session_id: query.session_id.unwrap_or_default(),
+                pane_id: query.pane_id.unwrap_or_default(),
+                cols: query.cols.unwrap_or(DEFAULT_COLS),
+                rows: query.rows.unwrap_or(DEFAULT_ROWS),
+                single_controller: query.control_mode.as_deref() == Some("single"),
+                history_lines: query.hc_history_lines.unwrap_or(1000).min(10_000),
+                display: serde_json::json!({"fg":query.fg,"bg":query.bg,"cursor":query.cursor}),
+            },
+            ws,
+        )
+        .await;
+    }
 
     if query
         .name
@@ -2747,12 +2784,45 @@ fn persisted_terminal_target(
     Ok(target)
 }
 
+fn validate_saved_session_backend(
+    state: &AppState,
+    requested: &str,
+    session_id: Option<&str>,
+    pane_id: Option<&str>,
+) -> anyhow::Result<()> {
+    // The native Agent has its own workspace. Reject known provider-owned identities
+    // before selecting that transport, even when its pane_id was omitted.
+    let workspaces = state
+        .workspaces
+        .read()
+        .map_err(|_| anyhow!("workspace store lock poisoned"))?;
+    let sessions = state
+        .sessions
+        .read()
+        .map_err(|_| anyhow!("session store lock poisoned"))?;
+    let pane_session = pane_id.map(str::trim).and_then(|id| {
+        workspaces
+            .values()
+            .flat_map(|workspace| &workspace.tabs)
+            .flat_map(|tab| &tab.panes)
+            .find(|pane| pane.id == id)
+            .map(|pane| pane.session_id.as_str())
+    });
+    for id in [session_id, pane_session].into_iter().flatten() {
+        if let Some(record) = sessions.get(id.trim()) {
+            validate_terminal_backend(
+                requested.trim(),
+                terminal_backend_from_metadata(&record.metadata),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn terminal_backend_from_metadata(metadata: &HashMap<String, String>) -> &str {
     metadata
         .get("sessionBackend")
-        .map(String::as_str)
-        .filter(|backend| matches!(*backend, "webshell" | "herdr" | "zellij" | "ssh"))
-        .unwrap_or("webshell")
+        .map_or("webshell", String::as_str)
 }
 
 fn refresh_persisted_terminal_login_user(
@@ -3144,6 +3214,53 @@ mod tests {
         assert!(validate_terminal_backend("zellij", "zellij").is_ok());
         assert!(validate_terminal_backend("herdr", "webshell").is_err());
         assert!(validate_terminal_backend("zellij", "herdr").is_err());
+    }
+
+    #[test]
+    fn saved_hc_and_unknown_sessions_cannot_select_native_transport() {
+        let root = std::env::temp_dir().join(format!("neko-backend-{}", uuid::Uuid::new_v4()));
+        let state = crate::state::AppState::new_for_test(root.join("state.db"));
+        let record = crate::state::SessionRecord {
+            id: "hc-session".into(),
+            selector: "demo@owner".into(),
+            host: "demo".into(),
+            status: "stopped".into(),
+            cols: 80,
+            rows: 24,
+            command: "hc".into(),
+            args: vec![],
+            metadata: std::collections::HashMap::from([("sessionBackend".into(), "hc".into())]),
+        };
+        state
+            .sessions
+            .write()
+            .unwrap()
+            .insert(record.id.clone(), record);
+        assert!(
+            super::validate_saved_session_backend(&state, "webshell", Some("hc-session"), None)
+                .is_err()
+        );
+        assert!(
+            super::validate_saved_session_backend(&state, "hc", Some("hc-session"), None).is_ok()
+        );
+        assert!(
+            super::validate_saved_session_backend(&state, "webshell", Some(" hc-session "), None)
+                .is_err()
+        );
+        state
+            .sessions
+            .write()
+            .unwrap()
+            .get_mut("hc-session")
+            .unwrap()
+            .metadata
+            .insert("sessionBackend".into(), "future".into());
+        assert!(
+            super::validate_saved_session_backend(&state, "webshell", Some("hc-session"), None)
+                .is_err()
+        );
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

@@ -108,6 +108,15 @@ impl SessionManager {
         let session = records
             .get(&spec.session_id)
             .ok_or_else(|| anyhow!("unknown session id"))?;
+        let backend = session
+            .metadata
+            .get(METADATA_SESSION_BACKEND)
+            .map_or("webshell", String::as_str);
+        if !matches!(backend, "webshell" | "herdr" | "zellij" | "ssh") {
+            return Err(anyhow!(
+                "session backend cannot use the managed terminal registry"
+            ));
+        }
         if session.selector != spec.selector
             || session.command != spec.command
             || session.args != spec.args
@@ -536,6 +545,35 @@ mod tests {
             manager.read().unwrap().get("session-one").unwrap().status,
             "running"
         );
+    }
+
+    #[test]
+    fn managed_registry_rejects_hc_and_unknown_backends_before_spawn() {
+        for backend in ["hc", "future"] {
+            let mut session = test_session("session-one", "stopped");
+            session
+                .metadata
+                .insert(METADATA_SESSION_BACKEND.into(), backend.into());
+            session.command = "/bin/sh".into();
+            session.args = vec!["-c".into(), "exit 0".into()];
+            let spec = TerminalSpec {
+                session_id: session.id.clone(),
+                host: session.host.clone(),
+                selector: session.selector.clone(),
+                command: session.command.clone(),
+                args: session.args.clone(),
+                cols: 80,
+                rows: 24,
+                output_frame_limit: 128,
+            };
+            let (manager, _) = test_manager(HashMap::from([(session.id.clone(), session)]));
+            let error = manager
+                .open_terminal(spec.clone(), true, true)
+                .err()
+                .unwrap();
+            assert!(error.to_string().contains("backend cannot use"));
+            assert!(manager.open_connection_terminal(spec).is_err());
+        }
     }
 
     fn test_manager(records: HashMap<String, SessionRecord>) -> (SessionManager, Arc<AppDatabase>) {

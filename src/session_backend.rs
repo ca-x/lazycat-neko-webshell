@@ -106,6 +106,7 @@ pub async fn get_session_backends(
         supports_terminal_transfer: true,
         lightos_only: true,
     }];
+    append_hc_backend(&mut backends, selector).await?;
     if herdr_installed {
         backends.push(SessionBackendInfo {
             id: "herdr",
@@ -129,6 +130,34 @@ pub async fn get_session_backends(
         selector: selector.to_owned(),
         backends,
     }))
+}
+
+async fn append_hc_backend(
+    backends: &mut Vec<SessionBackendInfo>,
+    selector: &str,
+) -> Result<(), SessionBackendsError> {
+    let login_user = lightos::login_user_for_selector(selector, true)
+        .await
+        .map_err(|error| SessionBackendsError {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: error.to_string(),
+        })?;
+    if crate::hc::target::available(selector, &login_user)
+        .await
+        .map_err(|error| SessionBackendsError {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: error.to_string(),
+        })?
+    {
+        backends.push(SessionBackendInfo {
+            id: "hc",
+            label: "HC",
+            available: true,
+            supports_terminal_transfer: false,
+            lightos_only: true,
+        });
+    }
+    Ok(())
 }
 
 fn remote_client_backends() -> Vec<SessionBackendInfo> {
