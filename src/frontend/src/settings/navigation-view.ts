@@ -11,12 +11,18 @@ const sections = [
 ] as const satisfies readonly { id: string; panel: string; icon: string; label: MessageKey }[];
 
 export function renderSettingsNavigation(): string {
-  return `<div class="settings-tabs settings-main-tabs" id="settingsTabs" role="tablist" aria-orientation="vertical" aria-label="Settings" data-i18n-aria="action.settings">
+  return `<details class="settings-navigation" open>
+    <summary class="settings-navigation-trigger">
+      <span data-i18n="settings.category">Category</span>
+      <strong data-settings-current-label data-i18n="tab.appearance">Appearance</strong>
+      <i data-lucide="chevron-down" aria-hidden="true"></i>
+    </summary>
+    <div class="settings-tabs settings-main-tabs" id="settingsTabs" role="tablist" aria-orientation="vertical" aria-label="Settings" data-i18n-aria="action.settings">
     ${sections.map((section, index) => `<button type="button" id="settings-tab-${section.id}" role="tab"
       aria-selected="${index === 0}" aria-controls="${section.panel}" tabindex="${index === 0 ? 0 : -1}" data-settings-tab="${section.id}">
       <i data-lucide="${section.icon}" aria-hidden="true"></i><span data-i18n="${section.label}">${section.id}</span>
     </button>`).join("")}
-  </div>`;
+  </div></details>`;
 }
 
 export function renderSettingsSectionIntro(id: string): string {

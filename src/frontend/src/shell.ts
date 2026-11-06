@@ -1,15 +1,15 @@
-import { renderHcHistorySettings } from "./hc/settings-view.ts";
+import { renderFontsSettingsView } from "./settings/fonts-view";
+import { renderThemesSettingsView } from "./settings/themes-view";
+import { renderTerminalSettingsView } from "./settings/terminal-view";
+import { renderSettingsDisclosure } from "./settings/disclosure-view";
 import { renderSettingsNavigation, renderSettingsSectionIntro } from "./settings/navigation-view";
 import "./diagnostics/settings.css";
-import { renderTerminalDiagnosticsSettings } from "./diagnostics/settings-view";
 import { qs } from "./utils";
 import { renderAboutDialog } from "./about-view";
 import { renderHerdrJumpShell } from "./herdr-jump-shell";
-import { renderHerdrNotificationSettingsView } from "./herdr-notifications/settings-view";
 import { renderMobileKeyboardView } from "./mobile/keyboard-view";
 import { renderMobileWorkspaceOverviewShell } from "./mobile/workspace-overview-view";
 import { renderMobileSettingsView } from "./mobile/settings-view";
-import { renderTerminalControlSettingsView } from "./terminal-control/settings-view";
 
 export type ShellElements = {
   webshell: HTMLElement;
@@ -92,7 +92,7 @@ export type ShellElements = {
   instanceTabDisplay: HTMLSelectElement;
   sessionBackendHelp: HTMLParagraphElement;
   sshProfileSettings: HTMLDivElement;
-  herdrHighlightSettings: HTMLDivElement;
+  herdrHighlightSettings: HTMLDetailsElement;
   herdrActiveBackgroundDark: HTMLInputElement;
   herdrActiveBackgroundLight: HTMLInputElement;
   themeSelect: HTMLSelectElement;
@@ -367,9 +367,7 @@ export function renderShell(app: HTMLElement): ShellElements {
                   <option value="vertical" data-i18n="layout.vertical">Vertical</option>
                 </select>
               </label>
-              <div class="settings-group" id="herdrHighlightSettings" hidden>
-                <div class="settings-group-title" data-i18n="section.herdrHighlight">Herdr selection</div>
-                <p class="settings-help" data-i18n="setting.herdrHighlightHelp">Customize the active Herdr workspace and tab background for dark and light interface styles.</p>
+              ${renderSettingsDisclosure({ id: "herdrHighlightSettings", title: "section.herdrHighlight", description: "settings.group.herdrHighlightHelp", hidden: true, content: `
                 <label class="field color-field">
                   <span data-i18n="field.herdrActiveBackgroundDark">Dark highlight</span>
                   <input id="herdrActiveBackgroundDark" type="color" />
@@ -378,102 +376,11 @@ export function renderShell(app: HTMLElement): ShellElements {
                   <span data-i18n="field.herdrActiveBackgroundLight">Light highlight</span>
                   <input id="herdrActiveBackgroundLight" type="color" />
                 </label>
-              </div>
+              ` })}
+
             </section>
 
-            <section class="settings-section" id="terminalSettingsPanel" data-settings-panel="terminal" role="tabpanel" aria-labelledby="settings-tab-terminal" hidden>
-              ${renderSettingsSectionIntro("terminal")}
-              <div class="settings-group" id="sessionBackendSettings" hidden>
-                <div class="settings-group-title" data-i18n="section.sessionBackend">Session backend</div>
-                <label class="field">
-                  <span data-i18n="field.defaultSessionBackend">New tab backend</span>
-                  <select id="defaultSessionBackend">
-                    <option value="webshell" data-i18n="backend.webshell">WebShell native</option>
-                  </select>
-                </label>
-                ${renderHcHistorySettings()}
-                <p id="sessionBackendHelp" class="settings-help" data-i18n="setting.defaultSessionBackendHelp">Applies to new sessions only; existing sessions keep their backend. HC requires an installed hc on a LightOS target. The + button uses this backend. If Herdr already has an engine pane, + creates a new Herdr workspace inside that session.</p>
-              </div>
-              <label class="field">
-                <span data-i18n="field.instanceTabDisplay">Instance tabs</span>
-                <select id="instanceTabDisplay">
-                  <option value="combined" data-i18n="instanceTabDisplay.combined">Show all instances together</option>
-                  <option value="by-instance" data-i18n="instanceTabDisplay.byInstance">Show selected instance only</option>
-                </select>
-              </label>
-              <label class="field">
-                <span data-i18n="field.cursor">Cursor</span>
-                <select id="cursorShape">
-                  <option value="block" data-i18n="cursor.block">Block</option>
-                  <option value="bar" data-i18n="cursor.bar">Bar</option>
-                  <option value="underline" data-i18n="cursor.underline">Underline</option>
-                </select>
-              </label>
-              <div id="terminalShaderSettings" class="terminal-shader-settings"></div>
-              <label class="field">
-                <span data-i18n="field.scrollback">Scrollback</span>
-                <input id="scrollbackLimit" type="number" min="1000" max="100000" step="1000" />
-              </label>
-              <label class="field">
-                <span data-i18n="field.outputBuffer">Output buffer</span>
-                <input id="outputBufferLimit" type="number" min="128" max="20000" step="128" />
-              </label>
-              <div class="settings-group agent-update-settings" id="agentUpdateSettings" hidden></div>
-              <div id="terminalControlSettings">${renderTerminalControlSettingsView()}</div>
-              ${renderHerdrNotificationSettingsView()}
-              <div class="settings-group terminal-background-settings">
-                <div class="settings-group-title" data-i18n="section.terminalBackground">Terminal background</div>
-                <label class="switch">
-                  <input id="terminalBackgroundEnabled" type="checkbox" />
-                  <span data-i18n="setting.terminalBackground">Use background image</span>
-                </label>
-                <div class="background-actions">
-                  <label class="file-button" aria-label="Upload terminal background" title="Upload terminal background" data-i18n-aria="action.uploadTerminalBackground" data-i18n-title="action.uploadTerminalBackground">
-                    <input id="terminalBackgroundUpload" type="file" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" />
-                    <i data-lucide="image-plus"></i>
-                    <span data-i18n="action.uploadTerminalBackground">Upload terminal background</span>
-                  </label>
-                  <button class="command-button" id="removeTerminalBackground" type="button" aria-label="Remove terminal background" title="Remove terminal background" data-i18n-aria="action.removeTerminalBackground" data-i18n-title="action.removeTerminalBackground">
-                    <i data-lucide="trash-2"></i>
-                    <span data-i18n="action.removeTerminalBackground">Remove terminal background</span>
-                  </button>
-                </div>
-                <label class="field">
-                  <span><span data-i18n="field.terminalBackgroundOpacity">Background opacity</span> <output id="terminalBackgroundOpacityValue"></output></span>
-                  <input id="terminalBackgroundOpacity" type="range" min="0.05" max="0.8" step="0.01" />
-                </label>
-                <label class="field">
-                  <span><span data-i18n="field.terminalBackgroundBlur">Background blur</span> <output id="terminalBackgroundBlurValue"></output></span>
-                  <input id="terminalBackgroundBlur" type="range" min="0" max="24" step="1" />
-                </label>
-                <p id="terminalBackgroundStatus" class="field-status"></p>
-              </div>
-              <label class="switch">
-                <input id="cursorBlink" type="checkbox" />
-                <span data-i18n="setting.cursorBlink">Cursor blink</span>
-              </label>
-              <label class="switch">
-                <input id="copyOnSelect" type="checkbox" />
-                <span data-i18n="setting.copyOnSelect">Copy on select</span>
-              </label>
-              <label class="switch">
-                <input id="useResttyClipboard" type="checkbox" />
-                <span data-i18n="setting.useResttyClipboard">Use restty clipboard</span>
-              </label>
-              <label class="switch">
-                <input id="autoRestartSessions" type="checkbox" />
-                <span data-i18n="setting.autoRestartSessions">Restart sessions after provider restart</span>
-              </label>
-              <label class="switch">
-                <input id="debugMode" type="checkbox" />
-                <span data-i18n="setting.debugAdapter">Debug mode</span>
-              </label>
-              ${renderTerminalDiagnosticsSettings()}
-              <label class="switch">
-                <input id="performanceMeterEnabled" type="checkbox" />
-                <span data-i18n="setting.performanceMeter">Frame scheduler monitor</span>
-              </label>
-            </section>
+            ${renderTerminalSettingsView()}
 
             <section class="settings-section" id="remoteHostsSettingsPanel" data-settings-panel="remote-hosts" role="tabpanel" aria-labelledby="settings-tab-remote-hosts" hidden>
               ${renderSettingsSectionIntro("remote-hosts")}
@@ -482,75 +389,9 @@ export function renderShell(app: HTMLElement): ShellElements {
 
             ${renderMobileSettingsView()}
 
-            <section class="settings-section" id="fontSettingsRootPanel" data-settings-panel="fonts" role="tabpanel" aria-labelledby="settings-tab-fonts" hidden>
-              ${renderSettingsSectionIntro("fonts")}
-              <div class="settings-tabs settings-sub-tabs" id="fontTabs" role="tablist" aria-label="Fonts" data-i18n-aria="section.fonts">
-                <button type="button" role="tab" aria-selected="true" aria-controls="fontSettingsPanel" data-font-tab="font-settings" data-i18n="tab.fontSettings">Font settings</button>
-                <button type="button" role="tab" aria-selected="false" aria-controls="fontUploadPanel" data-font-tab="font-upload" data-i18n="tab.fontUpload">Font upload</button>
-              </div>
-              <div class="settings-tab-panel" id="fontSettingsPanel" data-font-panel="font-settings" role="tabpanel">
-                <label class="field">
-                  <span data-i18n="field.font">Font</span>
-                  <select id="fontFamily"></select>
-                </label>
-                <div class="font-preview" id="fontPreview" aria-label="Font preview" data-i18n-aria="field.fontPreview">
-                  <span data-i18n="app.title">Neko Webshell</span>
-                  <code>λ ~/app $ ls -la --color=auto 0123456789</code>
-                </div>
-                <label class="field">
-                  <span><span data-i18n="field.fontSize">Font size</span> <output id="fontSizeValue"></output></span>
-                  <input id="fontSize" type="range" min="11" max="22" step="1" />
-                </label>
-                <label class="field">
-                  <span><span data-i18n="field.lineHeight">Line height</span> <output id="lineHeightValue"></output></span>
-                  <input id="lineHeight" type="range" min="1.05" max="1.6" step="0.01" />
-                </label>
-                <div id="fontRenderingSettings"></div>
-              </div>
-              <div class="settings-tab-panel" id="fontUploadPanel" data-font-panel="font-upload" role="tabpanel" hidden>
-                <div class="font-actions">
-                  <label class="file-button icon-only-large" aria-label="Upload font" title="Upload font" data-i18n-aria="action.uploadFont" data-i18n-title="action.uploadFont">
-                    <input id="fontUpload" type="file" accept=".woff,.woff2,.ttf,.otf,font/woff,font/woff2,font/ttf,font/otf" />
-                    <i data-lucide="upload"></i>
-                  </label>
-                  <button class="command-button icon-only-large" id="removeFont" type="button" aria-label="Remove selected font" title="Remove selected font" data-i18n-aria="action.removeFont" data-i18n-title="action.removeFont">
-                    <i data-lucide="trash-2"></i>
-                  </button>
-                </div>
-                <p id="fontStatus" class="field-status"></p>
-              </div>
-            </section>
+            ${renderFontsSettingsView()}
 
-            <section class="settings-section" id="themeSettingsPanel" data-settings-panel="themes" role="tabpanel" aria-labelledby="settings-tab-themes" hidden>
-              ${renderSettingsSectionIntro("themes")}
-              <label class="field">
-                <span data-i18n="field.theme">Terminal theme</span>
-                <select id="themeSelect"></select>
-              </label>
-              <a class="settings-link" href="https://ghostty-style.vercel.app" target="_blank" rel="noreferrer">
-                <i data-lucide="external-link"></i>
-                <span data-i18n="theme.gallery">Ghostty Style Gallery</span>
-              </a>
-              <label class="field">
-                <span data-i18n="field.themeName">Theme name</span>
-                <input id="customThemeName" type="text" autocomplete="off" spellcheck="false" />
-              </label>
-              <label class="field">
-                <span data-i18n="field.themeSource">Ghostty theme</span>
-                <textarea id="customThemeSource" spellcheck="false" rows="10"></textarea>
-              </label>
-              <div class="theme-actions">
-                <button class="command-button" id="saveTheme" type="button">
-                  <i data-lucide="save"></i>
-                  <span data-i18n="action.saveTheme">Save custom theme</span>
-                </button>
-                <button class="command-button" id="removeTheme" type="button">
-                  <i data-lucide="trash-2"></i>
-                  <span data-i18n="action.removeTheme">Remove custom theme</span>
-                </button>
-              </div>
-              <p id="themeStatus" class="field-status"></p>
-            </section>
+            ${renderThemesSettingsView()}
 
             <section class="settings-section" id="pluginSettingsPanel" data-settings-panel="plugins" role="tabpanel" aria-labelledby="settings-tab-plugins" hidden>
               ${renderSettingsSectionIntro("plugins")}
@@ -652,7 +493,7 @@ export function renderShell(app: HTMLElement): ShellElements {
     instanceTabDisplay: qs<HTMLSelectElement>("#instanceTabDisplay"),
     sessionBackendHelp: qs<HTMLParagraphElement>("#sessionBackendHelp"),
     sshProfileSettings: qs<HTMLDivElement>("#sshProfileSettings"),
-    herdrHighlightSettings: qs<HTMLDivElement>("#herdrHighlightSettings"),
+    herdrHighlightSettings: qs<HTMLDetailsElement>("#herdrHighlightSettings"),
     herdrActiveBackgroundDark: qs<HTMLInputElement>("#herdrActiveBackgroundDark"),
     herdrActiveBackgroundLight: qs<HTMLInputElement>("#herdrActiveBackgroundLight"),
     themeSelect: qs<HTMLSelectElement>("#themeSelect"),

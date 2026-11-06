@@ -341,14 +341,14 @@ export function createSshProfileSettingsController(options: SshProfileSettingsCo
     selectedId = profile.id;
     draft = draftFromProfile(profile);
     setStatus("", "neutral", false);
-    render();
+    render({ openProfile: true });
   }
 
   function startNew(kind: SshProfileKind) {
     selectedId = undefined;
     draft = emptySshProfileDraft(kind);
     setStatus("", "neutral", false);
-    render();
+    render({ openProfile: true });
   }
 
   function setDraftKind(kind: SshProfileKind) {
@@ -389,7 +389,7 @@ export function createSshProfileSettingsController(options: SshProfileSettingsCo
     if (input instanceof HTMLTextAreaElement && input.matches("[data-ssh-config-content]")) {
       configContent = input.value;
       configDirty = configView?.content !== configContent;
-      options.root.querySelector<HTMLButtonElement>("[data-ssh-config-save]")?.toggleAttribute("disabled", !configDirty);
+      options.root.querySelector<HTMLButtonElement>('[data-ssh-config-save=""]')?.toggleAttribute("disabled", !configDirty);
       return;
     }
     const hostField = input?.dataset.sshConfigHostField as keyof SshConfigHostDraft | undefined;
@@ -441,7 +441,7 @@ export function createSshProfileSettingsController(options: SshProfileSettingsCo
       ...draftFromConfigHost(host),
       strictHostKeyChecking: draft.strictHostKeyChecking,
     };
-    render();
+    render({ openProfile: true });
   }
 
   async function importConfigHost(alias: string) {
@@ -566,11 +566,14 @@ export function createSshProfileSettingsController(options: SshProfileSettingsCo
 
   type RenderOptions = {
     focusSearch?: boolean;
+    openProfile?: boolean;
   };
 
   function render(renderOptions: RenderOptions = {}) {
     options.root.innerHTML = renderSshProfileSettingsView({
       tr: options.tr,
+      configExpanded: options.root.querySelector<HTMLDetailsElement>("#ssh-config-editor")?.open ?? false,
+      profileExpanded: renderOptions.openProfile ?? options.root.querySelector<HTMLDetailsElement>("#ssh-profile-editor")?.open ?? false,
       profiles,
       configHosts,
       draft,

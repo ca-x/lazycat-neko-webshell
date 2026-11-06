@@ -22,7 +22,7 @@ export function bindOverlayAccessibility(root: HTMLElement, settingsPage: HTMLEl
     }
     if (event.key !== "Tab") return;
     const controls = Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector))
-      .filter((control) => control.tabIndex >= 0 && control.getClientRects().length > 0 && !control.closest("[inert]"));
+      .filter((control) => control.tabIndex >= 0 && control.checkVisibility() && !control.closest("[inert]"));
     const first = controls[0];
     const last = controls.at(-1);
     if (!first || !last) return;

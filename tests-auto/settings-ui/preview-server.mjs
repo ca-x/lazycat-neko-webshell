@@ -4,7 +4,7 @@ import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 
-export async function createSettingsUiPreview(port = 0, { configureDelayMs = 0, agentKind, lightosEnabled = false } = {}) {
+export async function createSettingsUiPreview(port = 0, { configureDelayMs = 0, agentKind, lightosEnabled = false, configHosts = [] } = {}) {
   const ids = ["ai-chat", "file-transfer", "lightos-port-forward", "pomodoro", "public-tunnel", "terminal-diagnostics", "terminal-mcp", "terminal-transfer", "white-noise"];
   const plugins = ids.map((id) => ({ id, displayName: id, kind: id === "ai-chat" ? "ai" : "productivity", scopes: ["terminal"], enabled: !["terminal-mcp", "terminal-diagnostics"].includes(id), metadata: {} }));
   let settings = { locale: "en" };
@@ -35,7 +35,7 @@ export async function createSettingsUiPreview(port = 0, { configureDelayMs = 0, 
         else if (pathname === "/api/settings") { if (request.method === "PUT") settings = body; result = settings; }
         else if (pathname === "/api/instances" && agentKind) result = [{ selector: "preview@owner", name: "preview", status: "running", ownerDeployId: "owner", username: "preview" }];
         else if (["/api/instances", "/api/fonts", "/api/terminal-backgrounds", "/api/ssh-profiles", "/api/ssh-config-hosts"].includes(pathname)) result = [];
-        else if (pathname === "/api/ssh-config") result = { source: "isolated UI fixture", content: "", hosts: [], document: { globals: [], hosts: [], matches: [], includes: [], warnings: [] } };
+        else if (pathname === "/api/ssh-config") result = { source: "isolated UI fixture", content: "", hosts: configHosts, document: { globals: [], hosts: [], matches: [], includes: [], warnings: [] } };
         else if (pathname === "/api/sounds") result = { rootPath: "", exists: true, files: [] };
         else if (pathname.endsWith("/ListPlugins")) result = { plugins };
         else if (pathname.endsWith("/ConfigurePlugin")) {

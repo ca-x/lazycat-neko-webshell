@@ -1,6 +1,6 @@
 export function renderMobileTouchSettingsView(): string {
   return `
-              <div class="settings-group mobile-only-setting">
+              <div class="settings-group">
                 <div class="settings-group-title" data-i18n="section.mobileTouchKeyboard">Touch &amp; system keyboard</div>
                 <label class="field">
                   <span data-i18n="field.touchBehavior">Touch behavior</span>

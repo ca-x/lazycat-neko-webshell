@@ -12,6 +12,8 @@ export async function runAgentUpdateScenario() {
     assert.equal(server.agentUpdateCalls.length, 0);
     await browser.command(["click", "#agentUpdateButton"]);
     await browser.waitFor('!document.querySelector("#settingsPage").hidden && document.querySelector("[data-agent-update=prepare]")');
+    assert.equal(await browser.evaluate('document.querySelector("#terminal-sessions").open'), true);
+    await browser.waitFor('Boolean(document.activeElement.closest("#agentUpdateSettings"))');
     await browser.command(["click", "[data-agent-update=later]"]);
     assert.equal(await browser.evaluate('document.querySelector("#agentUpdateButton").hidden'), true);
     await browser.command(["click", "[data-agent-update=prepare]"]);

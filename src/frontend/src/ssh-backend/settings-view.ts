@@ -1,3 +1,4 @@
+import { renderSettingsDisclosure } from "../settings/disclosure-view";
 import type { SshConfigDocumentHost, SshConfigHost, SshConfigView, SshKeyFileView, SshProfile, SshProfileKind } from "./api";
 import type { SshConfigHostDraft } from "./config-editor";
 import type { MessageKey } from "../i18n";
@@ -42,6 +43,8 @@ export type SshProfileSettingsViewState = {
   keyContentDraft: string;
   keyContentVisible: boolean;
   keyDirty: boolean;
+  configExpanded?: boolean;
+  profileExpanded?: boolean;
 };
 
 type ConnectionRow =
@@ -101,7 +104,6 @@ export function renderSshProfileSettingsView(state: SshProfileSettingsViewState)
         <i data-lucide="refresh-cw"></i>
       </button>
     </div>
-    ${renderSshConfigManager(state, busy)}
     <div class="ssh-profile-toolbar">
       <label class="ssh-profile-search">
         <span class="sr-only">${escapeHtml(tr("sshSettings.searchLabel"))}</span>
@@ -125,10 +127,11 @@ export function renderSshProfileSettingsView(state: SshProfileSettingsViewState)
         </div>
       </div>
       <div class="ssh-profile-editor">
-        ${renderProfileForm(state.draft, selected, state.configHosts, busy, tr)}
+        ${renderSettingsDisclosure({ id: "ssh-profile-editor", title: "settings.group.sshProfile", description: "settings.group.sshProfileHelp", tr, open: state.profileExpanded, content: renderProfileForm(state.draft, selected, state.configHosts, busy, tr) })}
       </div>
     </div>
-    <p class="field-status" data-tone="${escapeAttr(state.tone)}">${escapeHtml(state.status)}</p>
+    ${renderSettingsDisclosure({ id: "ssh-config-editor", title: "settings.group.sshConfig", description: "settings.group.sshConfigHelp", tr, open: state.configExpanded, content: renderSshConfigManager(state, busy) })}
+    <p class="field-status" role="status" data-tone="${escapeAttr(state.tone)}">${escapeHtml(state.status)}</p>
   `;
 }
 

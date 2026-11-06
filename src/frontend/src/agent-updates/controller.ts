@@ -84,8 +84,15 @@ export function bindAgentUpdateView(
 ) {
   notice.addEventListener("click", () => {
     openSettings();
-    container.scrollIntoView({ block: "center", behavior: "instant" });
-    container.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
+    const group = container.closest<HTMLDetailsElement>(".settings-disclosure");
+    if (group) group.open = true;
+    requestAnimationFrame(() => {
+      if (!container.checkVisibility()) return;
+      container.scrollIntoView({ block: "center", behavior: "instant" });
+      const target = container.querySelector<HTMLElement>("button:not(:disabled)")
+        ?? container.querySelector<HTMLElement>("[data-agent-update-status]");
+      target?.focus({ preventScroll: true });
+    });
   });
   container.addEventListener("click", (event) => {
     const button = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-agent-update]") : null;

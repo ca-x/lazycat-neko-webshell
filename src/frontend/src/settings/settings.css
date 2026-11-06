@@ -179,3 +179,76 @@
 @media (prefers-reduced-motion: reduce) {
   .plugin-switch input::before, .plugin-configuration summary svg { transition: none; }
 }
+
+/* A quiet list of tasks: details appear only after the user asks for them. */
+.settings-navigation { min-height: 0; overflow-y: auto; background: var(--chrome); border-right: 1px solid var(--line-soft); }
+.settings-navigation-trigger { display: none; }
+.settings-navigation .settings-main-tabs { border-right: 0; }
+.settings-disclosures { margin-top: 20px; }
+.settings-disclosure { min-width: 0; margin-top: 12px; border-bottom: 1px solid var(--line-soft); }
+.settings-disclosures > .settings-disclosure { margin-top: 0; }
+.settings-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 72px;
+  padding: 14px 8px;
+  border-radius: var(--radius-sm);
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color var(--motion-press) ease;
+}
+.settings-disclosure > summary::-webkit-details-marker { display: none; }
+.settings-disclosure-label { display: grid; flex: 1; min-width: 0; gap: 4px; }
+.settings-disclosure-title { color: var(--text); font-size: 14px; font-weight: 500; line-height: 1.5; }
+.settings-disclosure-description { color: var(--muted); font-size: 12px; line-height: 1.5; text-wrap: pretty; }
+.settings-disclosure > summary > svg { flex: 0 0 16px; width: 16px; height: 16px; color: var(--muted); transition: transform var(--motion-press) var(--ease-out); }
+.settings-disclosure[open] > summary > svg { transform: rotate(180deg); }
+.settings-disclosure > summary:active { background: var(--surface-2); }
+.settings-disclosure-body { min-width: 0; padding: 4px 8px 20px; }
+.settings-disclosure-body > :first-child { margin-top: 0; }
+.settings-dialog .settings-disclosure-body > .settings-group:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.settings-disclosure-body .settings-group-title { font-size: 13px; }
+.settings-disclosure-body > .settings-group > .settings-group-title:first-child { margin-bottom: 12px; }
+.settings-disclosure-body > .field,
+.settings-tab-panel > .field {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  margin-top: 0;
+  padding: 12px 0;
+}
+.settings-disclosure-body .field > :is(input, select, textarea),
+.settings-tab-panel > .field > :is(input, select, textarea) { min-width: 0; width: 100%; }
+.settings-disclosure-body .field:has(textarea) { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.settings-disclosure-body .field:has(textarea) > span { font-size: 13px; }
+.settings-disclosure-body .theme-actions { flex-wrap: wrap; }
+.settings-disclosure-body .settings-help { max-width: 65ch; }
+.settings-disclosure-body .settings-help + .switch { margin-top: 12px; }
+.settings-disclosure-body .field-status:empty { display: none; }
+.settings-disclosure-body .settings-group > .settings-group-title + .settings-help { margin-top: 0; }
+.settings-disclosure-body :is(.mobile-keyboard-layout-settings, .quick-phrase-editor) { margin-top: 16px; }
+.settings-disclosure-body > .settings-group:has(#mobileClockEnabled) > .settings-group-title,
+.settings-disclosure-body > .settings-group:has(#touchSelectionMode) > .settings-group-title,
+.settings-disclosure-body > .settings-group:has(#mobileQuickPhraseList) > .settings-group-title { display: none; }
+.settings-disclosure-body .font-rendering-options { border: 0; margin-top: 8px; padding-top: 0; }
+.settings-dialog .settings-disclosure > summary:focus-visible { outline-offset: -2px; }
+
+@media (hover: hover) and (pointer: fine) {
+  .settings-disclosure > summary:hover { background: var(--surface-2); }
+}
+.webshell[data-overlay-input="keyboard"] .settings-disclosure > summary,
+.webshell[data-overlay-input="keyboard"] .settings-disclosure > summary > svg { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  .settings-disclosure > summary, .settings-disclosure > summary > svg { transition: none; }
+}
+.settings-dialog .ssh-profile-layout { grid-template-columns: minmax(0, 1fr); }
+.settings-dialog .ssh-profile-editor { padding: 0; border: 0; background: transparent; }
+.settings-dialog .ssh-profile-editor > .settings-disclosure { margin-top: 0; }
+.settings-disclosure-body .ssh-config-manager { margin-top: 0; }
+.settings-disclosure-body .ssh-config-meta { overflow-wrap: anywhere; }
+.plugin-configuration-body > .plugin-meta { margin-top: 12px; margin-bottom: 12px; }
+.settings-dialog button { min-height: 44px; }

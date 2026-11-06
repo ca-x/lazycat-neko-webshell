@@ -63,9 +63,6 @@ function renderPluginSetting(plugin: PluginDescriptor, state: PluginSettingsView
           <span class="plugin-name">${escapeHtml(name)}</span>
         </div>
         <p class="plugin-description">${escapeHtml(pluginDescription(plugin, state.tr))}</p>
-        <div class="plugin-meta">
-          ${meta.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
-        </div>
       </div>
       <label class="switch plugin-switch">
         <input
@@ -79,7 +76,7 @@ function renderPluginSetting(plugin: PluginDescriptor, state: PluginSettingsView
       </label>
       ${settingsTool ? `<details class="plugin-configuration" data-plugin-settings="${escapeAttr(plugin.id)}" ${open ? "open" : ""}>
         <summary role="button" data-plugin-config-toggle="${escapeAttr(plugin.id)}" aria-expanded="${open}" aria-label="${escapeAttr(`${name}: ${state.tr("settings.pluginConfigure")}`)}"><span>${escapeHtml(state.tr("settings.pluginConfigure"))}</span><i data-lucide="chevron-down" aria-hidden="true"></i></summary>
-        <div class="plugin-configuration-body">${settingsTool}</div>
+        <div class="plugin-configuration-body"><div class="plugin-meta">${meta.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>${settingsTool}</div>
       </details>` : ""}
     </div>
   `;

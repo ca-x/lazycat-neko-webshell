@@ -13,7 +13,7 @@ export function bindTabListKeyboard(container: HTMLElement, selector: string) {
     const next = vertical ? "ArrowDown" : "ArrowRight";
     if (![previous, next, "Home", "End"].includes(event.key)) return;
     const buttons = Array.from(list.querySelectorAll<HTMLButtonElement>(selector))
-      .filter((button) => !button.disabled && button.getClientRects().length > 0);
+      .filter((button) => !button.disabled && button.checkVisibility());
     const index = buttons.indexOf(current);
     if (index < 0 || !buttons.length) return;
     const target = event.key === "Home" ? buttons[0]
@@ -35,7 +35,25 @@ export function bindSettingsTabControls(
   },
 ) {
   const compact = window.matchMedia("(max-width: 760px)");
-  const updateOrientation = () => elements.settingsTabs.setAttribute("aria-orientation", compact.matches ? "horizontal" : "vertical");
+  const navigation = elements.settingsTabs.closest<HTMLDetailsElement>(".settings-navigation");
+  const updateOrientation = () => {
+    const hadNavigationFocus = navigation?.contains(document.activeElement);
+    elements.settingsTabs.setAttribute("aria-orientation", compact.matches ? "horizontal" : "vertical");
+    if (navigation) navigation.open = !compact.matches;
+    if (hadNavigationFocus) {
+      const target = compact.matches
+        ? navigation?.querySelector<HTMLElement>("summary")
+        : elements.settingsTabs.querySelector<HTMLElement>('[aria-selected="true"]');
+      target?.focus({ preventScroll: true });
+    }
+  };
+  navigation?.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !compact.matches || !navigation.open) return;
+    event.preventDefault();
+    event.stopPropagation();
+    navigation.open = false;
+    navigation.querySelector<HTMLElement>("summary")?.focus();
+  });
   updateOrientation();
   compact.addEventListener("change", updateOrientation);
   bindTabListKeyboard(elements.settingsTabs, "[data-settings-tab]");
@@ -67,6 +85,18 @@ export function activateSettingsPanel(elements: SettingsTabElements, tabId: stri
   elements.settingsPage.querySelectorAll<HTMLElement>("[data-settings-panel]").forEach((panel) => {
     panel.hidden = panel.dataset.settingsPanel !== tabId;
   });
+  const selectedLabel = elements.settingsTabs.querySelector<HTMLElement>('[aria-selected="true"] [data-i18n]');
+  const navigation = elements.settingsTabs.closest<HTMLDetailsElement>(".settings-navigation");
+  const currentLabel = navigation?.querySelector<HTMLElement>("[data-settings-current-label]");
+  if (currentLabel && selectedLabel) {
+    currentLabel.dataset.i18n = selectedLabel.dataset.i18n;
+    currentLabel.textContent = selectedLabel.textContent;
+  }
+  if (navigation?.open && window.matchMedia("(max-width: 760px)").matches) {
+    const restoreFocus = elements.settingsTabs.contains(document.activeElement);
+    navigation.open = false;
+    if (restoreFocus) navigation.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
+  }
   const panels = elements.settingsPage.querySelector<HTMLElement>(".settings-panels");
   panels?.scrollTo({ top: 0, behavior: "instant" });
   return true;

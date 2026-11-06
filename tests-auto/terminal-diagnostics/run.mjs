@@ -13,6 +13,9 @@ export async function runTerminalDiagnosticsScenario() {
   const openPluginSettings = async () => {
     await click("#settingsButton");
     await click("#openSettingsItem");
+    if (await browser.evaluate('matchMedia("(max-width:760px)").matches && !document.querySelector(".settings-navigation").open')) {
+      await click(".settings-navigation-trigger");
+    }
     await click("[data-settings-tab=plugins]");
     await browser.waitFor('document.querySelectorAll(".plugin-item").length===9');
   };
