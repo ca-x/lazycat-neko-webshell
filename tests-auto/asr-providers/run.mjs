@@ -37,6 +37,9 @@ export async function runAsrProviderScenario() {
     await browser.open(`http://127.0.0.1:${server.httpServer.address().port}`);
     await browser.command(["set", "viewport", "1280", "900"]);
     await wait('document.querySelector("#settingsButton")');
+    // Provider availability must load without first visiting settings or the plugin sidebar.
+    await wait('document.querySelector("[data-plugin-settings=wechat-asr]")');
+    assert.equal(await evaluate('document.querySelector("#settingsPage").hidden'), true);
     await click("#settingsButton"); await click("#openSettingsItem");
     await wait('!document.querySelector("#settingsPage").hidden');
     await click("[data-settings-tab=plugins]");

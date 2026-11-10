@@ -1458,6 +1458,8 @@ async function init() {
   bindActions();
   applyRuntimeChrome();
   applySettings();
+  // Terminal actions need plugin capabilities before settings or the sidebar is opened.
+  void loadPlugins();
   handleViewportChange();
   mobileSystemKeyboard.applyPreference();
   void sshProfileSettings.load();
