@@ -1,3 +1,4 @@
+import "./terminal-input-actions.css";
 import { createMicroVmTerminals } from "./microvm/view";
 import { createPluginStreamBroker, type TerminalStreamHook } from "./plugins/terminal-stream";
 import { createBuiltinPluginEntries } from "./plugins/entries.generated";
@@ -315,6 +316,8 @@ import { createSecretFileController } from "./secret-file/controller";
 import { createFileTransferController } from "./plugins/file-transfer/controller";
 import { createPaneFileDropController, paneAcceptsFileDrop } from "./plugins/file-transfer/pane-drop";
 import { setFileTransferOutput } from "./plugins/file-transfer/dom";
+import { createWeChatAsrController } from "./plugins/wechat-asr/controller";
+import { ASR_PLUGIN_TIMEOUT_MS, asrProfileAvailable, pluginConfigurationTimeoutMs } from "./plugins/asr/providers";
 import { createPluginJsonInvoker } from "./plugins/invoke-json";
 import { createLightOsPortForwardController } from "./plugins/lightos-port-forward/controller";
 import { createPomodoroController } from "./plugins/pomodoro/controller";
@@ -1304,9 +1307,15 @@ const whiteNoise = createWhiteNoiseController({
   onStatus: setPluginStatus,
   onRender: renderWhiteNoiseSurfaces,
 });
+const wechatAsr = createWeChatAsrController({
+  root: elements.pluginList,
+  invoke: createPluginJsonInvoker(capabilityClient, ASR_PLUGIN_TIMEOUT_MS),
+  refresh: renderPluginSettings,
+});
 const terminalInputActions = createTerminalInputActionController({
   root: elements.terminalInputActionsSurface,
   settings: () => settings,
+  voiceProviderAvailable: profile => asrProfileAvailable(profile, plugins),
   activePane: activeTerminalInputPane,
   sendText: sendTextToPane,
   uploadFilesToTemporaryDirectory: (files) => fileTransfer.uploadToTemporaryDirectory(files),
@@ -3793,7 +3802,7 @@ async function configurePlugin(
       pluginId,
       enabled,
       metadata,
-    }, { timeoutMs: 10000 });
+    }, { timeoutMs: pluginConfigurationTimeoutMs(plugin) });
     const updated = response.plugin ?? {
       ...plugin,
       enabled,
@@ -3867,6 +3876,7 @@ function renderPluginSettings() {
     plugins,
     pluginsLoading,
     savingPluginIds: pluginSaveInFlight,
+    wechatAsr: wechatAsr.state(),
     aiAccess: {
       provider: settings.aiProvider,
       baseUrl: settings.aiBaseUrl,
@@ -3964,6 +3974,7 @@ function pluginEntries(): Map<string, PluginEntry> {
     "terminal-transfer": { ...common, controller: terminalTransfer, backend: () => activePane()?.sessionBackend, protocols: currentTerminalTransferProtocols },
     "white-noise": { ...common, controller: whiteNoise },
     "terminal-mcp": {},
+    "wechat-asr": { controller: wechatAsr },
     "terminal-diagnostics": { ...common, diagnostics: terminalDiagnosticsResources.resource, root: elements.pluginToolBody, refresh: renderPluginTools, download: downloadTerminalDiagnostics },
   });
   return builtinPluginEntries;

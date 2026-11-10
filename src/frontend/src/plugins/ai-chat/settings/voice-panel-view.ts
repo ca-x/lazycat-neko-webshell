@@ -65,7 +65,8 @@ function renderVoiceInputSection(
   `;
 }
 
-export function voiceProviderLabel(provider: AiVoiceProviderKind, state: AIAccessSettingsRenderState): string {
+export function voiceProviderLabel(provider: AiVoiceProviderKind | "plugin", state: AIAccessSettingsRenderState): string {
+  if (provider === "plugin") return state.tr("ai.voiceProviderPlugin");
   if (provider === "mimo") return state.tr("ai.voiceProviderMimo");
   if (provider === "mimo-token-plan") return state.tr("ai.voiceProviderMimoTokenPlan");
   return state.tr("ai.voiceProviderCompatible");

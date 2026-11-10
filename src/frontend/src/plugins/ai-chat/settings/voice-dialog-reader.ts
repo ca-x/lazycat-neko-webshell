@@ -26,6 +26,13 @@ export function readAiVoiceProviderProfileFromFields(options: {
   profileCount: number;
 }): AiVoiceProviderProfile {
   const provider = options.read("voiceProvider");
+  if (provider.startsWith("plugin:")) {
+    return sanitizeAiVoiceProviderProfile({
+      id: options.existing?.id ?? options.profileId,
+      name: options.read("voiceName").trim() || options.existing?.name || "ASR provider",
+      provider: "plugin", pluginId: provider.slice("plugin:".length),
+    }, options.profileCount);
+  }
   const profileId = options.existing?.id ?? options.profileId ?? "";
   const fallbackName = options.existing?.name
     || (options.isNew ? `Voice Provider ${options.profileCount + 1}` : "Voice Provider");

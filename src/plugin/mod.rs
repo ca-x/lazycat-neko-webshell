@@ -1,4 +1,5 @@
 //! Composition of built-in plugins and the host-owned resources they may use.
+pub(crate) mod asr;
 pub mod catalog;
 mod configuration;
 pub mod http;
@@ -144,6 +145,20 @@ impl PluginHost {
                         .any(|resource| resource == "notifications")
                     {
                         scoped.provide("notifications", notifier);
+                    }
+                    if manifest
+                        .resources
+                        .iter()
+                        .any(|resource| resource == "asr-models")
+                    {
+                        let base = crate::database::database_path();
+                        let parent = base.parent().unwrap_or_else(|| std::path::Path::new("."));
+                        scoped.provide(
+                            "asr-models",
+                            neko_plugin::AsrModelDirectory {
+                                path: parent.join("models").join(entry.id),
+                            },
+                        );
                     }
                     let plugin = (entry.register)(&scoped);
                     let record = self

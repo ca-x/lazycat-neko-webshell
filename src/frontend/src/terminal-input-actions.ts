@@ -1,5 +1,5 @@
 import type { MessageKey } from "./i18n";
-import type { Settings, TerminalPane, Tone } from "./types";
+import type { AiVoiceProviderProfile, Settings, TerminalPane, Tone } from "./types";
 import { IMAGE_FILE_ACCEPT } from "./clipboard-image";
 import { shellQuotePath } from "./shell-quote-path";
 import { aiVoiceProfileConfigured } from "./plugins/ai-chat/voice-profiles";
@@ -24,6 +24,7 @@ export type TerminalInputActionController = {
 export function createTerminalInputActionController(options: {
   root: HTMLDivElement;
   settings: () => Settings;
+  voiceProviderAvailable?: (profile: AiVoiceProviderProfile | undefined) => boolean;
   activePane: () => TerminalPane | undefined;
   sendText: (pane: TerminalPane, text: string) => boolean | Promise<boolean>;
   uploadFilesToTemporaryDirectory: (files: File[]) => string[] | Promise<string[]>;
@@ -37,6 +38,7 @@ export function createTerminalInputActionController(options: {
 }): TerminalInputActionController {
   let recorder: VoiceAudioRecorder | undefined;
   let paneAtStart: TerminalPane | undefined;
+  let profileAtStart: AiVoiceProviderProfile | undefined;
   let starting = false;
   let stopping = false;
   let pendingStop: boolean | undefined;
@@ -54,6 +56,11 @@ export function createTerminalInputActionController(options: {
 
   document.addEventListener("keydown", (event) => {
     if (event.defaultPrevented || event.isComposing) return;
+    if (event.key === "Escape" && (recorder || starting)) {
+      event.preventDefault();
+      stopRecording(true);
+      return;
+    }
     if (event.key === "Escape" && menuOpen) {
       menuOpen = false;
       render();
@@ -83,6 +90,9 @@ export function createTerminalInputActionController(options: {
   }, true);
 
   function render() {
+    if ((starting || recorder) && options.voiceProviderAvailable?.(profileAtStart) === false) {
+      stopRecording(true);
+    }
     const shouldShow = Boolean(options.activePane() && (
       voiceMenuVisible()
       || options.temporaryDirectoryFileUploadVisible()
@@ -126,6 +136,10 @@ export function createTerminalInputActionController(options: {
         <button class="terminal-input-action-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="${escapeAttr(options.tr("action.terminalInputActions"))}" title="${escapeAttr(options.tr("action.terminalInputActions"))}">
           <i data-lucide="plus"></i>
         </button>
+        <button class="terminal-desktop-voice-button" type="button" data-terminal-desktop-voice>
+          <i data-lucide="mic" aria-hidden="true"></i>
+          <span></span>
+        </button>
       `;
       bindSurfaceEvents();
     }
@@ -136,6 +150,10 @@ export function createTerminalInputActionController(options: {
   }
 
   function bindSurfaceEvents() {
+    options.root.querySelector<HTMLButtonElement>("[data-terminal-desktop-voice]")?.addEventListener("click", () => {
+      if (recorder || starting) stopRecording(false);
+      else void startRecording();
+    });
     const button = options.root.querySelector<HTMLButtonElement>(".terminal-input-action-button");
     const voiceButton = options.root.querySelector<HTMLButtonElement>("[data-terminal-input-action=\"voice\"]");
     const imageButton = options.root.querySelector<HTMLElement>("[data-terminal-input-action=\"image\"]");
@@ -264,6 +282,15 @@ export function createTerminalInputActionController(options: {
     const imageButton = options.root.querySelector<HTMLElement>("[data-terminal-input-action=\"image\"]");
     const fileButton = options.root.querySelector<HTMLElement>("[data-terminal-input-action=\"file\"]");
     const voiceState = currentVoiceState();
+    const desktopVoice = options.root.querySelector<HTMLButtonElement>("[data-terminal-desktop-voice]");
+    if (desktopVoice) {
+      desktopVoice.hidden = !voiceState.visible;
+      desktopVoice.disabled = !recorder && !starting && !voiceState.canStart;
+      desktopVoice.setAttribute("aria-pressed", String(Boolean(recorder || starting)));
+      desktopVoice.title = recorder || starting ? options.tr("action.voiceCancelHint") : voiceState.canStart ? options.tr("action.voiceStartHint") : voiceState.title;
+      const label = desktopVoice.querySelector("span");
+      if (label) label.textContent = options.tr(recorder || starting ? "action.voiceStop" : "action.terminalInputVoice");
+    }
     const busy = Boolean(recorder || uploading || runningUpload);
 
     options.root.dataset.state = recorder
@@ -407,11 +434,12 @@ export function createTerminalInputActionController(options: {
     if (!visible) {
       return { visible: false, canStart: false, title: options.tr("action.terminalInputVoice") };
     }
-    const configured = aiVoiceProfileConfigured(activeProfile);
+    const available = options.voiceProviderAvailable?.(activeProfile) ?? true;
+    const configured = aiVoiceProfileConfigured(activeProfile) && available;
     const formatSupported = voiceRecordingFormatSupported(activeProfile?.format ?? "auto");
     const title = configured
       ? formatSupported ? options.tr("action.aiVoiceHold") : options.tr("ai.voiceFormatNotSupported")
-      : options.tr("ai.voiceNotConfigured");
+      : options.tr(available ? "ai.voiceNotConfigured" : "asr.providerUnavailable");
     return {
       visible: true,
       canStart: configured && formatSupported && !uploading && !runningUpload,
@@ -432,6 +460,7 @@ export function createTerminalInputActionController(options: {
       const activeProfile = settings.aiVoiceProviderProfiles.find(
         (profile) => profile.id === settings.aiVoiceActiveProviderProfileId,
       ) ?? settings.aiVoiceProviderProfiles[0];
+      profileAtStart = activeProfile ? { ...activeProfile } : undefined;
       const voiceRecorder = await createVoiceAudioRecorder(activeProfile?.format ?? "auto");
       recorder = voiceRecorder;
       startLevelMeter(voiceRecorder.stream);
@@ -465,6 +494,7 @@ export function createTerminalInputActionController(options: {
 
   async function finishRecording(activeRecorder: VoiceAudioRecorder, cancel: boolean) {
     const pane = paneAtStart;
+    const profile = profileAtStart;
     let blob: Blob | undefined;
     let mimeType = "audio/wav";
     let extension = "wav";
@@ -494,7 +524,7 @@ export function createTerminalInputActionController(options: {
     liveTranscript = options.tr("status.aiVoiceTranscribing");
     render();
     try {
-      const text = await transcribeBlob(blob, mimeType, extension);
+      const text = await transcribeBlob(blob, mimeType, extension, profile);
       if (text) {
         liveTranscript = text;
         render();
@@ -520,15 +550,21 @@ export function createTerminalInputActionController(options: {
   function cleanupRecording() {
     recorder = undefined;
     paneAtStart = undefined;
+    profileAtStart = undefined;
     starting = false;
     stopping = false;
     pendingStop = undefined;
     stopLevelMeter();
   }
 
-  async function transcribeBlob(blob: Blob, mimeType: string, extension: string): Promise<string> {
+  async function transcribeBlob(blob: Blob, mimeType: string, extension: string, profile: AiVoiceProviderProfile | undefined): Promise<string> {
     const form = new FormData();
     form.append("mimeType", mimeType);
+    if (profile) {
+      form.append("profileId", profile.id);
+      form.append("provider", profile.provider);
+      form.append("pluginId", profile.pluginId ?? "");
+    }
     form.append("audio", blob, `voice-input.${extension || extensionForMime(mimeType)}`);
     const response = await fetch(new URL(VOICE_TRANSCRIPTION_ENDPOINT, window.location.href), {
       method: "POST",

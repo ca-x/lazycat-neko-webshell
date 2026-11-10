@@ -16,6 +16,9 @@ mkdir -p "${content_dir}"
 mkdir -p "${content_dir}/licenses"
 cp vendor/restty/0.3.0/LICENSE "${content_dir}/licenses/restty-0.3.0-LICENSE"
 cp vendor/w1/0.3.0/LICENSE-MIT "${content_dir}/licenses/w1-0.3.0-LICENSE-MIT"
+cp vendor/wowtype-voice/LICENSE-APACHE "${content_dir}/licenses/wowtype-voice-LICENSE-APACHE"
+cp vendor/wowtype-voice/NOTICE.md "${content_dir}/licenses/wowtype-voice-NOTICE.md"
+cp vendor/wowtype-voice/ATTRIBUTION.txt "${content_dir}/licenses/wowtype-voice-ATTRIBUTION.txt"
 
 npm ci
 npm run plugins:generate

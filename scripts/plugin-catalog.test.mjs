@@ -23,9 +23,9 @@ function addPlugin(root, directory, id = directory, edit = (plugin) => plugin) {
 
 test("the complete built-in catalog preserves defaults and configuration ownership", () => {
   const plugins = discoverPlugins(root);
-  assert.equal(plugins.length, 9);
+  assert.equal(plugins.length, 10);
   const enabled = Object.fromEntries(plugins.map((plugin) => [plugin.id, plugin.enabled]));
-  assert.deepEqual(enabled, { "ai-chat": false, "file-transfer": true, "lightos-port-forward": false, pomodoro: true, "public-tunnel": false, "terminal-diagnostics": false, "terminal-mcp": false, "terminal-transfer": false, "white-noise": true });
+  assert.deepEqual(enabled, { "ai-chat": false, "file-transfer": true, "lightos-port-forward": false, pomodoro: true, "public-tunnel": false, "terminal-diagnostics": false, "terminal-mcp": false, "terminal-transfer": false, "wechat-asr": false, "white-noise": true });
   const mcp = plugins.find((plugin) => plugin.id === "terminal-mcp");
   assert.equal(mcp.frontend.tool, false);
   assert.deepEqual(mcp.configuration.metadata.defaultPolicy.values, ["confirm", "trusted_callers", "same_user_automatic", "read_only"]);

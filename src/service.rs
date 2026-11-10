@@ -469,7 +469,11 @@ impl CapabilityService for CapabilityServiceImpl {
             }
         }
 
-        let session_id = required_field(request.session_id, "session_id")?.to_owned();
+        let session_id = if crate::plugin::asr::registered(plugin_id) {
+            request.session_id.unwrap_or_default().trim().to_owned()
+        } else {
+            required_field(request.session_id, "session_id")?.to_owned()
+        };
         let operation = request
             .operation
             .map(str::trim)

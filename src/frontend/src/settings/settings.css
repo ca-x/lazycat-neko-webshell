@@ -252,3 +252,7 @@
 .settings-disclosure-body .ssh-config-meta { overflow-wrap: anywhere; }
 .plugin-configuration-body > .plugin-meta { margin-top: 12px; margin-bottom: 12px; }
 .settings-dialog button { min-height: 44px; }
+
+/* API credentials do not apply to plugin speech providers. */
+.ai-config-grid [data-voice-api-field][hidden],
+[data-voice-plugin-help][hidden] { display: none; }

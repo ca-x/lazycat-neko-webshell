@@ -29,6 +29,7 @@ type Translate = (key: MessageKey, values?: Record<string, string | number>) => 
 export type PluginSettingsViewState = {
   plugins: PluginDescriptor[];
   pluginsLoading: boolean;
+  wechatAsr?: import("./plugins/wechat-asr/controller").WeChatAsrState;
   savingPluginIds: Set<string>;
   aiAccess: AIAccessSettingsViewState;
   publicTunnel: PublicTunnelSettingsViewState;

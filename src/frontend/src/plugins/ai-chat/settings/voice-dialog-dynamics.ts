@@ -11,14 +11,17 @@ export function applyVoiceProviderDialogPreset(root: ParentNode, provider: strin
   const model = dialogInput(root, "voiceModel");
   const language = dialogInput(root, "voiceLanguage");
   const isMimo = provider === "mimo" || provider === "mimo-token-plan";
+  const isPlugin = provider.startsWith("plugin:");
+  root.querySelectorAll<HTMLElement>("[data-voice-api-field]").forEach(field => { field.hidden = isPlugin; });
+  root.querySelectorAll<HTMLElement>("[data-voice-plugin-help]").forEach(field => { field.hidden = !isPlugin; });
 
   if (endpoint) {
-    endpoint.disabled = isMimo;
+    endpoint.disabled = isMimo || isPlugin;
     if (isMimo) endpoint.value = "chat-input-audio";
   }
   if (format) {
-    format.disabled = isMimo;
-    if (isMimo) format.value = "wav";
+    format.disabled = isMimo || isPlugin;
+    if (isMimo || isPlugin) format.value = "wav";
     if (!isMimo && !format.value) format.value = "auto";
   }
   if (provider === "mimo") {

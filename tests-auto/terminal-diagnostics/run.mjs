@@ -17,7 +17,7 @@ export async function runTerminalDiagnosticsScenario() {
       await click(".settings-navigation-trigger");
     }
     await click("[data-settings-tab=plugins]");
-    await browser.waitFor('document.querySelectorAll(".plugin-item").length===9');
+    await browser.waitFor('document.querySelectorAll(".plugin-item").length===10');
   };
   try {
     await browser.open(`http://127.0.0.1:${server.httpServer.address().port}`);

@@ -276,7 +276,8 @@ export type AiVoiceSpeechEndpointType = "audio-speech" | "chat-audio";
 export type AiVoiceProviderProfile = {
   id: string;
   name: string;
-  provider: AiVoiceProviderKind;
+  provider: AiVoiceProviderKind | "plugin";
+  pluginId?: string;
   endpointType: AiVoiceEndpointType;
   baseUrl: string;
   apiKey: string;

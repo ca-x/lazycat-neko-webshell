@@ -61,6 +61,8 @@ struct VoiceSettings {
 #[serde(rename_all = "camelCase")]
 struct VoiceProviderProfile {
     #[serde(default)]
+    plugin_id: String,
+    #[serde(default)]
     id: String,
     #[serde(default)]
     name: String,
@@ -103,7 +105,7 @@ struct VoiceSpeechProviderProfile {
     instructions: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceTranscriptionResponse {
     text: String,
@@ -125,6 +127,13 @@ struct VoiceSpeechAudio {
 struct ChatSpeechAudio {
     bytes: Bytes,
     mime_type: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct VoiceUploadSelection {
+    profile_id: String,
+    provider: String,
+    plugin_id: String,
 }
 
 struct VoiceAudioUpload {
@@ -189,18 +198,46 @@ pub async fn post_voice_transcription(
     if !settings.enabled {
         return Err((StatusCode::FORBIDDEN, "voice input is disabled".to_owned()));
     }
-    let profile = selected_voice_profile(&settings).ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            "voice provider is not configured".to_owned(),
-        )
-    })?;
+    let (upload, selection) = read_voice_audio_upload(multipart).await?;
+    let profile = resolve_upload_profile(&settings, &selection)?;
     validate_voice_profile(&profile)?;
 
-    let upload = read_voice_audio_upload(multipart).await?;
-    let text = transcribe_voice(&profile, upload)
-        .await
-        .map_err(|err| (StatusCode::BAD_GATEWAY, err.to_string()))?;
+    let text = if profile.provider == "plugin" {
+        state
+            .plugin
+            .require_asr_provider(&profile.plugin_id)
+            .map_err(asr_http_error)?;
+        let runtime = state.plugin.runtime(&state).await.map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "ASR plugin runtime is unavailable".to_owned(),
+            )
+        })?;
+        let reply = runtime
+            .invoke(
+                &profile.plugin_id,
+                neko_plugin::InvokeRequest {
+                    target: neko_plugin::TargetRequest::default(),
+                    operation: "transcribe".to_owned(),
+                    content_type: upload.mime_type,
+                    payload: upload.bytes.to_vec(),
+                },
+            )
+            .await
+            .map_err(asr_http_error)?;
+        serde_json::from_slice::<VoiceTranscriptionResponse>(&reply.payload)
+            .map_err(|_| {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    "ASR provider returned an invalid response".to_owned(),
+                )
+            })?
+            .text
+    } else {
+        transcribe_voice(&profile, upload)
+            .await
+            .map_err(|err| (StatusCode::BAD_GATEWAY, err.to_string()))?
+    };
     Ok(Json(VoiceTranscriptionResponse { text }))
 }
 
@@ -255,11 +292,12 @@ fn load_voice_settings(state: &AppState) -> anyhow::Result<VoiceSettings> {
 
 async fn read_voice_audio_upload(
     mut multipart: Multipart,
-) -> Result<VoiceAudioUpload, (StatusCode, String)> {
+) -> Result<(VoiceAudioUpload, VoiceUploadSelection), (StatusCode, String)> {
     let mut audio: Option<Bytes> = None;
     let mut audio_mime = String::new();
     let mut requested_mime = String::new();
     let mut filename = String::new();
+    let mut selection = VoiceUploadSelection::default();
 
     while let Some(field) = multipart.next_field().await.map_err(|err| {
         (
@@ -268,6 +306,27 @@ async fn read_voice_audio_upload(
         )
     })? {
         let name = field.name().unwrap_or_default().to_owned();
+        if matches!(name.as_str(), "profileId" | "provider" | "pluginId") {
+            let value = field.text().await.map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "invalid voice provider selection".to_owned(),
+                )
+            })?;
+            if value.len() > 128 {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "voice provider selection is too long".to_owned(),
+                ));
+            }
+            match name.as_str() {
+                "profileId" => selection.profile_id = value,
+                "provider" => selection.provider = value,
+                "pluginId" => selection.plugin_id = value,
+                _ => {}
+            }
+            continue;
+        }
         if name == "mimeType" {
             field
                 .text()
@@ -318,11 +377,14 @@ async fn read_voice_audio_upload(
     } else {
         filename
     };
-    Ok(VoiceAudioUpload {
-        bytes,
-        mime_type,
-        filename,
-    })
+    Ok((
+        VoiceAudioUpload {
+            bytes,
+            mime_type,
+            filename,
+        },
+        selection,
+    ))
 }
 
 async fn transcribe_voice(
@@ -730,7 +792,34 @@ fn is_xiaomi_provider(provider: &str) -> bool {
     provider == "mimo" || provider == "mimo-token-plan"
 }
 
+fn asr_http_error(error: neko_plugin::PluginError) -> (StatusCode, String) {
+    use neko_plugin::ErrorCode;
+    let status = match error.code {
+        ErrorCode::InvalidArgument => StatusCode::BAD_REQUEST,
+        ErrorCode::ResourceExhausted => StatusCode::TOO_MANY_REQUESTS,
+        ErrorCode::FailedPrecondition | ErrorCode::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        ErrorCode::PermissionDenied | ErrorCode::Unauthenticated => StatusCode::FORBIDDEN,
+        _ => StatusCode::BAD_GATEWAY,
+    };
+    (status, error.message)
+}
+
 fn validate_voice_profile(profile: &VoiceProviderProfile) -> Result<(), (StatusCode, String)> {
+    if profile.provider == "plugin" {
+        if profile.plugin_id.is_empty()
+            || profile.plugin_id.len() > 64
+            || !profile
+                .plugin_id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "a registered ASR plugin must be selected".to_owned(),
+            ));
+        }
+        return Ok(());
+    }
     if profile.base_url.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -782,6 +871,36 @@ fn validate_voice_speech_profile(
     Ok(())
 }
 
+fn resolve_upload_profile(
+    settings: &VoiceSettings,
+    selection: &VoiceUploadSelection,
+) -> Result<VoiceProviderProfile, (StatusCode, String)> {
+    if selection.profile_id.is_empty() {
+        return selected_voice_profile(settings).ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "voice provider is not configured".to_owned(),
+            )
+        });
+    }
+    let profile = merged_voice_profiles(&settings.profiles)
+        .into_iter()
+        .find(|profile| profile.id == selection.profile_id)
+        .ok_or_else(|| {
+            (
+                StatusCode::CONFLICT,
+                "the recorded voice profile was removed; record again".to_owned(),
+            )
+        })?;
+    if profile.provider != selection.provider || profile.plugin_id != selection.plugin_id {
+        return Err((
+            StatusCode::CONFLICT,
+            "voice provider changed during recording; record again".to_owned(),
+        ));
+    }
+    Ok(profile)
+}
+
 fn selected_voice_profile(settings: &VoiceSettings) -> Option<VoiceProviderProfile> {
     let profiles = merged_voice_profiles(&settings.profiles);
     profiles
@@ -831,6 +950,7 @@ fn merged_voice_reply_profiles(
 fn builtin_voice_profiles() -> Vec<VoiceProviderProfile> {
     vec![
         VoiceProviderProfile {
+            plugin_id: String::new(),
             id: "mimo".to_owned(),
             name: "Xiaomi Mimo".to_owned(),
             provider: "mimo".to_owned(),
@@ -841,6 +961,7 @@ fn builtin_voice_profiles() -> Vec<VoiceProviderProfile> {
             language: "zh".to_owned(),
         },
         VoiceProviderProfile {
+            plugin_id: String::new(),
             id: "mimo-token-plan".to_owned(),
             name: "Xiaomi Mimo Token Plan".to_owned(),
             provider: "mimo-token-plan".to_owned(),
@@ -899,6 +1020,16 @@ fn normalize_voice_profile(
     index: usize,
 ) -> VoiceProviderProfile {
     profile.id = sanitize_profile_id(&profile.id, index);
+    if profile.provider.trim() == "plugin" {
+        "plugin".clone_into(&mut profile.provider);
+        profile.plugin_id = profile.plugin_id.trim().to_owned();
+        "audio-transcriptions".clone_into(&mut profile.endpoint_type);
+        profile.base_url.clear();
+        profile.api_key.clear();
+        profile.model.clear();
+        return profile;
+    }
+    profile.plugin_id.clear();
     profile.provider = match profile.provider.trim() {
         "mimo" => "mimo".to_owned(),
         "mimo-token-plan" => "mimo-token-plan".to_owned(),
@@ -1111,6 +1242,66 @@ fn internal_error(err: &anyhow::Error) -> (StatusCode, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plugin_profile_needs_no_api_credentials() {
+        let profile = normalize_voice_profile(
+            VoiceProviderProfile {
+                id: "local".into(),
+                provider: "plugin".into(),
+                plugin_id: "wechat-asr".into(),
+                base_url: "https://should-not-be-used.invalid".into(),
+                api_key: "old-key".into(),
+                ..Default::default()
+            },
+            0,
+        );
+        assert!(validate_voice_profile(&profile).is_ok());
+        assert!(profile.base_url.is_empty());
+        assert!(profile.api_key.is_empty());
+        assert!(profile.model.is_empty());
+    }
+
+    #[test]
+    fn recording_keeps_original_provider_and_rejects_changed_or_deleted_profiles() {
+        let mut settings = VoiceSettings {
+            active_profile_id: "mimo".into(),
+            profiles: vec![VoiceProviderProfile {
+                id: "local".into(),
+                provider: "plugin".into(),
+                plugin_id: "wechat-asr".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let selection = VoiceUploadSelection {
+            profile_id: "local".into(),
+            provider: "plugin".into(),
+            plugin_id: "wechat-asr".into(),
+        };
+        assert_eq!(
+            resolve_upload_profile(&settings, &selection)
+                .unwrap()
+                .plugin_id,
+            "wechat-asr"
+        );
+        settings.profiles[0].provider = "openai-compatible".into();
+        assert_eq!(
+            resolve_upload_profile(&settings, &selection).unwrap_err().0,
+            StatusCode::CONFLICT
+        );
+        settings.profiles.clear();
+        assert_eq!(
+            resolve_upload_profile(&settings, &selection).unwrap_err().0,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            resolve_upload_profile(&settings, &VoiceUploadSelection::default())
+                .unwrap()
+                .provider,
+            "mimo"
+        );
+    }
 
     #[test]
     fn normalizes_api_base_from_endpoint_urls() {

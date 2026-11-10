@@ -120,7 +120,7 @@ export async function runSettingsUiScenario() {
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".settings-dialog")).transitionDuration.split(",").every(value=>parseFloat(value)===0)'), true);
     await click("[data-settings-tab=plugins]");
     await assertBackdrop(false);
-    await wait('document.querySelectorAll(".plugin-item").length===9');
+    await wait('document.querySelectorAll(".plugin-item").length===10');
     assert.equal(await evaluate('document.querySelectorAll(".plugin-configuration[open]").length'), 0);
     await screenshot("plugins-desktop");
     await click("[data-plugin-settings=ai-chat] summary");

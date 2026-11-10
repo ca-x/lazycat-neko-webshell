@@ -11,6 +11,7 @@ import { createEntry as public_tunnel, renderSettings as public_tunnelSettings, 
 import { createEntry as terminal_diagnostics, renderSettings as terminal_diagnosticsSettings, isSettingsOpen as terminal_diagnosticsSettingsOpen, type EntryResources as terminal_diagnosticsResources } from "./terminal-diagnostics/entry.ts";
 import { createEntry as terminal_mcp, renderSettings as terminal_mcpSettings, isSettingsOpen as terminal_mcpSettingsOpen, type EntryResources as terminal_mcpResources } from "./terminal-mcp/entry.ts";
 import { createEntry as terminal_transfer, renderSettings as terminal_transferSettings, isSettingsOpen as terminal_transferSettingsOpen, type EntryResources as terminal_transferResources } from "./terminal-transfer/entry.ts";
+import { createEntry as wechat_asr, renderSettings as wechat_asrSettings, isSettingsOpen as wechat_asrSettingsOpen, type EntryResources as wechat_asrResources } from "./wechat-asr/entry.ts";
 import { createEntry as white_noise, renderSettings as white_noiseSettings, isSettingsOpen as white_noiseSettingsOpen, type EntryResources as white_noiseResources } from "./white-noise/entry.ts";
 
 export type BuiltinPluginResources = {
@@ -22,6 +23,7 @@ export type BuiltinPluginResources = {
   "terminal-diagnostics": terminal_diagnosticsResources;
   "terminal-mcp": terminal_mcpResources;
   "terminal-transfer": terminal_transferResources;
+  "wechat-asr": wechat_asrResources;
   "white-noise": white_noiseResources;
 };
 
@@ -35,6 +37,7 @@ export function createBuiltinPluginEntries(resources: BuiltinPluginResources): M
     terminal_diagnostics(resources["terminal-diagnostics"]),
     terminal_mcp(resources["terminal-mcp"]),
     terminal_transfer(resources["terminal-transfer"]),
+    wechat_asr(resources["wechat-asr"]),
     white_noise(resources["white-noise"]),
   ];
   return new Map(entries.map((entry) => [entry.id, entry]));
@@ -49,5 +52,6 @@ export const pluginSettings: Record<string, { render: (plugin: PluginDescriptor,
   "terminal-diagnostics": { render: terminal_diagnosticsSettings, open: terminal_diagnosticsSettingsOpen },
   "terminal-mcp": { render: terminal_mcpSettings, open: terminal_mcpSettingsOpen },
   "terminal-transfer": { render: terminal_transferSettings, open: terminal_transferSettingsOpen },
+  "wechat-asr": { render: wechat_asrSettings, open: wechat_asrSettingsOpen },
   "white-noise": { render: white_noiseSettings, open: white_noiseSettingsOpen },
 };

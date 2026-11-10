@@ -1,0 +1,8 @@
+.asr-model-settings { min-width: 0; padding-top: 4px; overflow-wrap: anywhere; }
+.asr-model-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; }
+.asr-model-summary { flex: 1 1 200px; min-width: 0; }
+.asr-model-summary strong { display: block; font-size: 14px; line-height: 1.5; font-weight: 500; }
+.asr-model-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.asr-model-actions .command-button { min-height: 40px; padding: 8px 12px; white-space: normal; }
+.asr-model-settings > .settings-help { margin-top: 12px; }
+.asr-model-settings [role="alert"] { color: var(--danger-fg); }

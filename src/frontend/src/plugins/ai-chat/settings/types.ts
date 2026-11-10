@@ -19,6 +19,7 @@ export type AIAccessSettingsViewState = {
   activeProfileId: string;
   mcpServers: AiMcpServerSettings[];
   voiceInputEnabled: boolean;
+  voiceProviderPlugins?: import("../../../gen/lazycat/webshell/v1/capability_pb").PluginDescriptor[];
   voiceProfiles: AiVoiceProviderProfile[];
   activeVoiceProfileId: string;
   voiceReplyEnabled: boolean;

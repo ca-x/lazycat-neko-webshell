@@ -438,3 +438,43 @@ async fn disabling_file_transfer_discards_only_transient_upload_buffers() {
     );
     state.plugin.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn asr_requires_a_declared_enabled_plugin_and_runtime_rechecks_disable() {
+    let state = state();
+    assert_eq!(
+        state
+            .plugin
+            .require_asr_provider("ai-chat")
+            .unwrap_err()
+            .code,
+        neko_plugin::ErrorCode::InvalidArgument
+    );
+    assert!(state.plugin.require_asr_provider("wechat-asr").is_err());
+    state
+        .plugin
+        .configure(&state, "wechat-asr", true, HashMap::new())
+        .await
+        .unwrap();
+    state.plugin.require_asr_provider("wechat-asr").unwrap();
+    state
+        .plugin
+        .configure(&state, "wechat-asr", false, HashMap::new())
+        .await
+        .unwrap();
+    let runtime = state.plugin.runtime(&state).await.unwrap();
+    let error = runtime
+        .invoke(
+            "wechat-asr",
+            neko_plugin::InvokeRequest {
+                target: neko_plugin::TargetRequest::default(),
+                operation: "status".into(),
+                content_type: "application/json".into(),
+                payload: vec![],
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, neko_plugin::ErrorCode::FailedPrecondition);
+    state.plugin.shutdown().await.unwrap();
+}

@@ -1,3 +1,4 @@
+import { pluginDisplayName } from "../../../plugin-utils";
 import { escapeAttr, escapeHtml } from "../../../utils";
 import { AI_VOICE_INPUT_FORMATS, aiVoiceInputFormatLabel, isBuiltinAiVoiceProfile } from "../voice-profiles";
 import {
@@ -73,7 +74,10 @@ function renderVoiceConfigForm(
   state: AIAccessSettingsRenderState,
 ): string {
   const profile = dialog.profile;
-  const fixedPreset = profile.provider === "mimo" || profile.provider === "mimo-token-plan";
+  const pluginProvider = profile.provider === "plugin";
+  const fixedPreset = pluginProvider || profile.provider === "mimo" || profile.provider === "mimo-token-plan";
+  const providerPlugins = state.voiceProviderPlugins ?? [];
+  const pluginOptions = providerPlugins.map(plugin => `<option value="plugin:${escapeAttr(plugin.id)}" ${pluginProvider && profile.pluginId === plugin.id ? "selected" : ""} ${plugin.enabled ? "" : "disabled"}>${escapeHtml(pluginDisplayName(plugin, state.tr))}${plugin.enabled ? "" : ` (${escapeHtml(state.tr("setting.pluginDisabled"))})`}</option>`).join("");
   const formatOptions = AI_VOICE_INPUT_FORMATS
     .map((format) => `<option value="${escapeAttr(format)}" ${profile.format === format ? "selected" : ""}>${escapeHtml(aiVoiceInputFormatLabel(format))}</option>`)
     .join("");
@@ -89,16 +93,18 @@ function renderVoiceConfigForm(
           <option value="mimo" ${profile.provider === "mimo" ? "selected" : ""}>${escapeHtml(state.tr("ai.voiceProviderMimo"))}</option>
           <option value="mimo-token-plan" ${profile.provider === "mimo-token-plan" ? "selected" : ""}>${escapeHtml(state.tr("ai.voiceProviderMimoTokenPlan"))}</option>
           <option value="openai-compatible" ${profile.provider === "openai-compatible" ? "selected" : ""}>${escapeHtml(state.tr("ai.voiceProviderCompatible"))}</option>
+          ${pluginOptions}
+          ${pluginProvider && !providerPlugins.some(p => p.id === profile.pluginId) ? `<option value="plugin:${escapeAttr(profile.pluginId ?? "")}" selected disabled>${escapeHtml(state.tr("ai.voicePluginUnavailable"))}</option>` : ""}
         </select>
       </label>
-      <label class="field">
+      <label class="field" data-voice-api-field ${pluginProvider ? "hidden" : ""}>
         <span>${escapeHtml(state.tr("field.aiVoiceEndpointType"))}</span>
         <select data-ai-dialog-field="voiceEndpointType" ${fixedPreset ? "disabled" : ""}>
           <option value="audio-transcriptions" ${profile.endpointType === "audio-transcriptions" ? "selected" : ""}>${escapeHtml(state.tr("ai.voiceEndpointAudioTranscriptions"))}</option>
           <option value="chat-input-audio" ${profile.endpointType === "chat-input-audio" ? "selected" : ""}>${escapeHtml(state.tr("ai.voiceEndpointChatInputAudio"))}</option>
         </select>
       </label>
-      <label class="field">
+      <label class="field" data-voice-api-field ${pluginProvider ? "hidden" : ""}>
         <span>${escapeHtml(state.tr("field.aiVoiceLanguage"))}</span>
         <input data-ai-dialog-field="voiceLanguage" type="text" value="${escapeAttr(profile.language)}" autocomplete="off" spellcheck="false" placeholder="auto / zh / en" />
       </label>
@@ -108,20 +114,21 @@ function renderVoiceConfigForm(
           ${formatOptions}
         </select>
       </label>
-      <label class="field ai-config-full">
+      <label class="field ai-config-full" data-voice-api-field ${pluginProvider ? "hidden" : ""}>
         <span>${escapeHtml(state.tr("field.aiBaseUrl"))}</span>
         <input data-ai-dialog-field="voiceBaseUrl" type="url" value="${escapeAttr(profile.baseUrl)}" autocomplete="off" spellcheck="false" placeholder="https://api.openai.com/v1" />
       </label>
-      <label class="field">
+      <label class="field" data-voice-api-field ${pluginProvider ? "hidden" : ""}>
         <span>${escapeHtml(state.tr("field.aiApiKey"))}</span>
         <input data-ai-dialog-field="voiceApiKey" type="password" value="${escapeAttr(profile.apiKey)}" autocomplete="off" spellcheck="false" />
       </label>
-      <label class="field">
+      <label class="field" data-voice-api-field ${pluginProvider ? "hidden" : ""}>
         <span>${escapeHtml(state.tr("field.aiModel"))}</span>
         <input data-ai-dialog-field="voiceModel" type="text" value="${escapeAttr(profile.model)}" autocomplete="off" spellcheck="false" />
       </label>
     </div>
-    <p class="settings-help">${escapeHtml(state.tr("ai.voiceProviderHelp"))}</p>
+    <p class="settings-help" data-voice-plugin-help ${pluginProvider ? "" : "hidden"}>${escapeHtml(state.tr("ai.voicePluginHelp"))}</p>
+    <p class="settings-help" data-voice-api-field ${pluginProvider ? "hidden" : ""}>${escapeHtml(state.tr("ai.voiceProviderHelp"))}</p>
   `;
 }
 

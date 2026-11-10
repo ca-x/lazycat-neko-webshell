@@ -1,0 +1,40 @@
+{
+  "id": "wechat-asr",
+  "kind": "asr",
+  "display_name": "WeChat offline ASR",
+  "description": "Register local speech recognition using WeChat input method models, downloaded on demand and processed on the WebShell server.",
+  "input_schema_json": "{\"operation\":\"status|download|remove|transcribe\"}",
+  "output_schema_json": "{\"ready\":true,\"text\":\"string\"}",
+  "scopes": [
+    "voice"
+  ],
+  "accepted_content_types": [
+    "audio/wav"
+  ],
+  "produced_content_types": [
+    "application/json"
+  ],
+  "enabled": false,
+  "metadata": {
+    "builtin": "true",
+    "asrProvider": "true",
+    "offline": "true",
+    "audioFormat": "wav"
+  },
+  "resources": [
+    "asr-models",
+    "ui"
+  ],
+  "frontend": {
+    "entry": "wechat-asr/entry.ts",
+    "tool": false,
+    "icon": "mic",
+    "nameKey": "plugin.wechatAsr.name",
+    "descriptionKey": "plugin.wechatAsr.description"
+  },
+  "configuration": {
+    "version": 1,
+    "metadata": {},
+    "preferences": []
+  }
+}

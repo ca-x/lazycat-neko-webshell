@@ -1,0 +1,10 @@
+WowType voice (wowtype-voice)
+Source: https://github.com/Gloridust/WowType
+Pinned revision: 1e31c67d9ba0357a0138d552b652c8b70a995c52
+
+WowType's README declares its code dual-licensed under MIT OR Apache-2.0.
+WebShell selects the Apache-2.0 license (included as LICENSE-APACHE).
+WebShell uses the voice library without microphone/hotkey features. No WowType
+word lists, language model, emoji data or Tencent speech model are distributed.
+The original wtlocal provenance and author permission notice is in NOTICE.md.
+Speech models remain Tencent resources and are downloaded separately, on request.

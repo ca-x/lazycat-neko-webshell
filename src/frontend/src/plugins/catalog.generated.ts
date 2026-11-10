@@ -214,6 +214,25 @@ export const BUILTIN_PLUGINS = [
     }
   },
   {
+    "id": "wechat-asr",
+    "frontend": {
+      "entry": "wechat-asr/entry.ts",
+      "tool": false,
+      "icon": "mic",
+      "nameKey": "plugin.wechatAsr.name",
+      "descriptionKey": "plugin.wechatAsr.description"
+    },
+    "resources": [
+      "asr-models",
+      "ui"
+    ],
+    "configuration": {
+      "version": 1,
+      "metadata": {},
+      "preferences": []
+    }
+  },
+  {
     "id": "white-noise",
     "frontend": {
       "entry": "white-noise/entry.ts",
@@ -250,5 +269,6 @@ export const PLUGIN_IDS = {
   "TERMINAL_DIAGNOSTICS": "terminal-diagnostics",
   "TERMINAL_MCP": "terminal-mcp",
   "TERMINAL_TRANSFER": "terminal-transfer",
+  "WECHAT_ASR": "wechat-asr",
   "WHITE_NOISE": "white-noise"
 } as const;

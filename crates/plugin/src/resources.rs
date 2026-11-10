@@ -262,3 +262,10 @@ pub trait LightOsForward: Send + Sync {
     /// Returns a host error if forwarding state cannot be locked or cleaned up.
     fn stop_all(&self) -> Result<(), PluginError>;
 }
+
+/// Persistent directory granted by the host to one ASR plugin only.
+/// Native plugins remain trusted code; this resource is an ownership boundary.
+#[derive(Clone, Debug)]
+pub struct AsrModelDirectory {
+    pub path: std::path::PathBuf,
+}

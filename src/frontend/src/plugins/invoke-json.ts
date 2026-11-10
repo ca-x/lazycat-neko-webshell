@@ -13,7 +13,7 @@ export type PluginJsonInvoker = (
   metadata: Record<string, string>,
 ) => Promise<JsonRecord>;
 
-export function createPluginJsonInvoker(capabilityClient: CapabilityClient): PluginJsonInvoker {
+export function createPluginJsonInvoker(capabilityClient: CapabilityClient, timeoutMs = NETWORK_PLUGIN_TIMEOUT_MS): PluginJsonInvoker {
   return async (pluginId, sessionId, operation, metadata) => {
     const response = await capabilityClient.invokePlugin({
       pluginId,
@@ -21,7 +21,7 @@ export function createPluginJsonInvoker(capabilityClient: CapabilityClient): Plu
       operation,
       contentType: "application/json",
       metadata,
-    }, { timeoutMs: NETWORK_PLUGIN_TIMEOUT_MS });
+    }, { timeoutMs });
     const text = new TextDecoder().decode(response.payload);
     if (!text.trim()) return {};
     const parsed = JSON.parse(text) as unknown;

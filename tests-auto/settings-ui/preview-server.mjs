@@ -4,9 +4,9 @@ import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 
-export async function createSettingsUiPreview(port = 0, { configureDelayMs = 0, agentKind, lightosEnabled = false, configHosts = [] } = {}) {
-  const ids = ["ai-chat", "file-transfer", "lightos-port-forward", "pomodoro", "public-tunnel", "terminal-diagnostics", "terminal-mcp", "terminal-transfer", "white-noise"];
-  const plugins = ids.map((id) => ({ id, displayName: id, kind: id === "ai-chat" ? "ai" : "productivity", scopes: ["terminal"], enabled: !["terminal-mcp", "terminal-diagnostics"].includes(id), metadata: {} }));
+export async function createSettingsUiPreview(port = 0, { configureDelayMs = 0, agentKind, lightosEnabled = false, configHosts = [], invokePlugin } = {}) {
+  const ids = ["ai-chat", "file-transfer", "lightos-port-forward", "pomodoro", "public-tunnel", "terminal-diagnostics", "terminal-mcp", "terminal-transfer", "wechat-asr", "white-noise"];
+  const plugins = ids.map((id) => ({ id, displayName: id, kind: id === "ai-chat" ? "ai" : "productivity", scopes: ["terminal"], enabled: !["terminal-mcp", "terminal-diagnostics", "wechat-asr"].includes(id), metadata: id === "wechat-asr" ? { asrProvider: "true", offline: "true", audioFormat: "wav" } : {} }));
   let settings = { locale: "en" };
   const agentUpdateCalls = [];
   const mock = {
@@ -41,11 +41,19 @@ export async function createSettingsUiPreview(port = 0, { configureDelayMs = 0, 
         else if (pathname.endsWith("/ConfigurePlugin")) {
           if (configureDelayMs) await new Promise((resolve) => setTimeout(resolve, configureDelayMs));
           const plugin = plugins.find((item) => item.id === body.pluginId);
-          if (plugin) { plugin.enabled = body.enabled; plugin.metadata = body.metadata ?? {}; }
+          if (plugin) { plugin.enabled = body.enabled; plugin.metadata = { ...plugin.metadata, ...(body.metadata ?? {}) }; }
           result = { plugin };
         } else if (pathname.endsWith("/ListInstances")) result = { instances: [] };
         else if (pathname.endsWith("/ListSessions")) result = { sessions: [] };
-        else if (pathname.endsWith("/InvokePlugin")) result = { metadata: {}, payload: "" };
+        else if (pathname.endsWith("/InvokePlugin")) {
+          try { result = invokePlugin ? await invokePlugin(body) : { metadata: {}, payload: "" }; }
+          catch (error) {
+            response.statusCode = 503;
+            response.setHeader("content-type", "application/json");
+            response.end(JSON.stringify({ code: "unavailable", message: error.message }));
+            return;
+          }
+        }
         else if (pathname.includes("workspace")) result = { tabs: [], panes: [], revision: 0 };
         response.setHeader("content-type", "application/json");
         response.statusCode = 200;

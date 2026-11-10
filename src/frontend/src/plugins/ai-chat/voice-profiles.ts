@@ -85,6 +85,15 @@ export function sanitizeAiVoiceProviderProfile(
   profile: Partial<AiVoiceProviderProfile>,
   index: number,
 ): AiVoiceProviderProfile {
+  if (profile.provider === "plugin") {
+    return {
+      id: sanitizeVoiceProfileId(profile.id, index),
+      name: typeof profile.name === "string" && profile.name.trim() ? profile.name.trim().slice(0, 80) : "ASR provider",
+      provider: "plugin",
+      pluginId: typeof profile.pluginId === "string" ? profile.pluginId.trim().slice(0, 64) : "",
+      endpointType: "audio-transcriptions", baseUrl: "", apiKey: "", model: "", language: "auto", format: "wav",
+    };
+  }
   const provider = normalizeAiVoiceProviderKind(profile.provider);
   const endpointType = provider === "openai-compatible"
     ? normalizeAiVoiceEndpointType(profile.endpointType)
@@ -103,7 +112,8 @@ export function sanitizeAiVoiceProviderProfile(
   };
 }
 
-export function aiVoiceProviderLabel(provider: AiVoiceProviderKind): string {
+export function aiVoiceProviderLabel(provider: AiVoiceProviderProfile["provider"]): string {
+  if (provider === "plugin") return "ASR plugin";
   if (provider === "mimo") return "Xiaomi Mimo";
   if (provider === "mimo-token-plan") return "Xiaomi Mimo Token Plan";
   return "OpenAI compatible";
@@ -122,6 +132,7 @@ export function aiVoiceInputFormatLabel(format: AiVoiceInputFormat): string {
 }
 
 export function aiVoiceProfileConfigured(profile: AiVoiceProviderProfile | undefined): boolean {
+  if (profile?.provider === "plugin") return Boolean(profile.pluginId && /^[a-z0-9-]{1,64}$/.test(profile.pluginId));
   return Boolean(profile?.baseUrl.trim() && profile.apiKey.trim() && profile.model.trim());
 }
 
