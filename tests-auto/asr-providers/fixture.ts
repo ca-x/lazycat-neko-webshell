@@ -9,11 +9,12 @@ const elements = renderShell(document.querySelector('#app'));
 const local = { id: 'local', name: 'WeChat', provider: 'plugin', pluginId: 'wechat-asr', format: 'wav', baseUrl: '', apiKey: '', model: '', language: 'auto', endpointType: 'audio-transcriptions' };
 const qa = window.qa = { enabled: true, uploads: [], sent: [], streams: [], statuses: [], settings: { aiVoiceInputEnabled: true, aiVoiceProviderProfiles: [local], aiVoiceActiveProviderProfileId: 'local' } };
 const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-navigator.mediaDevices.getUserMedia = async constraints => { const stream = await getUserMedia(constraints); qa.streams.push(stream); return stream; };
+navigator.mediaDevices.getUserMedia = async constraints => { if (qa.denyMic) throw new DOMException('Microphone permission denied', 'NotAllowedError'); const stream = await getUserMedia(constraints); qa.streams.push(stream); return stream; };
 window.fetch = async (_, options) => {
   const form = options.body;
   qa.uploads.push({ profileId: form.get('profileId'), provider: form.get('provider'), pluginId: form.get('pluginId'), audioSize: form.get('audio').size, mime: form.get('audio').type });
-  return new Response(JSON.stringify({ text: 'echo hello' }), { headers: { 'content-type': 'application/json' } });
+  if (qa.failUpload) return new Response('ASR provider is busy', { status: 503 });
+  return new Response(JSON.stringify({ text: qa.emptyResult ? '' : 'echo hello' }), { headers: { 'content-type': 'application/json' } });
 };
 const pane = { id: 'test-pane' };
 const controller = createTerminalInputActionController({

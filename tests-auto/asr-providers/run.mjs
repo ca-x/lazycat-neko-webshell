@@ -123,12 +123,54 @@ export async function runAsrProviderScenario() {
     assert.equal(await evaluate('document.querySelector("[data-terminal-input-action=voice]").disabled'), false);
     await browser.screenshot(artifacts + "voice-mobile.png");
     const point = await evaluate('(()=>{const r=document.querySelector("[data-terminal-input-action=voice]").getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()');
+    await evaluate(`document.querySelector("[data-terminal-input-action=voice]").addEventListener("pointerdown",()=>setTimeout(()=>{qa.whileHolding={uploads:qa.uploads.length,state:document.querySelector(".terminal-input-actions-surface").dataset.state}},400),{once:true})`);
     await browser.dispatchTouch([
-      { type: "touchStart", delayMs: 600, touchPoints: [{ ...point, id: 1 }] },
+      { type: "touchStart", delayMs: 900, touchPoints: [{ ...point, id: 1 }] },
       { type: "touchEnd", touchPoints: [] },
     ]);
+    assert.deepEqual(await evaluate('qa.whileHolding'), { uploads: 1, state: "recording" }, "holding the voice menu must not submit before release");
     await wait('window.qa.uploads.length===2 && window.qa.stopped()');
+    assert.ok(await evaluate('qa.uploads[1].audioSize>44'), "mobile recording must contain PCM samples");
     assert.deepEqual(await evaluate('window.qa.sent'), ["echo hello", "echo hello"]);
+    const primaryPoint = await evaluate('(()=>{const r=document.querySelector(".terminal-input-action-button").getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()');
+    await browser.dispatchTouch([
+      { type: "touchStart", delayMs: 1200, touchPoints: [{ ...primaryPoint, id: 2 }] },
+      { type: "touchEnd", touchPoints: [] },
+    ]);
+    await wait('qa.uploads.length===3 && qa.stopped()');
+    assert.ok(await evaluate('qa.uploads[2].audioSize>44'), "holding the primary button must capture PCM samples");
+    await browser.dispatchTouch([
+      { type: "touchStart", delayMs: 1000, touchPoints: [{ ...primaryPoint, id: 3 }] },
+      { type: "touchCancel", touchPoints: [] },
+    ]);
+    await wait('qa.stopped()');
+    assert.equal(await evaluate('qa.uploads.length'), 3, "cancelled touch must not submit audio");
+    await evaluate('qa.mobile(false);qa.failUpload=true;document.querySelector("#emptyState").hidden=true');
+    await click(primary); await click(voice);
+    await wait('document.querySelector(".terminal-input-actions-surface").dataset.state==="recording"');
+    await click(primary);
+    await wait('qa.statuses.some(status=>status.text.includes("ASR provider is busy"))');
+    assert.equal(await evaluate('document.querySelector(".terminal-input-recording-pill").checkVisibility()'), true, "ASR errors must remain visible with an active terminal");
+    assert.equal(await evaluate('document.querySelector(".terminal-input-recording-label").textContent.includes("ASR provider is busy")'), true);
+    await browser.screenshot(artifacts + "recognition-error-desktop.png");
+    await click("[data-terminal-voice-dismiss]");
+    assert.equal(await evaluate('document.querySelector(".terminal-input-recording-pill").hidden'), true);
+    await evaluate('qa.failUpload=false;qa.emptyResult=true');
+    await click(primary); await click(voice);
+    await wait('document.querySelector(".terminal-input-actions-surface").dataset.state==="recording"');
+    await click(primary);
+    await wait('document.querySelector(".terminal-input-recording-label").textContent.includes("No speech text returned")');
+    assert.equal(await evaluate('document.querySelector(".terminal-input-recording-pill").checkVisibility()'), true);
+    await click("[data-terminal-voice-dismiss]");
+    await evaluate('qa.denyMic=true');
+    await click(primary); await click(voice);
+    await wait('document.querySelector(".terminal-input-recording-label").textContent.includes("Microphone permission denied")');
+    assert.equal(await evaluate('document.querySelector(".terminal-input-recording-pill").checkVisibility()'), true);
+    assert.equal(await evaluate('qa.stopped()'), true);
+    await evaluate('qa.mobile(true)');
+    await browser.command(["set", "viewport", "390", "844"]);
+    assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'), true);
+    await browser.screenshot(artifacts + "recognition-error-mobile.png");
     return { status: "passed", scenario: "asr-providers", downloads: attempts, artifacts };
   } catch (error) {
     console.error(JSON.stringify({ calls, ready, attempts, ui: await evaluate('document.querySelector("[data-plugin-settings=wechat-asr]")?.textContent') }));

@@ -3,3 +3,22 @@
   background: var(--surface-raised);
   border: 1px solid var(--accent-border);
 }
+
+.terminal-input-recording-pill[data-feedback="true"] {
+  grid-template-columns: minmax(0, 1fr) 28px;
+  height: auto;
+  min-height: 56px;
+  padding: 10px 12px 10px 18px;
+  gap: 10px;
+}
+.terminal-input-recording-pill[data-feedback="true"] .terminal-input-recording-label {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+.terminal-input-recording-pill[data-feedback="true"][data-tone="error"] .terminal-input-recording-label {
+  color: var(--danger-fg);
+}
+[data-terminal-voice-dismiss] { pointer-events: auto; }
+[data-terminal-voice-dismiss][hidden], .terminal-input-waveform[hidden] { display: none; }

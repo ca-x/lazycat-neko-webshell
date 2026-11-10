@@ -53,6 +53,7 @@ export function createTerminalInputActionController(options: {
   let rmsFrame = 0;
   let smoothedLevel = 0;
   let liveTranscript = "";
+  let voiceNotice: { text: string; tone: Tone } | undefined;
 
   document.addEventListener("keydown", (event) => {
     if (event.defaultPrevented || event.isComposing) return;
@@ -104,6 +105,7 @@ export function createTerminalInputActionController(options: {
         stopRecording(true);
       }
       menuOpen = false;
+      voiceNotice = undefined;
       suppressedByTyping = false;
       options.root.hidden = true;
       options.root.replaceChildren();
@@ -116,6 +118,9 @@ export function createTerminalInputActionController(options: {
             <i></i><i></i><i></i><i></i><i></i>
           </span>
           <span class="terminal-input-recording-label"></span>
+          <button class="icon-button" type="button" data-terminal-voice-dismiss hidden aria-label="${escapeAttr(options.tr("action.close"))}">
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
         </div>
         <div class="terminal-input-action-menu" role="menu" hidden>
           <button class="terminal-input-menu-item" type="button" role="menuitem" data-terminal-input-action="voice">
@@ -146,6 +151,10 @@ export function createTerminalInputActionController(options: {
   }
 
   function bindSurfaceEvents() {
+    options.root.querySelector<HTMLButtonElement>("[data-terminal-voice-dismiss]")?.addEventListener("click", () => {
+      voiceNotice = undefined;
+      render();
+    });
     const button = options.root.querySelector<HTMLButtonElement>(".terminal-input-action-button");
     const voiceButton = options.root.querySelector<HTMLButtonElement>("[data-terminal-input-action=\"voice\"]");
     const imageButton = options.root.querySelector<HTMLElement>("[data-terminal-input-action=\"image\"]");
@@ -458,6 +467,8 @@ export function createTerminalInputActionController(options: {
     const pane = options.activePane();
     if (!pane) return;
     paneAtStart = pane;
+    voiceNotice = undefined;
+    liveTranscript = "";
     starting = true;
     stopping = false;
     pendingStop = undefined;
@@ -485,7 +496,7 @@ export function createTerminalInputActionController(options: {
       starting = false;
       pendingStop = undefined;
       cleanupRecording();
-      options.onStatus(options.tr("status.aiVoiceStartFailed", { message: errorMessage(error) }), "error");
+      showVoiceNotice(options.tr("status.aiVoiceStartFailed", { message: errorMessage(error) }));
       render();
     }
   }
@@ -516,7 +527,7 @@ export function createTerminalInputActionController(options: {
         extension = recording.extension;
       }
     } catch (error) {
-      options.onStatus(options.tr("status.aiVoiceFailed", { message: errorMessage(error) }), "error");
+      showVoiceNotice(options.tr("status.aiVoiceFailed", { message: errorMessage(error) }));
     }
     cleanupRecording();
     if (cancel || !pane || !blob) {
@@ -524,7 +535,7 @@ export function createTerminalInputActionController(options: {
       return;
     }
     if (blob.size > MAX_VOICE_AUDIO_BYTES) {
-      options.onStatus(options.tr("status.aiVoiceTooLarge"), "error");
+      showVoiceNotice(options.tr("status.aiVoiceTooLarge"));
       render();
       return;
     }
@@ -541,14 +552,14 @@ export function createTerminalInputActionController(options: {
           options.focusTerminal(pane);
           options.onStatus(options.tr("status.aiVoiceInserted"), "ok");
         } else {
-          options.onStatus(options.tr("status.aiNoTerminalTarget"), "error");
+          showVoiceNotice(options.tr("status.aiNoTerminalTarget"));
         }
       } else {
         liveTranscript = options.tr("status.aiVoiceEmpty");
-        options.onStatus(options.tr("status.aiVoiceEmpty"), "neutral");
+        showVoiceNotice(options.tr("status.aiVoiceEmpty"), "neutral");
       }
     } catch (error) {
-      options.onStatus(options.tr("status.aiVoiceFailed", { message: errorMessage(error) }), "error");
+      showVoiceNotice(options.tr("status.aiVoiceFailed", { message: errorMessage(error) }));
     } finally {
       uploading = false;
       render();
@@ -589,13 +600,25 @@ export function createTerminalInputActionController(options: {
 
   return { render };
 
+  function showVoiceNotice(text: string, tone: Tone = "error") {
+    voiceNotice = { text, tone };
+    options.onStatus(text, tone);
+  }
+
   function updateRecordingPill() {
     const pill = options.root.querySelector<HTMLElement>(".terminal-input-recording-pill");
     const label = options.root.querySelector<HTMLElement>(".terminal-input-recording-label");
     if (!pill || !label) return;
     const active = Boolean(starting || recorder || uploading);
-    pill.hidden = !active;
-    label.textContent = liveTranscript || options.tr(uploading ? "status.aiVoiceTranscribing" : "status.aiVoiceRecording");
+    const notice = active ? undefined : voiceNotice;
+    pill.hidden = !active && !notice;
+    pill.dataset.feedback = String(Boolean(notice));
+    pill.dataset.tone = notice?.tone ?? "neutral";
+    const waveform = pill.querySelector<HTMLElement>(".terminal-input-waveform");
+    const dismiss = pill.querySelector<HTMLButtonElement>("[data-terminal-voice-dismiss]");
+    if (waveform) waveform.hidden = Boolean(notice);
+    if (dismiss) dismiss.hidden = !notice;
+    label.textContent = notice?.text || liveTranscript || options.tr(uploading ? "status.aiVoiceTranscribing" : "status.aiVoiceRecording");
   }
 
   function startLevelMeter(mediaStream: MediaStream) {
