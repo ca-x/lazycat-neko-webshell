@@ -1705,7 +1705,7 @@ function bindSettings() {
   elements.saveTheme.addEventListener("click", () => saveCustomTheme());
   elements.removeTheme.addEventListener("click", () => removeSelectedCustomTheme());
   elements.refreshPlugins.addEventListener("click", () => void loadPlugins());
-  elements.pluginList.addEventListener("change", (event) => {
+  elements.settingsPage.addEventListener("change", (event) => {
     if (terminalMcp.handleInput(event.target instanceof Element ? event.target : null)) {
       return;
     }
@@ -1773,7 +1773,7 @@ function bindSettings() {
       ? event.target.closest<HTMLSelectElement>('[data-ai-dialog-field="voiceProvider"]')
       : null;
     if (aiVoiceDialogProvider) {
-      applyVoiceProviderDialogPreset(elements.pluginList, aiVoiceDialogProvider.value);
+      applyVoiceProviderDialogPreset(elements.settingsPage, aiVoiceDialogProvider.value);
       return;
     }
     const aiSetting = event.target instanceof Element
@@ -1787,10 +1787,10 @@ function bindSettings() {
       return;
     }
   });
-  elements.pluginList.addEventListener("input", (event) => {
+  elements.settingsPage.addEventListener("input", (event) => {
     terminalMcp.handleInput(event.target instanceof Element ? event.target : null);
   });
-  elements.pluginList.addEventListener("click", (event) => {
+  elements.settingsPage.addEventListener("click", (event) => {
     const target = event.target instanceof Element ? event.target : null;
     if (terminalMcp.handleClick(target)) return;
     const tokenToggleButton = target?.closest<HTMLButtonElement>("[data-tunnel-token-toggle]");
@@ -3950,7 +3950,7 @@ function renderPluginSettings() {
       tr,
     },
     tr,
-  });
+  }, elements.voiceSettings);
   updateIcons();
 }
 
@@ -4299,7 +4299,7 @@ function removeAiMcpServer(index: number) {
 }
 
 function aiDialogStringField(field: string): string {
-  const input = elements.pluginList.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(`[data-ai-dialog-field="${field}"]`);
+  const input = elements.settingsPage.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(`[data-ai-dialog-field="${field}"]`);
   return input?.value ?? "";
 }
 

@@ -90,11 +90,11 @@ export function createTerminalInputActionController(options: {
   }, true);
 
   function render() {
-    if ((starting || recorder) && options.voiceProviderAvailable?.(profileAtStart) === false) {
+    if ((starting || recorder) && (!options.settings().aiVoiceInputEnabled || options.voiceProviderAvailable?.(profileAtStart) === false)) {
       stopRecording(true);
     }
     const shouldShow = Boolean(options.activePane() && (
-      voiceMenuVisible()
+      starting || recorder || uploading || voiceMenuVisible()
       || options.temporaryDirectoryFileUploadVisible()
       || options.temporaryDirectoryFileUploadAvailable()
       || options.imageUploadAvailable()
@@ -136,10 +136,6 @@ export function createTerminalInputActionController(options: {
         <button class="terminal-input-action-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="${escapeAttr(options.tr("action.terminalInputActions"))}" title="${escapeAttr(options.tr("action.terminalInputActions"))}">
           <i data-lucide="plus"></i>
         </button>
-        <button class="terminal-desktop-voice-button" type="button" data-terminal-desktop-voice>
-          <i data-lucide="mic" aria-hidden="true"></i>
-          <span></span>
-        </button>
       `;
       bindSurfaceEvents();
     }
@@ -150,10 +146,6 @@ export function createTerminalInputActionController(options: {
   }
 
   function bindSurfaceEvents() {
-    options.root.querySelector<HTMLButtonElement>("[data-terminal-desktop-voice]")?.addEventListener("click", () => {
-      if (recorder || starting) stopRecording(false);
-      else void startRecording();
-    });
     const button = options.root.querySelector<HTMLButtonElement>(".terminal-input-action-button");
     const voiceButton = options.root.querySelector<HTMLButtonElement>("[data-terminal-input-action=\"voice\"]");
     const imageButton = options.root.querySelector<HTMLElement>("[data-terminal-input-action=\"image\"]");
@@ -169,7 +161,7 @@ export function createTerminalInputActionController(options: {
       } catch {
         // Pointer capture is best-effort on older mobile browsers.
       }
-      beginPrimaryHold();
+      if (!recorder && !starting) beginPrimaryHold();
     });
     button?.addEventListener("pointerup", (event) => {
       event.preventDefault();
@@ -187,10 +179,13 @@ export function createTerminalInputActionController(options: {
     button?.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
-      toggleMenu();
+      if (event.repeat) return;
+      if (recorder || starting) stopRecording(false);
+      else toggleMenu();
     });
 
     voiceButton?.addEventListener("pointerdown", (event) => {
+      if (!mobileVoiceGesture()) return;
       event.preventDefault();
       if (voiceButton.disabled || uploading || runningUpload) return;
       try {
@@ -203,6 +198,7 @@ export function createTerminalInputActionController(options: {
       void startRecording();
     });
     voiceButton?.addEventListener("pointerup", (event) => {
+      if (!mobileVoiceGesture()) return;
       event.preventDefault();
       stopRecording(false);
     });
@@ -211,7 +207,13 @@ export function createTerminalInputActionController(options: {
       stopRecording(true);
     });
     voiceButton?.addEventListener("lostpointercapture", () => stopRecording(false));
-    voiceButton?.addEventListener("click", (event) => event.preventDefault());
+    voiceButton?.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (!mobileVoiceGesture() && !voiceButton.disabled) {
+        void startRecording();
+        button?.focus({ preventScroll: true });
+      }
+    });
     voiceButton?.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
@@ -220,8 +222,10 @@ export function createTerminalInputActionController(options: {
       menuOpen = false;
       render();
       void startRecording();
+      if (!mobileVoiceGesture()) button?.focus({ preventScroll: true });
     });
     voiceButton?.addEventListener("keyup", (event) => {
+      if (!mobileVoiceGesture()) return;
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
       stopRecording(false);
@@ -282,18 +286,9 @@ export function createTerminalInputActionController(options: {
     const imageButton = options.root.querySelector<HTMLElement>("[data-terminal-input-action=\"image\"]");
     const fileButton = options.root.querySelector<HTMLElement>("[data-terminal-input-action=\"file\"]");
     const voiceState = currentVoiceState();
-    const desktopVoice = options.root.querySelector<HTMLButtonElement>("[data-terminal-desktop-voice]");
-    if (desktopVoice) {
-      desktopVoice.hidden = !voiceState.visible;
-      desktopVoice.disabled = !recorder && !starting && !voiceState.canStart;
-      desktopVoice.setAttribute("aria-pressed", String(Boolean(recorder || starting)));
-      desktopVoice.title = recorder || starting ? options.tr("action.voiceCancelHint") : voiceState.canStart ? options.tr("action.voiceStartHint") : voiceState.title;
-      const label = desktopVoice.querySelector("span");
-      if (label) label.textContent = options.tr(recorder || starting ? "action.voiceStop" : "action.terminalInputVoice");
-    }
-    const busy = Boolean(recorder || uploading || runningUpload);
+    const busy = Boolean(starting || recorder || uploading || runningUpload);
 
-    options.root.dataset.state = recorder
+    options.root.dataset.state = recorder || starting
       ? "recording"
       : uploading || runningUpload
         ? "uploading"
@@ -303,11 +298,18 @@ export function createTerminalInputActionController(options: {
       button.disabled = uploading || runningUpload || suppressedByTyping;
       button.dataset.state = options.root.dataset.state;
       button.setAttribute("aria-expanded", menuOpen ? "true" : "false");
-      const title = voiceState.canStart
+      const recording = Boolean(recorder || starting);
+      const icon = recording ? "square" : "plus";
+      if (button.dataset.icon !== icon) {
+        button.innerHTML = `<i data-lucide="${icon}" aria-hidden="true"></i>`;
+        button.dataset.icon = icon;
+      }
+      button.setAttribute("aria-haspopup", recording ? "false" : "menu");
+      const title = recording ? options.tr("action.voiceStop") : voiceState.canStart
         ? options.tr("action.terminalInputActionsHold")
         : options.tr("action.terminalInputActions");
       button.setAttribute("aria-label", title);
-      button.title = title;
+      button.title = recording ? options.tr("action.voiceCancelHint") : title;
     }
     if (menu) {
       const hasMenuAction = voiceState.visible
@@ -341,6 +343,10 @@ export function createTerminalInputActionController(options: {
       fileButton.setAttribute("aria-disabled", !fileAvailable || busy ? "true" : "false");
       fileButton.dataset.disabled = !fileAvailable || busy ? "true" : "false";
     }
+  }
+
+  function mobileVoiceGesture() {
+    return document.body.classList.contains("mobile-controls-enabled");
   }
 
   function toggleMenu() {
@@ -438,7 +444,7 @@ export function createTerminalInputActionController(options: {
     const configured = aiVoiceProfileConfigured(activeProfile) && available;
     const formatSupported = voiceRecordingFormatSupported(activeProfile?.format ?? "auto");
     const title = configured
-      ? formatSupported ? options.tr("action.aiVoiceHold") : options.tr("ai.voiceFormatNotSupported")
+      ? formatSupported ? options.tr(mobileVoiceGesture() ? "action.aiVoiceHold" : "action.voiceStartHint") : options.tr("ai.voiceFormatNotSupported")
       : options.tr(available ? "ai.voiceNotConfigured" : "asr.providerUnavailable");
     return {
       visible: true,
@@ -461,6 +467,8 @@ export function createTerminalInputActionController(options: {
         (profile) => profile.id === settings.aiVoiceActiveProviderProfileId,
       ) ?? settings.aiVoiceProviderProfiles[0];
       profileAtStart = activeProfile ? { ...activeProfile } : undefined;
+      menuOpen = false;
+      render();
       const voiceRecorder = await createVoiceAudioRecorder(activeProfile?.format ?? "auto");
       recorder = voiceRecorder;
       startLevelMeter(voiceRecorder.stream);
@@ -585,7 +593,7 @@ export function createTerminalInputActionController(options: {
     const pill = options.root.querySelector<HTMLElement>(".terminal-input-recording-pill");
     const label = options.root.querySelector<HTMLElement>(".terminal-input-recording-label");
     if (!pill || !label) return;
-    const active = Boolean(recorder || uploading);
+    const active = Boolean(starting || recorder || uploading);
     pill.hidden = !active;
     label.textContent = liveTranscript || options.tr(uploading ? "status.aiVoiceTranscribing" : "status.aiVoiceRecording");
   }

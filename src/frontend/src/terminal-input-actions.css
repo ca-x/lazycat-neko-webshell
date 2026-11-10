@@ -1,26 +1,5 @@
-.terminal-desktop-voice-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  position: absolute;
-  left: calc(100% + 10px);
-  bottom: 0;
-  min-height: 44px;
-  min-width: max-content;
-  padding: 9px 14px;
-  border: 1px solid var(--line-soft);
-  border-radius: 14px;
-  color: var(--text);
+.terminal-input-action-button[data-state="recording"] {
+  color: var(--danger-fg);
   background: var(--surface-raised);
-  font: inherit;
-  cursor: pointer;
-  pointer-events: auto;
+  border: 1px solid var(--accent-border);
 }
-.terminal-desktop-voice-button svg { width: 18px; height: 18px; }
-.terminal-desktop-voice-button:hover,
-.terminal-desktop-voice-button:focus-visible { border-color: var(--accent-border); background: var(--accent-soft); }
-.terminal-desktop-voice-button[aria-pressed="true"] { color: var(--danger-fg); }
-.terminal-desktop-voice-button:disabled { opacity: .55; cursor: default; }
-.terminal-desktop-voice-button[hidden],
-body.mobile-controls-enabled .terminal-desktop-voice-button { display: none; }

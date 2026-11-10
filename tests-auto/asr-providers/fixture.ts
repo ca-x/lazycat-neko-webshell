@@ -1,6 +1,7 @@
 import '/src/frontend/src/styles.css';
 import '/src/frontend/src/mobile/styles.css';
 import '/src/frontend/src/terminal-input-actions.css';
+import { createIcons, icons } from 'lucide';
 import { renderShell } from '/src/frontend/src/shell.ts';
 import { translate } from '/src/frontend/src/i18n.ts';
 import { createTerminalInputActionController } from '/src/frontend/src/terminal-input-actions.ts';
@@ -21,7 +22,7 @@ const controller = createTerminalInputActionController({
   uploadFilesToTemporaryDirectory: () => [], temporaryDirectoryFileUploadVisible: () => false,
   temporaryDirectoryFileUploadAvailable: () => false, imageUploadAvailable: () => false,
   focusTerminal: () => {}, tr: (key, values) => translate('en', key, values),
-  onStatus: (text, tone) => qa.statuses.push({ text, tone }), updateIcons: () => {},
+  onStatus: (text, tone) => qa.statuses.push({ text, tone }), updateIcons: () => createIcons({ icons }),
 });
 qa.disable = () => { qa.enabled = false; controller.render(); };
 qa.enable = () => { qa.enabled = true; controller.render(); };

@@ -24,7 +24,12 @@ export async function runAsrProviderScenario() {
   } });
   const browser = createBrowserDriver({ session: uniqueBrowserSession("asr-providers"), headed: false, launchArgs: "--use-fake-device-for-media-stream,--use-fake-ui-for-media-stream,--autoplay-policy=no-user-gesture-required" });
   const evaluate = source => browser.evaluate(source);
-  const click = selector => browser.command(["click", selector]);
+  const click = async selector => {
+    if (selector.startsWith("[data-settings-tab=")) {
+      if (await evaluate('matchMedia("(max-width: 760px)").matches && !document.querySelector(".settings-navigation").open')) await browser.command(["click", ".settings-navigation-trigger"]);
+    }
+    return browser.command(["click", selector]);
+  };
   const wait = source => browser.waitFor(source);
   const artifacts = fileURLToPath(new URL("../artifacts/asr-providers/", import.meta.url));
   await mkdir(artifacts, { recursive: true });
@@ -52,8 +57,11 @@ export async function runAsrProviderScenario() {
     assert.equal(calls.filter(call => call.operation === "remove").length, 0);
     await click("[data-wechat-asr-action=cancel-remove]");
     assert.equal(ready, true);
-    await click("[data-plugin-settings=ai-chat] summary");
-    await click("[data-ai-settings-tab=voice]");
+    await click("[data-plugin-toggle=ai-chat]");
+    await wait('!document.querySelector("[data-plugin-toggle=ai-chat]").checked');
+    await click("[data-settings-tab=voice]");
+    assert.equal(await evaluate('document.querySelector("[data-ai-voice-new=true]").disabled'), false);
+    assert.equal(await evaluate('document.querySelector("[data-ai-settings-tab=voice]")'), null);
     await click("[data-ai-voice-new=true]");
     await wait('document.querySelector("[data-ai-dialog-field=voiceProvider]")');
     await browser.command(["select", "[data-ai-dialog-field=voiceProvider]", "plugin:wechat-asr"]);
@@ -65,9 +73,12 @@ export async function runAsrProviderScenario() {
     await click("[data-ai-config-open=voice][data-ai-voice-profile-id]");
     await wait('document.querySelector("[data-ai-dialog-field=voiceProvider]")?.value==="plugin:wechat-asr"');
     await browser.press("Escape");
+    await click("[data-ai-voice-enabled]");
+    await wait('document.querySelector("[data-ai-voice-enabled]").checked');
     await browser.command(["set", "viewport", "390", "844"]);
     await browser.screenshot(artifacts + "settings-mobile.png");
     assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true);
+    await click("[data-settings-tab=plugins]");
     await click("[data-wechat-asr-action=confirm-remove]");
     await click("[data-wechat-asr-action=remove]");
     await wait('document.querySelector("[data-wechat-asr-action=download]")');
@@ -79,32 +90,45 @@ export async function runAsrProviderScenario() {
     await browser.navigate(`http://127.0.0.1:${recordingServer.httpServer.address().port}/tests-auto/asr-providers/fixture.html`);
     await browser.command(["set", "viewport", "1280", "900"]);
     await wait('window.qa?.ready');
-    const voice = "[data-terminal-desktop-voice]";
-    assert.equal(await evaluate('document.querySelector("[data-terminal-desktop-voice]").checkVisibility()'), true);
+    const voice = "[data-terminal-input-action=voice]";
+    const primary = ".terminal-input-action-button";
+    assert.equal(await evaluate('document.querySelector("[data-terminal-desktop-voice]")'), null);
+    await click(primary);
     await browser.command(["focus", voice]); await browser.press("Enter");
-    await wait('document.querySelector("[data-terminal-desktop-voice]").getAttribute("aria-pressed")==="true" && window.qa.streams.length===1');
+    await wait('document.querySelector(".terminal-input-actions-surface").dataset.state==="recording" && window.qa.streams.length===1');
+    assert.equal(await evaluate('document.querySelector(".terminal-input-action-menu").hidden'), true);
+    assert.equal(await evaluate('document.activeElement.classList.contains("terminal-input-action-button")'), true);
+    await browser.screenshot(artifacts + "recording-desktop.png");
     await evaluate('window.qa.switchProfile()');
-    await browser.command(["focus", voice]); await browser.press("Enter");
+    await browser.command(["focus", primary]); await browser.press("Enter");
     await wait('window.qa.uploads.length===1 && window.qa.stopped()');
     assert.deepEqual(await evaluate('window.qa.uploads.map(({profileId,provider,pluginId,mime})=>({profileId,provider,pluginId,mime}))'), [{ profileId: "local", provider: "plugin", pluginId: "wechat-asr", mime: "audio/wav" }]);
     assert.deepEqual(await evaluate('window.qa.sent'), ["echo hello"]);
     await evaluate('window.qa.resetProfile()');
-    await click(voice); await wait('window.qa.streams.length===2');
+    await click(primary); await click(voice); await wait('window.qa.streams.length===2');
     await evaluate('window.qa.disable()');
     await wait('window.qa.stopped()');
     assert.equal(await evaluate('window.qa.uploads.length'), 1);
-    assert.equal(await evaluate('document.querySelector("[data-terminal-desktop-voice]").disabled'), true);
+    await click(primary);
+    assert.equal(await evaluate('document.querySelector("[data-terminal-input-action=voice]").disabled'), true);
     await evaluate('window.qa.enable()');
     await click(voice); await wait('window.qa.streams.length===3');
     await browser.press("Escape"); await wait('window.qa.stopped()');
     assert.equal(await evaluate('window.qa.uploads.length'), 1);
     await evaluate('window.qa.mobile(true)');
     await browser.command(["set", "viewport", "390", "844"]);
-    assert.equal(await evaluate('document.querySelector("[data-terminal-desktop-voice]").checkVisibility()'), false);
+    assert.equal(await evaluate('document.querySelector("[data-terminal-desktop-voice]")'), null);
     await click(".terminal-input-action-button");
     await wait('!document.querySelector(".terminal-input-action-menu").hidden');
     assert.equal(await evaluate('document.querySelector("[data-terminal-input-action=voice]").disabled'), false);
     await browser.screenshot(artifacts + "voice-mobile.png");
+    const point = await evaluate('(()=>{const r=document.querySelector("[data-terminal-input-action=voice]").getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()');
+    await browser.dispatchTouch([
+      { type: "touchStart", delayMs: 600, touchPoints: [{ ...point, id: 1 }] },
+      { type: "touchEnd", touchPoints: [] },
+    ]);
+    await wait('window.qa.uploads.length===2 && window.qa.stopped()');
+    assert.deepEqual(await evaluate('window.qa.sent'), ["echo hello", "echo hello"]);
     return { status: "passed", scenario: "asr-providers", downloads: attempts, artifacts };
   } catch (error) {
     console.error(JSON.stringify({ calls, ready, attempts, ui: await evaluate('document.querySelector("[data-plugin-settings=wechat-asr]")?.textContent') }));

@@ -1,4 +1,3 @@
-import { registeredAsrProviders } from "../asr/providers";
 import type { PluginDescriptor } from "../../gen/lazycat/webshell/v1/capability_pb";
 import type { PluginSettingsViewState } from "../../plugin-views";
 import { pluginDescription } from "../../plugin-utils";
@@ -37,6 +36,6 @@ export function createEntry(resources: EntryResources): PluginEntry {
   };
 }
 export function renderSettings(plugin: PluginDescriptor, state: PluginSettingsViewState): string {
-  return renderAIAccessSettingsView({ ...state.aiAccess, voiceProviderPlugins: registeredAsrProviders(state.plugins), disabled: !plugin.enabled || settingsDisabled(plugin, state), tr: state.tr });
+  return renderAIAccessSettingsView({ ...state.aiAccess, disabled: !plugin.enabled || settingsDisabled(plugin, state), tr: state.tr });
 }
-export function isSettingsOpen(state: PluginSettingsViewState): boolean { return Boolean(state.aiAccess.dialog); }
+export function isSettingsOpen(state: PluginSettingsViewState): boolean { return state.aiAccess.dialog?.type === "ai" || state.aiAccess.dialog?.type === "mcp"; }

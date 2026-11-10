@@ -7,6 +7,7 @@ const sections = [
   { id: "fonts", panel: "fontSettingsRootPanel", icon: "type", label: "tab.fonts" },
   { id: "themes", panel: "themeSettingsPanel", icon: "palette", label: "tab.themes" },
   { id: "mobile", panel: "mobileSettingsPanel", icon: "smartphone", label: "tab.mobile" },
+  { id: "voice", panel: "voiceSettingsPanel", icon: "mic", label: "tab.aiVoice" },
   { id: "plugins", panel: "pluginSettingsPanel", icon: "plug", label: "tab.plugins" },
 ] as const satisfies readonly { id: string; panel: string; icon: string; label: MessageKey }[];
 

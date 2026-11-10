@@ -81,6 +81,7 @@ export type ShellElements = {
   settingsTabs: HTMLDivElement;
   fontTabs: HTMLDivElement;
   pluginList: HTMLDivElement;
+  voiceSettings: HTMLDivElement;
   pluginStatus: HTMLElement;
   refreshPlugins: HTMLButtonElement;
   localeSelect: HTMLSelectElement;
@@ -393,6 +394,11 @@ export function renderShell(app: HTMLElement): ShellElements {
 
             ${renderThemesSettingsView()}
 
+            <section class="settings-section" id="voiceSettingsPanel" data-settings-panel="voice" role="tabpanel" aria-labelledby="settings-tab-voice" hidden>
+              ${renderSettingsSectionIntro("voice")}
+              <div id="voiceSettings"></div>
+            </section>
+
             <section class="settings-section" id="pluginSettingsPanel" data-settings-panel="plugins" role="tabpanel" aria-labelledby="settings-tab-plugins" hidden>
               ${renderSettingsSectionIntro("plugins")}
               <div class="settings-section-head">
@@ -482,6 +488,7 @@ export function renderShell(app: HTMLElement): ShellElements {
     settingsTabs: qs<HTMLDivElement>("#settingsTabs"),
     fontTabs: qs<HTMLDivElement>("#fontTabs"),
     pluginList: qs<HTMLDivElement>("#pluginList"),
+    voiceSettings: qs<HTMLDivElement>("#voiceSettings"),
     pluginStatus: qs<HTMLElement>("#pluginStatus"),
     refreshPlugins: qs<HTMLButtonElement>("#refreshPlugins"),
     localeSelect: qs<HTMLSelectElement>("#localeSelect"),

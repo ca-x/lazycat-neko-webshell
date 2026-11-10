@@ -1,3 +1,4 @@
+import { renderVoiceSettingsView } from "../../settings/voice-view";
 import { renderPluginSettingsView, type PluginSettingsViewState } from "../../plugin-views";
 import { bindTabListKeyboard } from "../../settings-tabs";
 import { captureModalDraft, restoreModalDraft, settingsModalIdentity } from "./modal-draft";
@@ -8,7 +9,12 @@ const pendingFocus = new WeakMap<HTMLElement, FocusBookmark>();
 const modalFocusReturn = new WeakMap<HTMLElement, FocusBookmark>();
 const modalIdentities = new WeakMap<HTMLElement, string>();
 
-export function syncPluginSettingsView(container: HTMLElement, state: PluginSettingsViewState) {
+export function syncPluginSettingsView(container: HTMLElement, state: PluginSettingsViewState, voiceContainer?: HTMLElement) {
+  syncSettingsView(container, state, renderPluginSettingsView);
+  if (voiceContainer) syncSettingsView(voiceContainer, state, renderVoiceSettingsView);
+}
+
+function syncSettingsView(container: HTMLElement, state: PluginSettingsViewState, renderView: (state: PluginSettingsViewState, expanded: ReadonlySet<string>) => string) {
   if (!boundContainers.has(container)) {
     boundContainers.add(container);
     bindTabListKeyboard(container, '[role="tab"]');
@@ -35,7 +41,7 @@ export function syncPluginSettingsView(container: HTMLElement, state: PluginSett
   } else if (active !== document.body) {
     pendingFocus.delete(container);
   }
-  container.innerHTML = renderPluginSettingsView(state, expanded);
+  container.innerHTML = renderView(state, expanded);
   modalIdentities.set(container, modalIdentity);
   restoreModalDraft(container, draft);
   const hasModal = Boolean(container.querySelector('[aria-modal="true"]'));
