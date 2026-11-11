@@ -39,10 +39,10 @@ function renderVoiceInputSection(
       </div>
       <div class="ai-config-summary-row">
         ${renderVoiceProfileSummary({
-          title: profile?.name || state.tr("status.noTarget"),
+          title: profile?.name || state.tr("ai.voiceNotConfigured"),
           provider: profile ? voiceProviderLabel(profile.provider, state) : state.tr("ai.voiceNotConfigured"),
-          model: profile?.model || state.tr("status.noTarget"),
-          endpoint: profile ? voiceEndpointLabel(profile.endpointType, state) : state.tr("status.noTarget"),
+          model: profile?.provider === "plugin" ? "" : profile?.model || state.tr("ai.voiceNotConfigured"),
+          endpoint: profile ? voiceEndpointLabel(profile.endpointType, state) : state.tr("ai.voiceNotConfigured"),
           status: configured && profile ? aiVoiceInputFormatLabel(profile.format) : state.tr("ai.voiceNotConfigured"),
         })}
         <span class="ai-config-summary-actions">
@@ -96,10 +96,10 @@ function renderVoiceReplySection(
       </div>
       <div class="ai-config-summary-row">
         ${renderVoiceProfileSummary({
-          title: profile?.name || state.tr("status.noTarget"),
+          title: profile?.name || state.tr("ai.voiceReplyNotConfigured"),
           provider: profile ? voiceProviderLabel(profile.provider, state) : state.tr("ai.voiceReplyNotConfigured"),
-          model: profile?.model || state.tr("status.noTarget"),
-          endpoint: profile ? voiceSpeechEndpointLabel(profile.endpointType, state) : state.tr("status.noTarget"),
+          model: profile?.model || state.tr("ai.voiceReplyNotConfigured"),
+          endpoint: profile ? voiceSpeechEndpointLabel(profile.endpointType, state) : state.tr("ai.voiceReplyNotConfigured"),
           status: configured ? [profile?.voice, profile?.format].filter(Boolean).join(" · ") : state.tr("ai.voiceReplyNotConfigured"),
         })}
         <span class="ai-config-summary-actions">
@@ -159,7 +159,7 @@ function renderVoiceProfileSummary(options: {
       <small>${escapeHtml(options.provider)}</small>
     </span>
     <span class="ai-config-summary-meta">
-      <span>${escapeHtml(options.model)}</span>
+      ${options.model ? `<span>${escapeHtml(options.model)}</span>` : ""}
       <span>${escapeHtml(options.endpoint)}</span>
       <span>${escapeHtml(options.status)}</span>
     </span>
