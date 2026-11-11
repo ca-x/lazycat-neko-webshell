@@ -1,6 +1,14 @@
 import type { MessageKey } from "./messages-en";
 
 export const zhCNMessages = {
+  "remote.usePublicRelay": "使用公共中转",
+  "remote.notLoaded": "尚未读取配置",
+  "remote.configurationChanged": "检测期间配置已更改。请重新保存，以检查并应用当前配置。",
+  "remote.checkingRelay": "正在检查 Relay 连接…",
+  "remote.relayCheck.address": "请填写 HTTPS 或 WSS 源地址，不要包含用户密码、路径、查询参数或片段。",
+  "remote.relayCheck.timeout": "Relay 健康检查超时。请检查地址和网络后重新保存。",
+  "remote.relayCheck.connection": "无法通过安全 WebSocket 连接 Relay。请检查地址、证书、网络及 /healthz 支持后重新保存。",
+  "remote.relayCheck.response": "Relay 健康响应不兼容。请升级 Relay 以支持版本 1 的 /healthz WebSocket 后重新保存。",
   "remote.hostFingerprint": "主机指纹（请与客户端显示核对）：{fingerprint}",
   "remote.operationUnknown": "有 {count} 项已提交操作的结果未确认。断开或移除设备无法撤回，请核对目标状态。",
   "remote.working": "正在处理请求…",
@@ -19,7 +27,7 @@ export const zhCNMessages = {
   "remote.relay": "Relay 地址",
   "remote.relayHelp": "手动填写 HTTPS 或 WSS Relay 地址，不含路径。更换 Relay 前需先移除已绑定设备。",
   "remote.save": "保存连接设置",
-  "remote.refresh": "刷新状态",
+  "remote.refresh": "读取已保存配置 / 刷新",
   "remote.hostRtt": "主机 ↔ Relay RTT",
   "remote.deviceRtt": "设备 ↔ 主机端到端 RTT",
   "remote.rttHelp": "RTT 仅使用 30 秒内的测量。设备 RTT 为加密端到端延迟；多连接时显示有效测量中的最大值。",
@@ -66,7 +74,7 @@ export const zhCNMessages = {
   "remote.confirmRevoke": "永久移除“{name}”并撤销授权？再次连接需要重新配对。",
   "remote.confirmOperate": "允许“{name}”操作已批准会话，并写入已授权文件根目录？",
   "remote.loadFailed": "无法读取远程控制状态",
-  "remote.actionFailed": "操作失败，请先刷新状态再决定是否重试",
+  "remote.actionFailed": "操作失败。请按提示重新保存或刷新。",
   "mobileKeyboard.pageMain": "常用",
   "mobileKeyboard.pageNav": "导航",
   "mobileKeyboard.pageSym": "符号",

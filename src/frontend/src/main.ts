@@ -2824,7 +2824,7 @@ function bindSettingsTabs() {
 function activateSettingsTab(tabId: string) {
   if (tabId === "terminal") void agentUpdates.refresh();
   if (!activateSettingsPanel(elements, tabId)) return;
-  if (tabId === "remote-control") void remoteControlSettings.refresh();
+  if (tabId === "remote-control") void remoteControlSettings.activate();
   if (tabId === "plugins") {
     if (!pluginsLoaded && !pluginsLoading) {
       void loadPlugins();

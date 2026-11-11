@@ -9,16 +9,17 @@ export function renderRemoteControlSettings(): string {
   return `<section class="settings-section remote-control" id="remoteControlSettingsPanel" data-settings-panel="remote-control" role="tabpanel" aria-labelledby="settings-tab-remote-control" hidden>
     <header class="settings-panel-intro"><h3 data-i18n="remote.title"></h3><p data-i18n="settings.description.remote-control"></p></header>
     <form data-remote-config>
-      <label class="switch"><input type="checkbox" name="enabled" disabled><span data-i18n="remote.enabled"></span></label>
+      <label class="switch"><input type="checkbox" name="enabled"><span data-i18n="remote.enabled"></span></label>
       <p class="settings-help" data-i18n="remote.enabledHelp"></p>
-      <label class="remote-field"><span data-i18n="remote.relay"></span><input name="relay" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://relay.example" disabled></label>
+      <label class="remote-field"><span data-i18n="remote.relay"></span><input name="relay" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://relay.example"></label>
+      <button class="command-button" type="button" data-remote-public-relay data-i18n="remote.usePublicRelay"></button>
       <p class="settings-help" data-i18n="remote.relayHelp"></p>
       <details data-remote-connection-options><summary data-i18n="remote.moreConnectionOptions"></summary>
-        <label class="remote-field"><span data-i18n="remote.registrationKey"></span><input name="registrationKey" type="password" autocomplete="new-password" spellcheck="false" maxlength="256" disabled></label>
+        <label class="remote-field"><span data-i18n="remote.registrationKey"></span><input name="registrationKey" type="password" autocomplete="new-password" spellcheck="false" maxlength="256"></label>
         <p class="settings-help" data-remote-registration-help></p>
-        <label><input name="clearRegistrationKey" type="checkbox" disabled> <span data-i18n="remote.clearRegistrationKey"></span></label>
+        <label><input name="clearRegistrationKey" type="checkbox"> <span data-i18n="remote.clearRegistrationKey"></span></label>
       </details>
-      <button type="submit" class="command-button remote-primary" data-remote-save disabled data-i18n="remote.save"></button>
+      <button type="submit" class="command-button remote-primary" data-remote-save data-i18n="remote.save"></button>
     </form>
     <div class="remote-connection" role="status" aria-live="polite"><strong data-remote-state></strong><span data-remote-relay-rtt></span></div>
     <p class="settings-help" data-i18n="remote.rttHelp"></p>
@@ -32,8 +33,8 @@ export function renderRemoteControlSettings(): string {
       <button class="command-button" type="button" data-remote-invite data-i18n="remote.invite" disabled></button>
       <div data-remote-invitation hidden></div>
     </section>
-    <section class="remote-section"><h4 data-i18n="remote.pending"></h4><p class="settings-help" data-i18n="remote.scopeHelp"></p><div data-remote-pending></div></section>
-    <section class="remote-section"><h4 data-i18n="remote.devices"></h4><p class="settings-help" data-i18n="remote.permissionHelp"></p><div data-remote-devices></div></section>
+    <details class="remote-section" data-remote-pending-section><summary><span data-i18n="remote.pending"></span> <span data-remote-pending-count></span></summary><p class="settings-help" data-i18n="remote.scopeHelp"></p><div data-remote-pending></div></details>
+    <details class="remote-section" data-remote-devices-section><summary><span data-i18n="remote.devices"></span> <span data-remote-device-count></span></summary><p class="settings-help" data-i18n="remote.permissionHelp"></p><div data-remote-devices></div></details>
   </section>`;
 }
 

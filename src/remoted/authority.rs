@@ -14,7 +14,31 @@ use std::{sync::Arc, time::Duration};
 use tokio::{sync::OnceCell, time::timeout};
 
 static GATEWAY: OnceCell<ApiGateway> = OnceCell::const_new();
+
+fn deployed_owner() -> Result<String> {
+    std::env::var("LAZYCAT_APP_DEPLOY_UID")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .context("缺少平台部署用户，无法验证所有者")
+}
+
+fn application_request(
+    ids: Vec<String>,
+    deployed_owner: &str,
+) -> Result<tonic::Request<QueryApplicationRequest>> {
+    ensure!(!deployed_owner.is_empty(), "缺少平台部署用户");
+    let mut request = tonic::Request::new(QueryApplicationRequest {
+        deploy_ids: ids,
+        ignore_pending_pkg: Some(true),
+        ..Default::default()
+    });
+    // This compatibility context scopes SDK results; returned ownership is still verified.
+    lzc_sdk::with_real_uid(&mut request, deployed_owner).context("平台部署用户上下文无效")?;
+    Ok(request)
+}
+
 async fn apps(ids: Vec<String>) -> Result<Vec<AppInfo>> {
+    let request = application_request(ids, &deployed_owner()?)?;
     let api = GATEWAY
         .get_or_try_init(|| async {
             timeout(Duration::from_secs(8), ApiGateway::connect())
@@ -23,57 +47,97 @@ async fn apps(ids: Vec<String>) -> Result<Vec<AppInfo>> {
                 .context("platform ownership service unavailable")
         })
         .await?;
-    let mut client = api.package_manager();
     let response = timeout(
         Duration::from_secs(8),
-        client.query_application(QueryApplicationRequest {
-            deploy_ids: ids,
-            ..Default::default()
-        }),
+        api.package_manager().query_application(request),
     )
     .await
     .context("platform ownership check timed out")??;
     Ok(response.into_inner().info_list)
 }
+
+#[derive(Debug)]
+struct DeploymentIdentity<'a> {
+    appid: &'a str,
+    owner: &'a str,
+    domain: &'a str,
+    deployment: Option<&'a str>,
+}
+
+impl<'a> DeploymentIdentity<'a> {
+    fn new(
+        appid: &'a str,
+        owner: &'a str,
+        domain: &'a str,
+        primary: Option<&'a str>,
+        alternate: Option<&'a str>,
+    ) -> Result<Self> {
+        ensure!(
+            [appid, owner, domain]
+                .iter()
+                .all(|value| !value.is_empty() && value.trim() == *value),
+            "缺少平台应用、部署用户或域名，无法验证部署身份"
+        );
+        let primary = primary.filter(|value| !value.is_empty());
+        let alternate = alternate.filter(|value| !value.is_empty());
+        ensure!(
+            primary
+                .zip(alternate)
+                .is_none_or(|(left, right)| left == right),
+            "部署身份冲突，无法验证所有者"
+        );
+        Ok(Self {
+            appid,
+            owner,
+            domain,
+            deployment: primary.or(alternate),
+        })
+    }
+}
+
 pub async fn owner() -> Result<String> {
     ensure!(
         crate::tty_init::lightos_features_enabled(),
         "远程控制需要平台部署身份"
     );
+    let appid = std::env::var("LAZYCAT_APP_ID").unwrap_or_default();
+    let user = deployed_owner()?;
+    let domain = std::env::var("LAZYCAT_APP_DOMAIN").unwrap_or_default();
     let primary = std::env::var("LAZYCAT_APP_DEPLOY_ID").ok();
     let alternate = std::env::var("LAZYCAT_DEPLOY_ID").ok();
-    let app = std::env::var("LAZYCAT_APP_ID").ok();
-    let deploy = deployment_candidate(primary.as_deref(), alternate.as_deref(), app.as_deref())?;
-    owner_with(deploy, apps).await
+    let identity = DeploymentIdentity::new(
+        &appid,
+        &user,
+        &domain,
+        primary.as_deref(),
+        alternate.as_deref(),
+    )?;
+    owner_with(&identity, apps).await
 }
-fn deployment_candidate<'a>(
-    primary: Option<&'a str>,
-    alternate: Option<&'a str>,
-    app: Option<&'a str>,
-) -> Result<&'a str> {
-    let primary = primary.filter(|value| !value.is_empty());
-    let alternate = alternate.filter(|value| !value.is_empty());
-    ensure!(
-        primary
-            .zip(alternate)
-            .is_none_or(|(left, right)| left == right),
-        "部署身份冲突，无法验证所有者"
-    );
-    primary
-        .or(alternate)
-        .or(app.filter(|value| !value.is_empty()))
-        .context("缺少当前部署身份，无法验证所有者")
-}
-async fn owner_with<F, Fut>(deploy: &str, fetch: F) -> Result<String>
+
+async fn owner_with<F, Fut>(identity: &DeploymentIdentity<'_>, fetch: F) -> Result<String>
 where
     F: FnOnce(Vec<String>) -> Fut,
     Fut: std::future::Future<Output = Result<Vec<AppInfo>>>,
 {
-    let records = fetch(vec![deploy.to_owned()]).await?;
-    let mut matches = records.into_iter().filter(|app| app.deploy_id == deploy);
+    let records = fetch(identity.deployment.into_iter().map(str::to_owned).collect()).await?;
+    // APP_ID is not a deployment ID. Bind the SDK's actual instance to all injected identity fields.
+    let mut matches = records.into_iter().filter(|app| {
+        app.appid == identity.appid
+            && app.owner == identity.owner
+            && app.domain.as_deref() == Some(identity.domain)
+            && identity
+                .deployment
+                .is_none_or(|deployment| app.deploy_id == deployment)
+    });
     let item = matches.next().context("无法验证当前部署的所有者")?;
     ensure!(matches.next().is_none(), "部署身份不唯一，拒绝猜测所有者");
-    ensure!(!item.owner.is_empty(), "无法验证当前部署的所有者");
+    ensure!(
+        !item.deploy_id.is_empty()
+            && !item.resource_only
+            && item.status == lzc_sdk::proto::sys::AppStatus::Installed as i32,
+        "当前部署不是有效的已安装应用实例"
+    );
     Ok(item.owner)
 }
 pub async fn management(headers: &HeaderMap) -> Result<String> {
@@ -223,34 +287,66 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deployment_candidates_are_explicit_and_conflicts_fail_closed() {
+    fn application_lookup_carries_deployment_user_context() {
+        let request = application_request(vec!["instance".into()], "account").unwrap();
         assert_eq!(
-            deployment_candidate(Some("instance"), None, Some("app")).unwrap(),
-            "instance"
+            request
+                .metadata()
+                .get("x-hc-user-id")
+                .map(|value| value.to_str().unwrap()),
+            Some("account"),
+            "the platform rejects unscoped application queries with uid is empty"
+        );
+        assert_eq!(request.get_ref().deploy_ids, vec!["instance"]);
+        assert!(request.get_ref().other_uid.is_none());
+    }
+
+    fn identity(deployment: Option<&str>) -> DeploymentIdentity<'_> {
+        DeploymentIdentity::new("app", "account", "app.example", deployment, None).unwrap()
+    }
+
+    #[test]
+    fn application_lookup_rejects_missing_or_invalid_context() {
+        assert!(application_request(vec![], "").is_err());
+        assert!(application_request(vec![], "account\nforged").is_err());
+    }
+
+    #[test]
+    fn deployment_identity_requires_platform_fields_and_consistent_ids() {
+        for (app, owner, domain) in [
+            ("", "account", "app.example"),
+            ("app", "", "app.example"),
+            ("app", "account", ""),
+        ] {
+            assert!(DeploymentIdentity::new(app, owner, domain, None, None).is_err());
+        }
+        assert!(
+            DeploymentIdentity::new("app", "account", "app.example", Some("one"), Some("two"))
+                .is_err()
         );
         assert_eq!(
-            deployment_candidate(None, Some("instance"), Some("app")).unwrap(),
-            "instance"
+            DeploymentIdentity::new("app", "account", "app.example", None, Some("one"))
+                .unwrap()
+                .deployment,
+            Some("one")
         );
-        assert_eq!(
-            deployment_candidate(None, None, Some("exact-deploy")).unwrap(),
-            "exact-deploy"
-        );
-        assert!(deployment_candidate(Some("first"), Some("second"), None).is_err());
-        assert!(deployment_candidate(Some(""), None, Some("")).is_err());
+        assert!(identity(None).deployment.is_none());
     }
 
     fn record(deploy: &str, owner: &str) -> AppInfo {
         AppInfo {
+            appid: "app".into(),
             deploy_id: deploy.into(),
             owner: owner.into(),
+            domain: Some("app.example".into()),
+            status: lzc_sdk::proto::sys::AppStatus::Installed as i32,
             ..Default::default()
         }
     }
 
     #[tokio::test]
     async fn owner_uses_exact_sdk_deployment_and_returns_account_not_deploy() {
-        let owner = owner_with("instance", |requested| async move {
+        let owner = owner_with(&identity(Some("instance")), |requested| async move {
             assert_eq!(requested, vec!["instance"]);
             Ok(vec![
                 record("other", "someone"),
@@ -263,15 +359,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn owner_never_uses_visible_other_instance_or_empty_owner() {
+    async fn missing_deploy_id_uses_sdk_instance_bound_to_app_owner_and_domain() {
+        let current = record("sdk-instance-uuid", "account");
+        let other_app = AppInfo {
+            appid: "other".into(),
+            ..current.clone()
+        };
+        let other_domain = AppInfo {
+            domain: Some("other.example".into()),
+            ..current.clone()
+        };
+        let result = owner_with(&identity(None), |requested| async move {
+            assert!(
+                requested.is_empty(),
+                "do not mistake the application ID for a deployment ID"
+            );
+            Ok(vec![
+                other_app,
+                other_domain,
+                record("other-owner", "someone"),
+                current,
+            ])
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, "account");
+    }
+
+    #[tokio::test]
+    async fn owner_never_uses_visible_other_instance_or_invalid_owner() {
         for records in [
             vec![],
             vec![record("other-instance", "account")],
             vec![record("instance", "")],
-            vec![record("instance", "account"), record("instance", "other")],
+            vec![record("instance", "account"), record("instance", "account")],
+            vec![AppInfo {
+                resource_only: true,
+                ..record("instance", "account")
+            }],
+            vec![AppInfo {
+                status: 0,
+                ..record("instance", "account")
+            }],
         ] {
             assert!(
-                owner_with("instance", |_| async { Ok(records) })
+                owner_with(&identity(Some("instance")), |_| async { Ok(records) })
                     .await
                     .is_err()
             );
@@ -279,30 +411,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn app_id_candidate_requires_sdk_deploy_match_even_when_appid_matches() {
-        let visible = AppInfo {
-            appid: "app".into(),
-            ..record("other-deploy", "account")
-        };
-        assert!(
-            owner_with("app", |_| async { Ok(vec![visible]) })
-                .await
-                .is_err()
-        );
-        assert_eq!(
-            owner_with("app", |_| async { Ok(vec![record("app", "account")]) })
-                .await
-                .unwrap(),
-            "account"
-        );
+    async fn absent_deploy_id_still_rejects_ambiguous_or_empty_sdk_identity() {
+        for records in [
+            vec![record("one", "account"), record("two", "account")],
+            vec![record("", "account")],
+            vec![AppInfo {
+                appid: "other".into(),
+                ..record("one", "account")
+            }],
+            vec![AppInfo {
+                domain: None,
+                ..record("one", "account")
+            }],
+        ] {
+            assert!(
+                owner_with(&identity(None), |_| async { Ok(records) })
+                    .await
+                    .is_err()
+            );
+        }
     }
 
     #[tokio::test]
     async fn sdk_failure_is_an_error() {
         assert!(
-            owner_with("instance", |_| async { anyhow::bail!("SDK unavailable") })
-                .await
-                .is_err()
+            owner_with(&identity(None), |_| async {
+                anyhow::bail!("SDK unavailable")
+            })
+            .await
+            .is_err()
         );
     }
 }

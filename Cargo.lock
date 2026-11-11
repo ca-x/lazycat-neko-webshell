@@ -2008,7 +2008,7 @@ dependencies = [
 
 [[package]]
 name = "lazycat-neko-webshell"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "anyhow",
  "async-openai",
