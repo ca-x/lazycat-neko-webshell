@@ -1,5 +1,6 @@
 import hashlib
 import errno
+import io
 from unittest import mock
 from types import SimpleNamespace
 import importlib.util
@@ -61,6 +62,37 @@ class FilesTest(unittest.TestCase):
         self.assertFalse((self.root / "cross-mount").exists())
         # Failed begin releases the parent fd and leaves the helper reusable.
         self.upload("same-mount", b"")
+    def test_upload_rejects_same_device_bind_mount_boundary(self):
+        self.fs.stage = helper.staging(self.fs.root)
+        # A bind mount has the same st_dev but a distinct mount ID.
+        self.assertEqual(os.fstat(self.fs.root).st_dev, os.fstat(self.fs.stage).st_dev)
+        def fdinfo(path, **kwargs):
+            fd = int(path.rsplit("/", 1)[1])
+            return io.StringIO("pos:\t0\nflags:\t0100000\nmnt_id:\t" + ("18" if fd == self.fs.stage else "17") + "\n")
+        before = set(os.listdir("/proc/self/fd"))
+        with mock.patch.object(helper, "open", side_effect=fdinfo, create=True):
+            with self.assertRaises(OSError) as caught:
+                self.upload("bind-mount", b"pending")
+        self.assertEqual(caught.exception.errno, errno.EXDEV)
+        self.assertEqual(self.fs.uploads, {})
+        self.assertEqual(list((self.root / helper.STAGING).iterdir()), [])
+        self.assertFalse((self.root / "bind-mount").exists())
+        self.assertEqual(set(os.listdir("/proc/self/fd")), before)
+        self.upload("same-mount", b"")
+    def test_upload_fails_closed_when_mount_identity_unavailable(self):
+        self.fs.stage = helper.staging(self.fs.root)
+        for value in ("", "mnt_id:\tnot-a-number\n", "mnt_id:\t0\n", "mnt_id:\t17\nmnt_id:\t18\n", "x" * 4097):
+            with self.subTest(value=value[:40]):
+                with mock.patch.object(helper, "open", mock.mock_open(read_data=value), create=True):
+                    with self.assertRaises(OSError) as caught:
+                        self.upload("unverified", b"pending")
+                self.assertEqual(caught.exception.errno, errno.ENOTSUP)
+        with mock.patch.object(helper, "open", side_effect=PermissionError(), create=True):
+            with self.assertRaises(OSError) as caught:
+                self.upload("unreadable", b"pending")
+        self.assertEqual(caught.exception.errno, errno.ENOTSUP)
+        self.assertEqual(self.fs.uploads, {})
+        self.assertEqual(list((self.root / helper.STAGING).iterdir()), [])
     def test_paths_and_symlink_escapes_are_rejected(self):
         for path in ("../escape", "/etc/passwd", "x/../escape", "bad\0name", helper.STAGING + "/private"):
             with self.assertRaises(ValueError): self.fs.run(dict(action="download", path=path))

@@ -74,6 +74,20 @@ def encode(data):
     return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
 
 
+def mount_id(fd):
+    # st_dev alone cannot distinguish bind mounts: link/rename still return EXDEV.
+    # Inspect the pinned directory handle, never a pathname that could be replaced.
+    try:
+        with open("/proc/self/fdinfo/" + str(fd), encoding="ascii") as info:
+            value = info.read(4097)
+        matches = re.findall(r"^mnt_id:[ \t]+([0-9]+)$", value, re.MULTILINE)
+        if len(value) > 4096 or len(matches) != 1 or int(matches[0]) <= 0:
+            raise ValueError("invalid mount identity")
+        return int(matches[0])
+    except (OSError, ValueError, UnicodeError):
+        raise OSError(errno.ENOTSUP, "cannot verify upload mount boundary") from None
+
+
 def staging(root):
     try:
         os.mkdir(STAGING, 0o700, dir_fd=root)
@@ -214,6 +228,8 @@ class Files:
                     self.stage = staging(self.root)
                 if os.fstat(fd).st_dev != os.fstat(self.stage).st_dev:
                     raise OSError(errno.EXDEV, "upload destination and staging must share a filesystem")
+                if mount_id(fd) != mount_id(self.stage):
+                    raise OSError(errno.EXDEV, "upload destination and staging must share a mount")
                 token = uuid.uuid4().hex
                 tmp = "upload-" + token + ".part"
                 f = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW, 0o600, dir_fd=self.stage)
