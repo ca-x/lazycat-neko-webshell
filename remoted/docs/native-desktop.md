@@ -1,6 +1,6 @@
 # Remoted 原生桌面发行
 
-桌面采用独立版本 **0.2.0**，源码 tag 为 `remoted-desktop-v0.2.0`。
+桌面采用独立版本 **0.2.0**，发行源码 tag 为 `remoted-desktop-v0.2.0-build.2`。
 Android 保持 `0.1.3`，已发布的 `remoted-client-v0.1.3` 不变。
 桌面版本进入包名、deb/APP 元数据与 `build-info.json`；`crate_version` 记录共享源码的
 0.1.3。`cargo_binary_sha256` 标识打包前的 Cargo binary（Mac ad-hoc 签名会改变 APP 内的 binary）。
@@ -87,14 +87,14 @@ Linux deb 用构建机实际 glibc/GTK/GLib/GStreamer 版本声明保守运行�
 ```sh
 # 主线确认版本并完成 commit/tag/push 后
 # workflow 必须已存在于默认分支，才能从该 tag 手动 dispatch。
-gh workflow run remoted-client-desktop.yml --ref remoted-desktop-v0.2.0 -f desktop_version=0.2.0
+gh workflow run remoted-client-desktop.yml --ref remoted-desktop-v0.2.0-build.2 -f desktop_version=0.2.0
 gh run list --workflow remoted-client-desktop.yml --limit 5
 gh run watch RUN_ID --exit-status
 gh run download RUN_ID --dir /tmp/remoted-desktop-ci
 ```
 
 每个作业先运行客户端 lib tests，再 `cargo build --locked --release --target` 打包。Mac 在
-macos-14 runner 上指定 CPU target，两个包都显式构建；不同 runner CPU 不表示产物 CPU。
+macos-15 runner 上指定 CPU target，两个包都显式构建；不同 runner CPU 不表示产物 CPU。
 主线必须检查四个 job 实际成功，而非看到 workflow 文件就宣称 Windows/Mac 已构建。
 
 公共发布保持现有本机人工授权流程：核对 source tag 指向提交、run 的 head SHA、四个 build-info
