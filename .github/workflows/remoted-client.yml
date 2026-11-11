@@ -9,14 +9,60 @@ concurrency:
   group: build-remoted-client-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RUSTUP_TOOLCHAIN: 1.97.1
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_DEV_STRIP: debuginfo
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: 1.97.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Install Linux verification dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev cmake ninja-build pkg-config libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libpango1.0-dev libcairo2-dev libfontconfig1-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            remoted -> target
+            remoted/client -> target
+      - name: Verify protocol, Linux native client and Relay
+        run: |
+          python3 -m unittest discover -s remoted/scripts -p 'test_*.py'
+          cargo test --locked --manifest-path remoted/Cargo.toml
+          cargo test --locked --manifest-path remoted/client/Cargo.toml --lib
+          npm ci --prefix remoted/relay
+          npm test --prefix remoted/relay
+          npm run test:integration --prefix remoted/relay
+          npm run check --prefix remoted/relay
   android:
+    needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
       RUSTUP_TOOLCHAIN: 1.97.1
       CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_DEV_STRIP: debuginfo
+      CARGO_INCREMENTAL: 0
       NSH_REVISION: 0e4a20bd41ee72a35515cecbf9a7fba88742d911
     steps:
+      - name: Free unused SDKs on disposable GitHub runner
+        if: runner.environment == 'github-hosted'
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -37,12 +83,6 @@ jobs:
           ref: 0e4a20bd41ee72a35515cecbf9a7fba88742d911
           path: .tools/nsh
           persist-credentials: false
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            remoted -> target
-            remoted/client -> target
-            .tools/nsh -> target
       - name: Validate native version and source tag
         id: version
         env:
@@ -58,20 +98,24 @@ jobs:
             "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" \
             "NSH_TOOLCHAIN=$GITHUB_WORKSPACE/.tools/nsh" \
             "CLANG_PATH=$ANDROID_HOME/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" >> "$GITHUB_ENV"
-      - name: Verify protocol and Relay
-        run: |
-          python3 -m unittest discover -s remoted/scripts -p 'test_*.py'
-          cargo test --locked --manifest-path remoted/Cargo.toml
-          cargo test --locked --manifest-path remoted/client/Cargo.toml --lib
-          npm ci --prefix remoted/relay
-          npm test --prefix remoted/relay
-          npm run test:integration --prefix remoted/relay
-          npm run check --prefix remoted/relay
-      - name: Build pinned NSH tools and Android runtime
+      - name: Build pinned NSH tools and Android runtime with bounded disk use
         working-directory: .tools/nsh
         run: |
+          set -euo pipefail
           cargo build --locked -p nsh-cli
+          mkdir -p "$RUNNER_TEMP/nsh-tools"
+          cp target/debug/nsh "$RUNNER_TEMP/nsh-tools/nsh"
+          rm -rf target
+          df -h .
           cargo xtask android --abi arm64-v8a
+          mkdir -p "$RUNNER_TEMP/nsh-runtime/lib/arm64-v8a"
+          cp target/android/debug/classes.jar target/android/debug/classes.dex "$RUNNER_TEMP/nsh-runtime/"
+          cp target/android/debug/lib/arm64-v8a/libnsh.so "$RUNNER_TEMP/nsh-runtime/lib/arm64-v8a/"
+          rm -rf target
+          printf '%s\n' \
+            "NSH_CLI=$RUNNER_TEMP/nsh-tools/nsh" \
+            "NSH_ANDROID_RUNTIME=$RUNNER_TEMP/nsh-runtime" >> "$GITHUB_ENV"
+          df -h .
       - name: Build and verify signed Android application
         env:
           KEYSTORE_BASE64: ${{ secrets.REMOTED_ANDROID_KEYSTORE_BASE64 }}
