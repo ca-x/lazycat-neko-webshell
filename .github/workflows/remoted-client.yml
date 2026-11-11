@@ -1,0 +1,103 @@
+name: Build Remoted Android client
+on:
+  push:
+    tags: ['remoted-client-v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-remoted-client-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      RUSTUP_TOOLCHAIN: 1.97.1
+      CARGO_BUILD_JOBS: 2
+      NSH_REVISION: 0e4a20bd41ee72a35515cecbf9a7fba88742d911
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: 1.97.1
+          targets: aarch64-linux-android
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: actions/checkout@v7
+        with:
+          repository: longbridge/nsh
+          ref: 0e4a20bd41ee72a35515cecbf9a7fba88742d911
+          path: .tools/nsh
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            remoted -> target
+            remoted/client -> target
+            .tools/nsh -> target
+      - name: Validate native version and source tag
+        id: version
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: python3 remoted/scripts/native-artifact.py version
+      - name: Install Android and native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev cmake ninja-build pkg-config zip unzip libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libpango1.0-dev libcairo2-dev libfontconfig1-dev
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.1' 'ndk;27.3.13750724'
+          printf '%s\n' \
+            "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" \
+            "NSH_TOOLCHAIN=$GITHUB_WORKSPACE/.tools/nsh" \
+            "CLANG_PATH=$ANDROID_HOME/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" >> "$GITHUB_ENV"
+      - name: Verify protocol and Relay
+        run: |
+          python3 -m unittest discover -s remoted/scripts -p 'test_*.py'
+          cargo test --locked --manifest-path remoted/Cargo.toml
+          cargo test --locked --manifest-path remoted/client/Cargo.toml --lib
+          npm ci --prefix remoted/relay
+          npm test --prefix remoted/relay
+          npm run test:integration --prefix remoted/relay
+          npm run check --prefix remoted/relay
+      - name: Build pinned NSH tools and Android runtime
+        working-directory: .tools/nsh
+        run: |
+          cargo build --locked -p nsh-cli
+          cargo xtask android --abi arm64-v8a
+      - name: Build and verify signed Android application
+        env:
+          KEYSTORE_BASE64: ${{ secrets.REMOTED_ANDROID_KEYSTORE_BASE64 }}
+          NEKO_SIGNING_PASSWORD: ${{ secrets.REMOTED_ANDROID_SIGNING_PASSWORD }}
+          NEKO_ANDROID_KEY_ALIAS: neko-remoted
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_BASE64"
+          test -n "$NEKO_SIGNING_PASSWORD"
+          export NEKO_ANDROID_KEYSTORE="$RUNNER_TEMP/remoted-signing.p12"
+          trap 'rm -f "$NEKO_ANDROID_KEYSTORE"' EXIT
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$NEKO_ANDROID_KEYSTORE"
+          bash remoted/client/scripts/build-android.sh
+          bash remoted/client/scripts/test-android.sh
+      - name: Create bounded native artifact and provenance
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          SOURCE_RUN_ID: ${{ github.run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          SOURCE_EVENT: ${{ github.event_name }}
+        run: python3 remoted/scripts/native-artifact.py package
+      - uses: actions/upload-artifact@v7
+        with:
+          name: remoted-client-native-v${{ steps.version.outputs.version }}
+          path: remoted/dist/native/*
+          if-no-files-found: error
+          retention-days: 14
