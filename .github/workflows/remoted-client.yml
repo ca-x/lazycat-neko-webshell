@@ -48,6 +48,7 @@ jobs:
         env:
           RELEASE_REF: ${{ github.ref }}
         run: python3 remoted/scripts/native-artifact.py version
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
       - name: Install Android and native build dependencies
         run: |
           sudo apt-get update
