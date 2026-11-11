@@ -31,7 +31,7 @@ jobs:
       - name: Install Linux verification dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libclang-dev cmake ninja-build pkg-config libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libpango1.0-dev libcairo2-dev libfontconfig1-dev
+          sudo apt-get install -y clang libclang-dev cmake ninja-build pkg-config libdbus-1-dev libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libpango1.0-dev libcairo2-dev libfontconfig1-dev
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
@@ -92,7 +92,7 @@ jobs:
       - name: Install Android and native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libclang-dev cmake ninja-build pkg-config zip unzip libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libpango1.0-dev libcairo2-dev libfontconfig1-dev
+          sudo apt-get install -y clang libclang-dev cmake ninja-build pkg-config zip unzip libdbus-1-dev libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libpango1.0-dev libcairo2-dev libfontconfig1-dev
           sdkmanager 'platforms;android-35' 'build-tools;35.0.1' 'ndk;27.3.13750724'
           printf '%s\n' \
             "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" \
