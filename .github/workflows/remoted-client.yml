@@ -98,6 +98,12 @@ jobs:
             "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" \
             "NSH_TOOLCHAIN=$GITHUB_WORKSPACE/.tools/nsh" \
             "CLANG_PATH=$ANDROID_HOME/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" >> "$GITHUB_ENV"
+      - name: Check Android packaging tools before compiling NSH
+        run: |
+          for tool in cargo rustc clang cmake ninja pkg-config zip python3 base64; do
+            command -v "$tool" >/dev/null || { echo "Missing CI tool: $tool" >&2; exit 1; }
+          done
+          bash remoted/client/scripts/build-android.sh --check-tools
       - name: Build pinned NSH tools and Android runtime with bounded disk use
         working-directory: .tools/nsh
         run: |
