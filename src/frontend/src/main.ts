@@ -1,4 +1,6 @@
 import "./terminal-input-actions.css";
+import { createRemoteControlSettings } from "./remote-control/settings-controller";
+import { remoteSessionChoices } from "./remote-control/model";
 import { createMicroVmTerminals } from "./microvm/view";
 import { createPluginStreamBroker, type TerminalStreamHook } from "./plugins/terminal-stream";
 import { createBuiltinPluginEntries } from "./plugins/entries.generated";
@@ -1338,6 +1340,11 @@ let aiConfigDialog: AIConfigDialogState | undefined;
 let tunnelProfileDialog: TunnelProfileDialogState | undefined;
 let aiProviderPickerOpen = false;
 let tabs: TerminalTab[] = [];
+const remoteControlSettings = createRemoteControlSettings({
+  root: document.getElementById("remoteControlSettingsPanel")!,
+  tr,
+  sessions: () => remoteSessionChoices(tabs),
+});
 let activeTabId: string | undefined;
 let renamingTabId: string | undefined;
 let customFonts: FontPreset[] = [];
@@ -2817,6 +2824,7 @@ function bindSettingsTabs() {
 function activateSettingsTab(tabId: string) {
   if (tabId === "terminal") void agentUpdates.refresh();
   if (!activateSettingsPanel(elements, tabId)) return;
+  if (tabId === "remote-control") void remoteControlSettings.refresh();
   if (tabId === "plugins") {
     if (!pluginsLoaded && !pluginsLoading) {
       void loadPlugins();

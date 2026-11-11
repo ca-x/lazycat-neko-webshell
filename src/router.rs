@@ -72,6 +72,7 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .route("/api/catflap/{app}/sessions/{session}", delete(crate::catflap_terminal::close))
         .route("/api/catflap/{app}/sessions/{session}/ws", get(crate::catflap_terminal::attach))
         .route("/api/runtime", get(runtime_info))
+        .route("/api/remoted", get(crate::remoted::http::get).post(crate::remoted::http::post).layer(DefaultBodyLimit::max(32 * 1024)))
         .route("/api/agent/update", get(crate::agent_updates::get_update).post(crate::agent_updates::post_update))
         .route("/api/agent-keyboard/usage", get(crate::agent_keyboard_usage::list).post(crate::agent_keyboard_usage::record).layer(DefaultBodyLimit::max(512)))
         .route("/api/sounds", get(list_sounds))

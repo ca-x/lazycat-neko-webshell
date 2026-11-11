@@ -42,6 +42,7 @@ mod preferences;
 mod proto;
 mod pty_io;
 mod remote_program;
+mod remoted;
 mod restty_headless;
 mod router;
 mod secret_file;
@@ -82,6 +83,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Arc::new(AppState::new()?);
     state.plugin.runtime(&state).await?;
+    let remote_access = remoted::relay::start(Arc::clone(&state));
     let app = build_app(Arc::clone(&state));
 
     let addr: SocketAddr = "127.0.0.1:8080".parse()?;
@@ -92,6 +94,7 @@ async fn main() -> anyhow::Result<()> {
             let _ = tokio::signal::ctrl_c().await;
         })
         .await?;
+    remote_access.abort();
     state.agent_control.close();
     state.plugin.shutdown().await?;
     Ok(())

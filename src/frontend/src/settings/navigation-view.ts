@@ -4,6 +4,7 @@ const sections = [
   { id: "appearance", panel: "appearanceSettingsPanel", icon: "monitor-cog", label: "tab.appearance" },
   { id: "terminal", panel: "terminalSettingsPanel", icon: "terminal", label: "tab.terminal" },
   { id: "remote-hosts", panel: "remoteHostsSettingsPanel", icon: "server-cog", label: "tab.remoteHosts" },
+  { id: "remote-control", panel: "remoteControlSettingsPanel", icon: "shield-check", label: "remote.title" },
   { id: "fonts", panel: "fontSettingsRootPanel", icon: "type", label: "tab.fonts" },
   { id: "themes", panel: "themeSettingsPanel", icon: "palette", label: "tab.themes" },
   { id: "mobile", panel: "mobileSettingsPanel", icon: "smartphone", label: "tab.mobile" },

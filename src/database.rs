@@ -15,6 +15,34 @@ use crate::terminal_manager::OutputFrame;
 
 const TO_IO_ERROR: fn(rusqlite::Error) -> io::Error = io::Error::other;
 
+// SQLite copies the database mode when creating its WAL and shared-memory
+// files. Restrict all existing files before opening or writing any credentials.
+#[cfg(unix)]
+fn protect_database_files(path: &std::path::Path) -> io::Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    if path == std::path::Path::new(":memory:") {
+        return Ok(());
+    }
+    fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path)?
+        .set_permissions(fs::Permissions::from_mode(0o600))?;
+    for suffix in ["-wal", "-shm"] {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(suffix);
+        match fs::OpenOptions::new().read(true).write(true).open(name) {
+            Ok(file) => file.set_permissions(fs::Permissions::from_mode(0o600))?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 pub const KV_NAMESPACE_STATE: &str = "state";
 pub const KV_NAMESPACE_PREFERENCES: &str = "preferences";
 pub const KV_KEY_PLUGINS: &str = "plugins";
@@ -41,6 +69,8 @@ impl AppDatabase {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
+        #[cfg(unix)]
+        protect_database_files(&path)?;
         let conn = Connection::open(path).map_err(TO_IO_ERROR)?;
         conn.execute_batch(
             r"
@@ -919,6 +949,37 @@ mod tests {
         let _ = remove_database_file(&path);
         let database = AppDatabase::open(path.clone()).expect("test database");
         (database, path)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn credential_database_and_existing_wal_are_private_before_reopening() {
+        use std::os::unix::fs::PermissionsExt;
+        let (first, path) = temp_database();
+        let mut files = vec![path.clone()];
+        for suffix in ["-wal", "-shm"] {
+            let mut name = path.as_os_str().to_os_string();
+            name.push(suffix);
+            files.push(std::path::PathBuf::from(name));
+        }
+        for file in &files {
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let reopened = AppDatabase::open(path.clone()).unwrap();
+        reopened
+            .store_kv("remoted-v1", "test", b"private identity")
+            .unwrap();
+        for file in &files {
+            assert_eq!(
+                std::fs::metadata(file).unwrap().permissions().mode() & 0o777,
+                0o600,
+                "{} must not expose credentials",
+                file.display()
+            );
+        }
+        drop(reopened);
+        drop(first);
+        remove_database_file(&path).unwrap();
     }
 
     #[test]

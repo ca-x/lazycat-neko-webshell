@@ -1,4 +1,5 @@
 import { renderFontsSettingsView } from "./settings/fonts-view";
+import { renderRemoteControlSettings } from "./remote-control/settings-view";
 import { renderThemesSettingsView } from "./settings/themes-view";
 import { renderTerminalSettingsView } from "./settings/terminal-view";
 import { renderSettingsDisclosure } from "./settings/disclosure-view";
@@ -387,6 +388,8 @@ export function renderShell(app: HTMLElement): ShellElements {
               ${renderSettingsSectionIntro("remote-hosts")}
               <div class="settings-group ssh-profile-settings" id="sshProfileSettings"></div>
             </section>
+
+            ${renderRemoteControlSettings()}
 
             ${renderMobileSettingsView()}
 

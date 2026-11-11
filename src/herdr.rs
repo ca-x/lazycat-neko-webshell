@@ -2257,6 +2257,21 @@ impl IntoResponse for HerdrBridgeError {
     }
 }
 
+/// Remoted keeps its own, narrower permission matrix before reaching this bridge.
+pub(crate) async fn run_remoted_request(
+    selector: &str,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
+    validate_herdr_request_method(method).map_err(|e| e.message)?;
+    let target = authorize_herdr_target(selector)
+        .await
+        .map_err(|e| e.message)?;
+    run_herdr_request(&target, method, normalize_herdr_params(params))
+        .await
+        .map_err(|e| e.message)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

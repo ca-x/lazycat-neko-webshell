@@ -8,3 +8,5 @@
 /src/frontend/src/gen/
 /tests-auto/artifacts/
 *.lpk
+__pycache__/
+*.pyc

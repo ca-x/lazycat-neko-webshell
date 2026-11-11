@@ -36,6 +36,7 @@ pub const METADATA_LOGIN_USER: &str = "loginUser";
 pub struct AppState {
     pub plugin: crate::plugin::PluginHost,
     pub sessions: Arc<SessionManager>,
+    pub(crate) remoted: Arc<crate::remoted::Remoted>,
     pub terminal_control: Arc<TerminalControlHub>,
     pub notifications: Arc<NotificationHub>,
     pub herdr_notifications: Arc<HerdrNotificationSender>,
@@ -91,6 +92,7 @@ impl AppState {
             herdr_handoffs: Arc::new(crate::herdr::HerdrHandoffTracker::default()),
             herdr_resources: Arc::new(crate::herdr::HerdrResourceCache::default()),
             remote_programs,
+            remoted: Arc::new(crate::remoted::Remoted::load(Arc::clone(&database))?),
             remote_auth: Arc::default(),
             agent_control: Arc::default(),
             workspaces: Arc::new(RwLock::new(workspaces)),
@@ -149,6 +151,9 @@ impl AppState {
             herdr_handoffs: Arc::new(crate::herdr::HerdrHandoffTracker::default()),
             herdr_resources: Arc::new(crate::herdr::HerdrResourceCache::default()),
             remote_programs,
+            remoted: Arc::new(
+                crate::remoted::Remoted::load(Arc::clone(&database)).expect("test remote settings"),
+            ),
             remote_auth: Arc::default(),
             agent_control: Arc::default(),
             workspaces: Arc::new(RwLock::new(HashMap::new())),

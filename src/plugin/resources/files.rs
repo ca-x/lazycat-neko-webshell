@@ -324,7 +324,7 @@ async fn run_session_script(
     Ok(output.stdout)
 }
 
-fn script_for_session_user(session: &SessionRecord, script: &str) -> String {
+pub(crate) fn script_for_session_user(session: &SessionRecord, script: &str) -> String {
     let login_user = session
         .metadata
         .get("loginUser")

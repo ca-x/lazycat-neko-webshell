@@ -1,0 +1,34 @@
+.remote-control { color: var(--text); font-size: 14px; line-height: 1.5; }
+.remote-control .remote-field { display: grid; gap: 8px; margin-block: 16px; }
+.remote-control :is(input:not([type="checkbox"]), select, textarea) { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 12px; background: var(--surface); color: var(--text); font: inherit; }
+.remote-control .command-button { padding: 8px 12px; }
+.remote-control .remote-primary { border-color: var(--accent-border); background: var(--accent-softer); color: var(--accent-fg); }
+.remote-control [data-revoke] { color: var(--danger); }
+.remote-control .command-button:focus-visible { transition: none; transform: none; }
+.remote-control summary { cursor: pointer; overflow-wrap: anywhere; padding-block: 8px; min-height: 36px; box-sizing: border-box; }
+.remote-control button, .remote-control select, .remote-control input:not([type="checkbox"]) { min-height: 36px; }
+.remote-control :is(input, textarea, select, button):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.remote-control :is(p, small, h5, li) { overflow-wrap: anywhere; }
+.remote-control h4 { font-size: 16px; margin: 0 0 12px; }
+.remote-control h5 { font-size: 14px; margin: 0 0 8px; }
+.remote-control .remote-section { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--line-soft); }
+.remote-control .remote-connection { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 24px; }
+.remote-control .remote-device { padding-block: 16px; border-bottom: 1px solid var(--line-soft); }
+.remote-control .remote-fingerprint { color: var(--muted); font-family: monospace; font-size: 12px; user-select: text; }
+.remote-control .remote-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.remote-control .remote-resource { padding-block: 12px; }
+.remote-control .remote-resource > label:first-child { display: flex; align-items: start; gap: 8px; min-height: 32px; }
+.remote-control small { display: block; color: var(--muted); }
+.remote-control fieldset { border: 1px solid var(--line-soft); min-width: 0; border-radius: var(--radius-sm); }
+.remote-control [data-remote-error] { border-inline-start: 3px solid var(--accent); padding: 8px 12px; }
+.remote-control [data-remote-invitation] { margin-top: 16px; }
+.remote-control .remote-qr { width: min(224px, 100%); height: auto; shape-rendering: crispEdges; }
+.remote-control .remote-qr-paper { fill: white; }
+.remote-control .remote-qr-ink { fill: black; }
+@media (max-width: 760px) {
+  .remote-control button, .remote-control select, .remote-control input:not([type="checkbox"]), .remote-control summary { min-height: 48px; }
+  .remote-control .remote-resource > label:first-child { min-height: 48px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .remote-control .command-button { transition: none; transform: none; }
+}
