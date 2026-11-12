@@ -40,14 +40,7 @@ fn fixture(model: Model, connected: bool) -> impl IntoElement {
             },
         ))
         .child(if connected {
-            nsh_base::nav_stack()
-                .flex_1()
-                .child(
-                    nsh_base::nav_page()
-                        .header_visible(false)
-                        .child(shell::body()),
-                )
-                .into_element()
+            frame().into_element()
         } else {
             connection::render(ui).into_element()
         })
@@ -251,9 +244,16 @@ fn start<C: Component<Props = ()>>(width: f32, scheme: ColorScheme) -> Headless 
     app
 }
 
+#[component]
+fn SetupFrameFixture() -> impl IntoElement {
+    fixture(Model::default(), true)
+}
+
 #[test]
-fn actual_app_mounts_the_page_scoped_body_and_labelled_relay_field() {
-    let mut app = start::<App>(390.0, ColorScheme::Light);
+fn app_frame_mounts_the_page_scoped_body_and_labelled_relay_field() {
+    // Exercise the exact production navigation frame with isolated controller
+    // state, without reading or modifying the machine's OS credential store.
+    let mut app = start::<SetupFrameFixture>(390.0, ColorScheme::Light);
     app.wait_for("Relay 地址").unwrap();
     app.wait_for("连接设置").unwrap();
     assert!(!app.shows("neoko-terminal"));

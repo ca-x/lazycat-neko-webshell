@@ -1,7 +1,7 @@
-# neoko-terminal 桌面 0.4.0 / Android 0.3.0 验收记录
+# neoko-terminal 桌面 0.4.1 / Android 0.3.0 验收记录
 
 本轮源码版本为 WebShell 0.14.2、共享客户端及 Android 0.3.0/build 8、桌面发行包
-0.4.0。原生应用固定 NSH 0.5.0 提交
+0.4.1。原生应用固定 NSH 0.5.0 提交
 `f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1`，Ghostty Rust binding
 `cd4d497e8c698b27054a677ce19d1bd1a1a4d8bf`、Ghostty 内核
 `108cacb17ed8990840cd14abfce43d8ed8503ca1` 和 Zig 0.17.1。

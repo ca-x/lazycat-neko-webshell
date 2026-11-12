@@ -8,7 +8,7 @@ on:
       desktop_version:
         description: Independent desktop package version (does not change Android)
         required: true
-        default: '0.4.0'
+        default: '0.4.1'
         type: string
 
 permissions:
@@ -58,6 +58,11 @@ jobs:
       - name: Install checksum-verified Ghostty source and Zig
         shell: bash
         run: python remoted/scripts/ghostty-toolchain.py setup --directory "$RUNNER_TEMP/ghostty-toolchain" --cache "$RUNNER_TEMP/ghostty-archives"
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libdbus-1-dev pkg-config dpkg-dev gnome-keyring dbus-x11
       - name: Verify toolchain bootstrap contracts
         run: python -m unittest discover -s remoted/scripts -p "test_*.py"
       - name: Validate immutable desktop release tag
@@ -71,11 +76,6 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Use a matching neoko-terminal-desktop-vX.Y.Z tag' >&2; exit 1; }
           [[ -z "$INPUT_VERSION" || "$INPUT_VERSION" == "$version" ]] || { echo 'Input version differs from source tag' >&2; exit 1; }
           printf 'DESKTOP_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
-      - name: Linux native dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libdbus-1-dev pkg-config dpkg-dev gnome-keyring dbus-x11
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: ghostty-native-v1-${{ hashFiles('remoted/ghostty/toolchain.json', 'remoted/scripts/ghostty-toolchain.py', 'remoted/ghostty/tools/zig-android.sh') }}

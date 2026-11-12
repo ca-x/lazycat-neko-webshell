@@ -1,6 +1,6 @@
 # neoko-terminal native desktop host
 
-Implementation for the WebShell 0.14.2, Android 0.3.0 and desktop 0.4.0 release candidate, 2026-11-12. Actual deployment and artifact evidence are recorded separately.
+Implementation for the WebShell 0.14.2, Android 0.3.0 and desktop 0.4.1 release candidate, 2026-11-12. Actual deployment and artifact evidence are recorded separately.
 
 ## Intended behavior
 

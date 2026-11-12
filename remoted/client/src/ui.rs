@@ -60,6 +60,12 @@ pub fn App() -> impl IntoElement {
     provide_context(terminal);
     let ui = state::Ui::start();
     provide_context(ui);
+    frame().into_element()
+}
+
+/// Shared production navigation frame; startup services are owned by App.
+fn frame() -> impl IntoElement {
+    let ui = use_context::<state::Ui>().expect("App provides the native UI controller context");
     nav_stack()
         .flex_1()
         .bg(move || theme().background)
