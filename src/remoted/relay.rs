@@ -182,3 +182,37 @@ async fn serve(
                }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Uses a fresh random host route and an in-memory database, never saved user bindings.
+    #[tokio::test]
+    #[ignore = "requires REMOTED_TEST_RELAY with a reachable deployed Relay"]
+    async fn deployed_relay_host_registers_and_measures_rtt() {
+        crate::tls::initialize();
+        let address = std::env::var("REMOTED_TEST_RELAY").expect("REMOTED_TEST_RELAY required");
+        let state = Arc::new(AppState::new_for_test(":memory:".into()));
+        let mut saved = state.remoted.snapshot().unwrap();
+        saved.enabled = true;
+        saved.relay = Some(protocol::RelayAddress::parse(&address).unwrap());
+        state.remoted.persist(saved).unwrap();
+        let mut worker = start(Arc::clone(&state));
+        let connected = timeout(Duration::from_secs(15), async {
+            loop {
+                tokio::select! {
+                    result = &mut worker => panic!("Relay worker exited before registering: {result:?}"),
+                    () = tokio::time::sleep(Duration::from_millis(20)) => {
+                        let runtime = state.remoted.runtime.lock().unwrap();
+                        if runtime.status == "online" && runtime.relay_rtt.is_some() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }).await;
+        worker.abort();
+        connected.expect("Host must become online and receive a Relay pong");
+    }
+}

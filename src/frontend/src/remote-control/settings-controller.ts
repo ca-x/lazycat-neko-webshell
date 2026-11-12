@@ -26,10 +26,13 @@ export function createRemoteControlSettings(options: {
   let receivedAt = -Infinity;
   let busy = false;
   let loading = false;
+  let readGeneration = 0;
   let checkingRelay = false;
   let draftRevision = 0;
   const dirty = { enabled: false, relay: false };
   let polling = false;
+  let nextPollAt = Infinity;
+  let pollFailures = 0;
   let disposed = false;
   let invitation: (Invitation & { expiresAt: number }) | undefined;
   let pendingSignature = "";
@@ -68,29 +71,34 @@ export function createRemoteControlSettings(options: {
     find<HTMLElement>("[data-remote-state]").textContent = tr("remote.unavailable");
     find<HTMLElement>("[data-remote-relay-rtt]").textContent = `${tr("remote.hostRtt")}: ${tr("remote.unavailable")}`;
   }
+  function schedulePoll(failed = false) {
+    pollFailures = failed ? Math.min(pollFailures + 1, 4) : 0;
+    nextPollAt = polling ? now() + Math.min(30000, 2500 * 2 ** pollFailures) : Infinity;
+  }
   function reportFailure(message: string, cause: unknown) {
     if (disposed) return;
-    polling = false;
     if (cause instanceof RemoteApiError && cause.authorizationLost) clearAuthorization();
+    else schedulePoll(true);
     error(cause instanceof RelayCheckError ? tr(`remote.relayCheck.${cause.reason}`) : `${message}: ${String(cause instanceof Error ? cause.message : cause)}`);
   }
   function controls() {
+    enabled.indeterminate = !state && !dirty.enabled;
     root.setAttribute("aria-busy", String(busy || loading));
     const working = find<HTMLElement>("[data-remote-working]");
     working.hidden = !busy && !loading;
     if (busy || loading) working.textContent = tr(loading ? "remote.loading" : checkingRelay ? "remote.checkingRelay" : "remote.working");
     for (const element of Array.from(config.elements)) {
       if (element instanceof HTMLInputElement) element.disabled = busy && !checkingRelay;
-      if (element instanceof HTMLButtonElement) element.disabled = loading || (busy && (!checkingRelay || !element.hasAttribute("data-remote-public-relay")));
+      if (element instanceof HTMLButtonElement) element.disabled = busy && (!checkingRelay || !element.hasAttribute("data-remote-public-relay"));
     }
-    find<HTMLButtonElement>("[data-remote-invite]").disabled = busy || loading || !state?.enabled || state.status !== "online" || now() - receivedAt >= 30000;
+    find<HTMLButtonElement>("[data-remote-invite]").disabled = busy || !state?.enabled || state.status !== "online" || now() - receivedAt >= 30000;
     find<HTMLButtonElement>("[data-remote-refresh]").disabled = busy || loading;
     const copy = root.querySelector<HTMLButtonElement>("[data-remote-copy]");
-    if (copy) copy.disabled = busy || loading || !state;
+    if (copy) copy.disabled = busy || !state;
     for (const element of root.querySelectorAll<HTMLButtonElement>(".remote-device button")) {
       const pending = element.closest<HTMLElement>("[data-pending]");
       const device = state?.devices.find(item => item.id === element.dataset.disconnect);
-      element.disabled = busy || loading || !state
+      element.disabled = busy || !state
         || Boolean(pending && (!state?.enabled || (deadlines.get(pending.dataset.pending!) ?? 0) <= now() || (!options.sessions().length && element.type === "submit")))
         || Boolean(element.dataset.disconnect && (!state?.enabled || !device?.online));
     }
@@ -142,7 +150,7 @@ export function createRemoteControlSettings(options: {
     const operationWarning = find<HTMLElement>("[data-remote-operation-warning]");
     operationWarning.hidden = unknown === 0;
     operationWarning.textContent = unknown ? tr("remote.operationUnknown", { count: unknown }) : "";
-    if (fresh) { receivedAt = now(); polling = next.enabled && !!next.relay && !next.error; }
+    if (fresh) { receivedAt = now(); polling = next.enabled && !!next.relay; schedulePoll(Boolean(next.error)); }
     if (!dirty.enabled) enabled.checked = next.enabled;
     if (!dirty.relay) relay.value = next.relay;
     find<HTMLElement>("[data-remote-registration-help]").textContent = tr(next.has_registration_key ? "remote.registrationSaved" : "remote.registrationHelp");
@@ -170,17 +178,27 @@ export function createRemoteControlSettings(options: {
   }
   async function refresh() {
     if (disposed || busy || loading || !visible()) return;
+    const generation = ++readGeneration;
     loading = true;
     controls();
-    try { apply(await api.get()); }
-    catch (failure) {
+    try {
+      const next = await api.get();
+      if (generation === readGeneration) apply(next);
+    } catch (failure) {
+      if (disposed || generation !== readGeneration) return;
       receivedAt = -Infinity;
       clearInvitation();
-      if (!disposed) { reportFailure(tr("remote.loadFailed"), failure); metrics(); }
-    } finally { loading = false; if (!disposed) controls(); }
+      reportFailure(tr("remote.loadFailed"), failure);
+      metrics();
+    } finally {
+      if (generation === readGeneration) { loading = false; if (!disposed) controls(); }
+    }
   }
   async function mutate(action: RemoteAction | { action: "invite" }) {
-    if (busy || loading || disposed) return;
+    if (busy || disposed) return;
+    // Mutations supersede background reads, including their errors and finally handlers.
+    readGeneration++;
+    loading = false;
     const revision = draftRevision;
     busy = true;
     checkingRelay = action.action === "configure" && action.enabled;
@@ -235,6 +253,7 @@ export function createRemoteControlSettings(options: {
     if (config.contains(input)) {
       draftRevision++;
       if (input === enabled || input === relay) dirty[input === enabled ? "enabled" : "relay"] = true;
+      if (input === enabled) enabled.indeterminate = false;
     }
     if (input.name === "session") {
       const form = input.closest("form")!;
@@ -246,8 +265,9 @@ export function createRemoteControlSettings(options: {
     const form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
     event.preventDefault();
-    if (busy || loading) return;
+    if (busy) return;
     if (form === config) {
+      if (enabled.indeterminate) { error(tr("remote.chooseEnabled")); enabled.focus(); return; }
       void mutate({ action: "configure", enabled: enabled.checked, relay: relay.value.trim(), registrationKey: clearRegistrationKey.checked ? "" : registrationKey.value || undefined });
       return;
     }
@@ -260,14 +280,14 @@ export function createRemoteControlSettings(options: {
   function onClick(event: MouseEvent) {
     const button = (event.target as Element).closest<HTMLButtonElement>("button");
     if (!button || button.disabled || disposed) return;
-    if (button.hasAttribute("data-remote-public-relay") && (!busy || checkingRelay) && !loading) {
+    if (button.hasAttribute("data-remote-public-relay") && (!busy || checkingRelay)) {
       relay.value = "https://neko-relay.czyt.eu.org";
       dirty.relay = true;
       draftRevision++;
       relay.focus();
       return;
     }
-    if (busy || loading) return;
+    if (busy) return;
     if (button.hasAttribute("data-remote-refresh")) { void refresh(); return; }
     if (!state) return;
     if (button.hasAttribute("data-remote-invite")) { void mutate({ action: "invite" }); return; }
@@ -297,14 +317,15 @@ export function createRemoteControlSettings(options: {
     if (!visible()) { clearInvitation(); return; }
     if (language !== tr("remote.title")) { language = tr("remote.title"); pendingSignature = ""; deviceSignature = ""; if (state) apply(state, false); }
     metrics();
-    if (polling && state?.enabled && state.relay && !state.error && now() - receivedAt >= 2500) void refresh();
+    if (polling && state?.enabled && state.relay && now() >= nextPollAt) void refresh();
   }, 1000);
   metrics();
   return {
-    activate() { if (!disposed) metrics(); },
+    activate() { if (!disposed) { metrics(); return refresh(); } },
     refresh,
     dispose() {
       disposed = true;
+      readGeneration++;
       clearInvitation();
       deviceList.clear();
       registrationKey.value = "";

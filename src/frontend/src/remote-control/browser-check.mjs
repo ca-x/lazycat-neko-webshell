@@ -17,18 +17,20 @@ window.gets = 0; window.healthChecks = []; window.order = [];
 const originalInterval = window.setInterval;
 window.setInterval = (callback, ms) => { window.tick = callback; return originalInterval(callback, ms); };
 window.confirmations = [];
-window.fail = false;
+window.fail = new URL(location.href).searchParams.has('offline');
 window.locale = 'en';
+window.deferGet = new URL(location.href).searchParams.has('pending');
 window.remote = { enabled: false, relay: '', status: 'disabled', error: '', relayRttMs: null, devices: [], pending: [] };
+if (new URL(location.href).searchParams.has('saved')) Object.assign(window.remote, {enabled:true, relay:'https://saved.example', status:'connecting'});
 const tr = (key, values) => translate(window.locale, key, values);
 document.querySelector('#fixture').innerHTML = renderRemoteControlSettings();
-const root = document.querySelector('#remoteControlSettingsPanel'); root.hidden = false;
+let root = document.querySelector('#remoteControlSettingsPanel'); root.hidden = false;
 document.querySelectorAll('[data-i18n]').forEach(node => node.textContent = tr(node.dataset.i18n));
-window.controller = createRemoteControlSettings({ root, tr, now: () => window.clock,
+window.mountController = target => createRemoteControlSettings({ root: target, tr, now: () => window.clock,
   sessions: () => [{ id: 'session-1', name: 'Owned terminal', selector: 'host@owner', backend: 'webshell' }],
   confirm: message => { window.confirmations.push(message); return true; },
   checkRelay: async relay => { window.healthChecks.push(relay); window.order.push('health'); if (window.deferHealth) await new Promise(resolve => window.resolveHealth = resolve); if (window.healthFailure) throw new RelayCheckError('connection'); },
-  api: { get: async () => { window.gets++;  if (window.deferGet) await new Promise(resolve => window.resolveGet = resolve); if (window.authFailure) return remoteApi.get(); if (window.fail) throw Error('offline'); return structuredClone(window.remote); },
+  api: { get: async () => { window.gets++; const next = structuredClone(window.remote); const authFailure = window.authFailure; const fail = window.fail; if (window.deferGet) await new Promise(resolve => window.resolveGet = resolve); if (authFailure) return remoteApi.get(); if (fail) throw Error('offline'); return next; },
     invite: async () => window.authFailure ? remoteApi.invite() : ({ code: 'NR1.' + 'A'.repeat(43) + '.' + 'B'.repeat(43) + '.digest.check', expiresInSeconds: 300 }),
     act: async action => { window.actions.push(action); window.order.push(action.action); if (window.authFailure) return remoteApi.act(action); if (window.fail) throw Error('Rejected');
       if (action.action === 'configure') Object.assign(window.remote, {enabled: action.enabled, relay: action.relay, status: action.enabled ? 'online' : 'disabled', relayRttMs: 12, has_registration_key: !!action.registrationKey});
@@ -40,6 +42,16 @@ window.controller = createRemoteControlSettings({ root, tr, now: () => window.cl
       return structuredClone(window.remote); }
   }
 });
+window.controller = window.mountController(root);
+window.remountController = async () => {
+  window.controller.dispose();
+  const template = document.createElement('template'); template.innerHTML = renderRemoteControlSettings();
+  const replacement = template.content.firstElementChild; root.replaceWith(replacement); root = replacement; root.hidden = false;
+  root.querySelectorAll('[data-i18n]').forEach(node => node.textContent = tr(node.dataset.i18n));
+  window.setInterval = (callback, ms) => { window.tick = callback; return originalInterval(callback, ms); };
+  window.controller = window.mountController(root); window.setInterval = originalInterval;
+  await window.controller.activate();
+};
 window.setInterval = originalInterval;
 window.controller.activate(); window.ready = true;
 </script></body></html>`;
@@ -53,7 +65,7 @@ const server = await createServer({ configFile: false, root: "src/frontend", ser
         response.end(JSON.stringify({code: 'AUTHORIZATION_FAILED', error: 'Owner verification failed'}));
         return;
       }
-      if (request.url !== "/remote-control-check") return next();
+      if (request.url.split("?")[0] !== "/remote-control-check") return next();
       response.setHeader("content-type", "text/html"); response.end(fixture);
     });
   },
@@ -61,16 +73,62 @@ const server = await createServer({ configFile: false, root: "src/frontend", ser
 const browser = createBrowserDriver({ session: uniqueBrowserSession("remote-control"), headed: false });
 try {
   await server.listen();
-  await browser.open(`http://127.0.0.1:${server.httpServer.address().port}/remote-control-check`);
+  await browser.open(`http://127.0.0.1:${server.httpServer.address().port}/remote-control-check?saved&pending`);
   await browser.command(["wait", "--fn", "window.ready === true"]);
   const evaluate = source => browser.evaluate(source);
-  assert.equal(await evaluate(`window.gets`), 0);
+  // An unknown switch is not an explicit request to disable saved remote control.
+  await evaluate(`(async () => { document.querySelector('[data-remote-config]').requestSubmit(); await new Promise(resolve => setTimeout(resolve,0)); })()`);
+  assert.equal(await evaluate(`window.actions.length`), 0, 'unknown enabled state must never POST false or clear saved settings');
+  await browser.command(["fill", "[name=relay]", "https://draft-before-bootstrap.example"]);
+  await evaluate(`document.querySelector('[data-remote-connection-options]').open = true`);
+  await browser.command(["fill", "[name=registrationKey]", "draft-before-bootstrap-key"]);
+  await evaluate(`(async () => { document.querySelector('[data-remote-config]').requestSubmit(); await new Promise(resolve => setTimeout(resolve,0)); })()`);
+  assert.deepEqual(await evaluate(`({posts:window.actions.length,health:window.healthChecks.length,savedRelay:window.remote.relay,savedEnabled:window.remote.enabled,relay:document.querySelector('[name=relay]').value,key:document.querySelector('[name=registrationKey]').value,unknown:document.querySelector('[name=enabled]').indeterminate,editable:Array.from(document.querySelectorAll('[data-remote-config] input, [data-remote-config] button')).every(element => !element.disabled),prompt:document.querySelector('[data-remote-error]').textContent.includes('explicitly choose')})`), {posts:0,health:0,savedRelay:'https://saved.example',savedEnabled:true,relay:'https://draft-before-bootstrap.example',key:'draft-before-bootstrap-key',unknown:true,editable:true,prompt:true});
+  await browser.command(["click", "[name=enabled]"]);
+  await evaluate(`(async () => {
+    document.querySelector('[data-remote-config]').requestSubmit(); await new Promise(resolve => setTimeout(resolve,0));
+    window.deferGet = false; window.resolveGet(); await new Promise(resolve => setTimeout(resolve,0));
+  })()`);
+  assert.deepEqual(await evaluate(`({posts:window.actions.length,health:window.healthChecks.length,enabled:window.actions[0]?.enabled,relay:document.querySelector('[name=relay]').value})`), {posts:1,health:1,enabled:true,relay:'https://draft-before-bootstrap.example'});
+  await evaluate(`window.controller.dispose()`);
+  await browser.navigate(`http://127.0.0.1:${server.httpServer.address().port}/remote-control-check?saved`);
+  await browser.command(["wait", "--fn", "window.ready === true"]);
+  assert.equal(await evaluate(`document.querySelector('[name=relay]').value`), 'https://saved.example', 'opening settings must restore saved configuration asynchronously');
+  assert.equal(await evaluate(`document.querySelector('[name=enabled]').checked`), true);
+  // Successful POST must survive hiding/reopening and a fresh controller with fresh form nodes.
+  await browser.command(["fill", "[name=relay]", "https://persisted.example"]);
+  await evaluate(`(async () => {
+    document.querySelector('[data-remote-config]').requestSubmit(); await new Promise(resolve => setTimeout(resolve,0));
+    const panel = document.querySelector('#remoteControlSettingsPanel'); panel.hidden = true; window.tick();
+    panel.hidden = false; await window.controller.activate();
+  })()`);
+  assert.deepEqual(await evaluate(`({relay:document.querySelector('[name=relay]').value,enabled:document.querySelector('[name=enabled]').checked,savedRelay:window.remote.relay,savedEnabled:window.remote.enabled,healthChecks:window.healthChecks.length})`), {relay:'https://persisted.example',enabled:true,savedRelay:'https://persisted.example',savedEnabled:true,healthChecks:1});
+  await browser.command(["fill", "[name=relay]", "https://unsaved-on-close.example"]);
+  await evaluate(`(() => {
+    const enabled = document.querySelector('[name=enabled]'); enabled.checked = false; enabled.dispatchEvent(new Event('input',{bubbles:true}));
+    document.querySelector('[data-remote-connection-options]').open = true;
+    document.querySelector('[name=registrationKey]').value = 'unsaved-key-on-close';
+    const panel = document.querySelector('#remoteControlSettingsPanel'); panel.hidden = true; window.tick();
+    window.fail = true; window.deferGet = true; panel.hidden = false; window.reopenPromise = window.controller.activate();
+  })()`);
+  assert.equal(await evaluate(`Array.from(document.querySelectorAll('[data-remote-config] input, [data-remote-config] button')).every(element => !element.disabled) && document.querySelector('[data-remote-connection-options]').open`), true);
+  await evaluate(`(async () => {
+    window.deferGet = false; window.resolveGet(); await window.reopenPromise;
+    document.querySelector('[data-remote-config]').requestSubmit(); await new Promise(resolve => setTimeout(resolve,0));
+  })()`);
+  assert.deepEqual(await evaluate(`({relay:document.querySelector('[name=relay]').value,enabled:document.querySelector('[name=enabled]').checked,key:document.querySelector('[name=registrationKey]').value,savedRelay:window.remote.relay,savedEnabled:window.remote.enabled,editable:!document.querySelector('[data-remote-save]').disabled,error:document.querySelector('[data-remote-error]').textContent.includes('Rejected')})`), {relay:'https://unsaved-on-close.example',enabled:false,key:'unsaved-key-on-close',savedRelay:'https://persisted.example',savedEnabled:true,editable:true,error:true});
+  await evaluate(`(async () => { window.fail = false; window.previousController = window.controller; await window.remountController(); })()`);
+  assert.deepEqual(await evaluate(`({fresh:window.controller !== window.previousController,relay:document.querySelector('[name=relay]').value,enabled:document.querySelector('[name=enabled]').checked,key:document.querySelector('[name=registrationKey]').value,gets:window.gets,healthChecks:window.healthChecks.length})`), {fresh:true,relay:'https://persisted.example',enabled:true,key:'',gets:4,healthChecks:1});
+  await evaluate(`window.controller.dispose()`);
+  await browser.navigate(`http://127.0.0.1:${server.httpServer.address().port}/remote-control-check?offline`);
+  await browser.command(["wait", "--fn", "window.ready === true"]);
+  assert.equal(await evaluate(`window.gets`), 1);
   assert.match(await evaluate(`document.querySelector('[data-remote-state]').textContent`), /not loaded/);
   assert.equal(await evaluate(`Array.from(document.querySelectorAll('[data-remote-config] input, [data-remote-config] button')).every(element => !element.disabled)`), true);
   await evaluate(`window.clock += 10000; window.tick(); window.controller.activate()`);
-  assert.equal(await evaluate(`window.gets + window.healthChecks.length`), 0);
+  assert.equal(await evaluate(`window.gets + window.healthChecks.length`), 2);
   await evaluate(`(async () => { window.fail = true; await window.controller.refresh(); window.clock += 10000; window.tick(); })()`);
-  assert.equal(await evaluate(`window.gets`), 1);
+  assert.equal(await evaluate(`window.gets`), 3);
   assert.equal(await evaluate(`document.querySelector('[name=relay]').disabled || document.querySelector('[data-remote-save]').disabled`), false);
   await evaluate(`(async () => {
     window.fail = false; window.healthFailure = true;
@@ -100,7 +158,7 @@ try {
   await evaluate(`(async () => { document.querySelector('[data-remote-config]').requestSubmit(); await new Promise(resolve => setTimeout(resolve,0)); })()`);
   assert.deepEqual(await evaluate(`window.order`), ['health','health','health','configure']);
   assert.equal(await evaluate(`window.actions[0].enabled`), true);
-  assert.equal(await evaluate(`window.gets`), 1);
+  assert.equal(await evaluate(`window.gets`), 3);
   await evaluate(`(async () => {
     window.healthFailure = true; document.querySelector('[name=enabled]').checked = false;
     document.querySelector('[data-remote-config]').requestSubmit(); await new Promise(resolve => setTimeout(resolve,0));
@@ -108,7 +166,7 @@ try {
   })()`);
   assert.equal(await evaluate(`window.healthChecks.length`), 3);
   assert.equal(await evaluate(`window.actions.at(-1).enabled`), false);
-  assert.equal(await evaluate(`window.gets`), 1);
+  assert.equal(await evaluate(`window.gets`), 3);
   // A GET started before editing must not replace either local field.
   await evaluate(`(() => {
     window.deferGet = true; window.refreshPromise = window.controller.refresh();
@@ -118,7 +176,7 @@ try {
   await evaluate(`(async () => { window.deferGet = false; window.resolveGet(); await window.refreshPromise; })()`);
   assert.equal(await evaluate(`document.querySelector('[name=relay]').value`), 'https://late-draft.example');
   assert.equal(await evaluate(`document.querySelector('[name=enabled]').checked`), true);
-  // Successful saved state permits polling; a failed request pauses it until an explicit recovery.
+  // Saved enabled state retries transient read failures with backoff, without freezing the form.
   await evaluate(`(async () => {
     window.healthFailure = false; document.querySelector('[data-remote-config]').requestSubmit();
     await new Promise(resolve => setTimeout(resolve,0)); window.beforePoll = window.gets;
@@ -127,17 +185,51 @@ try {
   assert.equal(await evaluate(`window.gets === window.beforePoll + 1`), true);
   await evaluate(`(async () => {
     window.fail = true; window.clock += 3000; window.tick(); await new Promise(resolve => setTimeout(resolve,0));
-    window.afterFailedPoll = window.gets; window.clock += 10000; window.tick();
+    window.afterFailedPoll = window.gets; window.clock += 1000; window.tick();
   })()`);
   assert.equal(await evaluate(`window.gets === window.afterFailedPoll`), true);
+  await evaluate(`(async () => { window.fail = false; window.clock += 5000; window.tick(); await new Promise(resolve => setTimeout(resolve,0)); })()`);
+  assert.equal(await evaluate(`window.gets === window.afterFailedPoll + 1`), true);
   await evaluate(`(async () => {
     window.fail = false; await window.controller.refresh(); window.beforePoll = window.gets;
     window.clock += 3000; window.tick(); await new Promise(resolve => setTimeout(resolve,0));
   })()`);
   assert.equal(await evaluate(`window.gets === window.beforePoll + 1`), true);
-  for (const stopped of [{enabled:false}, {enabled:true,relay:''}, {enabled:true,relay:'https://relay.example',error:'Relay unavailable'}]) {
+  for (const stopped of [{enabled:false}, {enabled:true,relay:''}]) {
     await evaluate(`(async () => { Object.assign(window.remote, ${JSON.stringify(stopped)}); await window.controller.refresh(); window.beforePoll = window.gets; window.clock += 10000; window.tick(); })()`);
     assert.equal(await evaluate(`window.gets === window.beforePoll`), true);
+  }
+  await evaluate(`(async () => {
+    Object.assign(window.remote, {enabled:true,relay:'https://relay.example',status:'reconnecting',error:'Relay TLS unavailable'});
+    await window.controller.refresh(); window.beforePoll = window.gets;
+    window.clock += 1000; window.tick();
+  })()`);
+  assert.equal(await evaluate(`window.gets === window.beforePoll && document.querySelector('[data-remote-error]').textContent === 'Relay TLS unavailable'`), true);
+  await evaluate(`(async () => { window.clock += 5000; window.tick(); await new Promise(resolve => setTimeout(resolve,0)); })()`);
+  assert.equal(await evaluate(`window.gets === window.beforePoll + 1 && document.querySelector('[data-remote-error]').textContent === 'Relay TLS unavailable'`), true);
+  await evaluate(`(async () => {
+    Object.assign(window.remote,{error:'',status:'online',relayRttMs:37}); window.clock += 11000; window.tick(); await new Promise(resolve => setTimeout(resolve,0));
+  })()`);
+  assert.match(await evaluate(`document.querySelector('[data-remote-relay-rtt]').textContent`), /37 ms/);
+  // Save supersedes the entire older GET, including a late authorization failure.
+  for (const oldAuthorizationFailure of [false, true]) {
+    await evaluate(`(() => {
+      window.authFailure = ${oldAuthorizationFailure}; window.deferGet = true; window.refreshPromise = window.controller.refresh(); window.authFailure = false;
+      document.querySelector('[data-remote-connection-options]').open = true;
+      window.originalConfig = document.querySelector('[data-remote-config]');
+    })()`);
+    await browser.command(["click", "[data-remote-public-relay]"]);
+    await browser.command(["fill", "[name=relay]", "https://saved-during-get.example"]);
+    await browser.command(["fill", "[name=registrationKey]", "key-after-get-started"]);
+    await evaluate(`(async () => {
+      document.querySelector('[name=enabled]').checked = true;
+      document.querySelector('[name=enabled]').dispatchEvent(new Event('input',{bubbles:true}));
+      document.querySelector('[data-remote-config]').requestSubmit(); await new Promise(resolve => setTimeout(resolve,0));
+      // A new draft typed after the successful POST must also survive the old GET.
+      document.querySelector('[name=registrationKey]').value = 'new-unsaved-key';
+      window.deferGet = false; window.resolveGet(); await window.refreshPromise;
+    })()`);
+    assert.equal(await evaluate(`document.querySelector('[data-remote-config]') === window.originalConfig && document.querySelector('[name=relay]').value === 'https://saved-during-get.example' && document.querySelector('[name=enabled]').checked && document.querySelector('[name=registrationKey]').value === 'new-unsaved-key' && document.querySelector('[data-remote-state]').textContent.includes('Connected') && document.querySelector('[data-remote-error]').hidden && document.querySelector('[data-remote-connection-options]').open`), true);
   }
   // The public Relay shortcut edits only the local relay draft, including keyboard/mobile use.
   await browser.command(["set", "viewport", "360", "844"]);
@@ -214,9 +306,8 @@ try {
   assert.equal(await evaluate(`document.querySelector('[data-remote-working]').hidden`), false);
   assert.match(await evaluate(`document.querySelector('[data-remote-working]').textContent`), /Refreshing/);
   assert.equal(await evaluate(`document.querySelector('.remote-control').getAttribute('aria-busy')`), "true");
-  assert.equal(await evaluate(`Array.from(document.querySelectorAll('.remote-control button')).every(button => button.disabled)`), true);
+  assert.equal(await evaluate(`Array.from(document.querySelectorAll('[data-remote-config] input, [data-remote-config] button')).every(element => !element.disabled)`), true);
   assert.equal(await evaluate(`document.activeElement === window.draftRoot && !window.draftRoot.disabled`), true);
-  await evaluate(`document.querySelector('[data-revoke]').click(); document.querySelector('[data-permission]').click(); document.querySelector('[data-remote-config]').requestSubmit(); document.querySelector('[data-pending]').requestSubmit()`);
   assert.equal(await evaluate(`window.actions.length === window.actionCount`), true);
   await evaluate(`(async () => { window.deferGet = false; window.resolveGet(); await window.refreshPromise; })()`);
   assert.equal(await evaluate(`document.querySelector('[data-remote-working]').hidden`), true);
@@ -234,7 +325,7 @@ try {
       window.deferGet = true; window.refreshPromise = window.controller.refresh();
     })()`);
     assert.equal(await evaluate(`document.activeElement === window.focusedDraft && !window.focusedDraft.disabled`), true);
-    assert.equal(await evaluate(`document.querySelector('[data-remote-save]').disabled && !document.querySelector('[data-remote-working]').hidden`), true);
+    assert.equal(await evaluate(`!document.querySelector('[data-remote-save]').disabled && !document.querySelector('[data-remote-working]').hidden`), true);
     await browser.command(["fill", `[name=${name}]`, draft]);
     assert.equal(await evaluate(`document.activeElement === window.focusedDraft && window.focusedDraft.value === ${JSON.stringify(draft)}`), true);
     await evaluate(`(async () => { window.deferGet = false; window.resolveGet(); await window.refreshPromise; })()`);
@@ -343,5 +434,5 @@ try {
     assert.equal(await evaluate(`document.querySelector('[name="root:session-1"]').value`), "");
   }
   await evaluate(`window.controller.dispose()`);
-  console.log("Remote control browser checks passed: local activation without GET; editable first/failing configuration; health before configure, failed health prevents POST, disable without probe; successful-only polling and failure pause/recovery; late GET keeps per-field drafts; disabled state keeps offline administration; collapsed connection/device disclosures retain open state, focus, and permission drafts; deferred refresh disables actions and retains drafts; GET/action/invite 403 clears sensitive state and requires authorized recovery; default off, configuration, QR expiry, scoped approval, RTT freshness, permissions, disconnect/revoke, focus recovery, 360/390px light/dark layout.");
+  console.log("Remote control browser checks passed: successful POST -> close/reopen/fresh-controller hydration; unsaved drafts survive close and GET/POST failures; asynchronous saved configuration restoration without page/root reload; nonblocking GET and superseded response/error isolation; editable first/failing configuration; health before configure, failed health prevents POST, disable without probe; bounded retry for saved enabled state across network/Relay errors, no unloaded/empty/disabled/auth hotloop; late GET keeps per-field drafts; disabled state keeps offline administration; collapsed connection/device disclosures retain open state, focus, and permission drafts; deferred refresh keeps configuration/actions editable and retains drafts; GET/action/invite 403 clears sensitive state and requires authorized recovery; default off, configuration, QR expiry, scoped approval, RTT freshness, permissions, disconnect/revoke, focus recovery, 360/390px light/dark layout.");
 } finally { await browser.close(); await server.close(); }

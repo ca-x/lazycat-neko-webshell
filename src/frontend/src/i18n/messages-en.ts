@@ -1,5 +1,6 @@
 export const enMessages = {
   "remote.usePublicRelay": "Use public Relay",
+  "remote.chooseEnabled": "Saved enable status is not known yet. Wait for settings to load, or explicitly choose the remote control switch before saving.",
   "remote.notLoaded": "Configuration not loaded yet",
   "remote.configurationChanged": "Settings changed during the Relay check. Save again to check and apply the current settings.",
   "remote.checkingRelay": "Checking Relay connectivity…",
@@ -10,7 +11,7 @@ export const enMessages = {
   "remote.hostFingerprint": "Host fingerprint — compare with the client: {fingerprint}",
   "remote.operationUnknown": "The outcome of {count} submitted operations is unconfirmed. Disconnecting or removing a device cannot recall them; check the target state.",
   "remote.working": "Applying your request…",
-  "remote.loading": "Refreshing remote control status… Actions are temporarily unavailable.",
+  "remote.loading": "Refreshing saved settings asynchronously… You can keep editing.",
   "remote.moreConnectionOptions": "More connection options",
   "remote.manageDevice": "Manage device",
   "remote.registrationKey": "Relay registration key (optional)",

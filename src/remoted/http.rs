@@ -365,6 +365,39 @@ fn view(manager: &Remoted) -> Result<Value> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn saved_connection_settings_survive_database_reopen() {
+        let path = std::env::temp_dir().join(format!(
+            "neko-remoted-settings-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        {
+            let database = Arc::new(crate::database::AppDatabase::open(path.clone()).unwrap());
+            let manager = Remoted::load(database).unwrap();
+            let reply = configure(
+                &manager,
+                manager.snapshot().unwrap(),
+                "owner",
+                true,
+                "https://neko-relay.czyt.eu.org",
+                Some("test-registration-key".into()),
+            )
+            .unwrap();
+            assert_eq!(reply["enabled"], true);
+            assert_eq!(reply["relay"], "wss://neko-relay.czyt.eu.org");
+        }
+        {
+            let database = Arc::new(crate::database::AppDatabase::open(path.clone()).unwrap());
+            let manager = Remoted::load(database).unwrap();
+            let reply = view(&manager).unwrap();
+            assert_eq!(reply["enabled"], true);
+            assert_eq!(reply["relay"], "wss://neko-relay.czyt.eu.org");
+            assert_eq!(reply["has_registration_key"], true);
+            assert_eq!(manager.snapshot().unwrap().owner, "owner");
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[tokio::test]
     async fn slow_approval_preparation_does_not_block_disable_or_revive_stale_pending() {
         let state = Arc::new(AppState::new_for_test(":memory:".into()));

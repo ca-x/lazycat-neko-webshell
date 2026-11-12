@@ -59,6 +59,7 @@ mod terminal_control;
 mod terminal_manager;
 mod terminal_reply_authority;
 mod terminal_socket_write;
+mod tls;
 mod tty_init;
 mod validation;
 mod voice_input;
@@ -73,6 +74,8 @@ async fn main() -> anyhow::Result<()> {
     if args.get(1).is_some_and(|arg| arg == "agent") {
         return agent_daemon::run_agent_command(&args[2..]);
     }
+
+    tls::initialize();
 
     tracing_subscriber::fmt()
         .with_env_filter(

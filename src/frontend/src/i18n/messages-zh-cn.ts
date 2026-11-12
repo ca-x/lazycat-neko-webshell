@@ -2,6 +2,7 @@ import type { MessageKey } from "./messages-en";
 
 export const zhCNMessages = {
   "remote.usePublicRelay": "使用公共中转",
+  "remote.chooseEnabled": "尚未读取已保存的启用状态。请等待读取完成，或明确选择远程控制开关后再保存。",
   "remote.notLoaded": "尚未读取配置",
   "remote.configurationChanged": "检测期间配置已更改。请重新保存，以检查并应用当前配置。",
   "remote.checkingRelay": "正在检查 Relay 连接…",
@@ -12,7 +13,7 @@ export const zhCNMessages = {
   "remote.hostFingerprint": "主机指纹（请与客户端显示核对）：{fingerprint}",
   "remote.operationUnknown": "有 {count} 项已提交操作的结果未确认。断开或移除设备无法撤回，请核对目标状态。",
   "remote.working": "正在处理请求…",
-  "remote.loading": "正在刷新远程控制状态… 操作暂不可用。",
+  "remote.loading": "正在异步读取已保存配置… 你可以继续编辑。",
   "remote.moreConnectionOptions": "更多连接选项",
   "remote.manageDevice": "管理设备",
   "remote.registrationKey": "Relay 注册密钥（选填）",
