@@ -1,4 +1,4 @@
-# 小橘远程协议 v1
+# 小橘远程协议 v2
 
 本协议用于小橘主机与原生客户端间的远程终端、Herdr 和文件操作。它使用独立的应用消息封装，不声称与 TMP `tmp.pb.v1` 或 Alma Relay 的线协议兼容。共享类型及严格解析器位于 `protocol/src`；线上兼容判断以类型、常量与测试为准。
 
@@ -6,11 +6,13 @@
 
 两端先手动配置同一个 HTTPS/WSS **origin**。拒绝 HTTP、用户信息、路径、查询和 fragment。HTTPS 与 WSS 规范化为同一个 WSS origin，不从设备码自动切换中转。
 
-主机独立生成 32 字节 routing secret；route 为该 secret 的 SHA-256 完整摘要。所有二进制字段使用不带 padding 的规范 base64url。主机连接 `wss://<origin>/v1/host/<route>`，在 Authorization 中携带 `Bearer <routing-secret>`；客户端连接 `/v1/client/<route>`。双方必须协商 WebSocket 子协议 `neko.remoted.v1`。Worker 每次注册或替换主机均重新验证 secret，错误凭据不能踢下现有主机。可选部署级 registration key 只限制首次注册，不参与设备认证。
+主机独立生成 32 字节 routing secret；route 为该 secret 的 SHA-256 完整摘要。所有二进制字段使用不带 padding 的规范 base64url。主机连接 `wss://<origin>/v2/host/<route>`，在 Authorization 中携带 `Bearer <routing-secret>`；客户端连接 `/v2/client/<route>`。双方必须协商 WebSocket 子协议 `neko.remoted.v2`。Worker 每次注册或替换主机均重新验证 secret，错误凭据不能踢下现有主机。可选部署级 registration key 只限制首次注册，不参与设备认证。
 
 Relay 可看到路由凭据、连接元数据、流量大小和握手/密文，不保存应用私钥、邀请 PSK 或懒猫用户票据。TLS 信任中转服务，但中转不能代替主机批准设备；已绑定客户端使用钉住的 Noise 主机公钥重连。
 
 Worker 为每个客户端分配连接级 UUID，发送 `connected` 给客户端及 `opened` 给主机。客户端发送 `hello`，mode 为 `pair` 或 `connect`。Worker 使用实际连接替换所有客户端声明的 peer；peer 不是已认证设备身份。主机替换使旧 generation 的全部客户端断开，旧 close 事件不得影响新主机。主机离线返回 HTTP 503。
+
+v2 没有 v1 路由或子协议回退；Relay、主机和客户端需要协调更新。设备码格式版本与传输版本独立。
 
 ## 加密与绑定
 
@@ -19,9 +21,9 @@ Worker 为每个客户端分配连接级 UUID，发送 `connected` 给客户端�
 - 首次配对：`Noise_XXpsk3_25519_ChaChaPoly_BLAKE2s`，32 字节随机 PSK。
 - 已批准设备重连：`Noise_IK_25519_ChaChaPoly_BLAKE2s`，客户端钉住主机 static key，主机验证批准列表中的客户端 static key。
 
-Prologue 为 JSON 编码的数组：`["neko-remoted",1,mode,route,relayDigest]`，relayDigest 是规范 WSS origin 的 SHA-256 前 8 字节的 base64url。握手消息不含业务 payload。任意认证、重复密文或解密错误使整个 Channel 失效，不能继续发送或接收。
+Prologue 为 JSON 编码的数组：`["neko-remoted",2,mode,route,relayDigest]`，relayDigest 是规范 WSS origin 的 SHA-256 前 8 字节的 base64url。握手消息不含业务 payload。任意认证、重复密文或解密错误使整个 Channel 失效，不能继续发送或接收。
 
-设备码形如 `NR1.<route>.<psk>.<relayDigest>.<checksum>`，checksum 为前四段连接字符串的 SHA-256 前 5 字节。设备码是高熵短期秘密，扫码与手输得到相同内容。校验仅用于输入损坏检查。邀请有效期 5 分钟，一次有效配对即消耗；主机界面仍须明确批准，等待批准最多 120 秒。
+设备码容器格式仍为 `NR1.<route>.<psk>.<relayDigest>.<checksum>`，checksum 为前四段连接字符串的 SHA-256 前 5 字节。设备码是高熵短期秘密，扫码与手输得到相同内容。校验仅用于输入损坏检查。邀请有效期 5 分钟，一次有效配对即消耗；主机界面仍须明确批准，等待批准最多 120 秒。
 
 加密业务请求为 `{id,operation}`，响应为 `{id,event}`。操作与事件均使用 `type` 标记的 snake_case 枚举；未知字段和未知操作拒绝。请求 id 为递增正整数，同一连接不重复。握手成功后首先发送 `identify`；待审批返回 `pending`，主机批准后返回 `approved`。客户端先将身份、Relay、路由及钉住主机公钥存入系统保护存储，再发送 `acknowledge_pairing`，之后主机才返回 `ready`。解密成功不代表获得业务授权。
 
@@ -29,13 +31,13 @@ Prologue 为 JSON 编码的数组：`["neko-remoted",1,mode,route,relayDigest]`�
 
 外层消息为 JSON 文本，最多 98,304 字节。握手记录最多 256 字节；业务明文最多 61,440 字节，Noise 密文最多 61,456 字节；文件 chunk 最多 32,768 字节。不得把大文件作为单条消息或完整内存对象转发。
 
-应用发送 `{type:"data",peer,data}`。Worker 在转发时添加接收连接级、从 1 递增的 `sequence`。接收方把记录放入有界队列后发送 `{type:"acknowledge",peer,sequence}`；ACK 是累积确认，必须大于先前确认且不大于已发送序号。Worker 释放对应待确认项，并向每项的发送方返回 `{type:"delivered",peer,count:1}`。主机对每个 peer 以及客户端对主机最多同时发送 8 条未确认记录；主机接收连接聚合窗口为 64。
+应用发送 `{type:"data",peer,data}`。Worker 在转发时添加接收连接级、从 1 递增的 `sequence`。接收方从有界队列取出记录后发送 `{type:"acknowledge",peer,sequence}`。ACK 精确对应单条 data，不是累计水位；不同设备可以乱序消费，不能替未消费的帧释放 credit。token 必须是当前接收 socket 发放的正安全整数；重复消费或设备关闭后晚到的已发放 token 是幂等空操作，未来 token 或错误 peer 拒绝。Worker 仅首次消费待确认项时，向对应发送方返回 `{type:"delivered",peer,count:1}`。每个 peer 最多有 8 条未消费记录；主机接收窗口为最多 16 个设备各 8 条，共 128 条。
 
-慢客户端只会使其自己的连接关闭，不使主机和其它客户端掉线。客户端传输任务持续消费交付确认，不能把 `delivered` 当业务事件或 Noise 密文。队列满、发送超时和序号错误均关闭连接；操作不自动重试。`delivered` 只确认转发队列接收，**不证明远端业务操作已执行**。
+慢客户端只会使其自己的连接关闭，不使主机和其它客户端掉线。客户端传输任务持续消费交付确认，不能把 `delivered` 当业务事件或 Noise 密文。队列满、发送超时和序号错误均关闭连接；操作不自动重试。`delivered` 只确认接收端释放一条有界缓冲，**不证明远端业务操作已执行**。
 
 ## 授权与控制权
 
-主机用平台 SDK 的应用 `deploy_id` 和 `owner` 验证当前应用部署所有者。发现列表中的“可见”不代表“拥有”。授权资源使用主机产生的不透明 grant id，固定绑定后端、完整 selector、目标用户及会话身份。远端不能提交替代 selector、平台票据、任意命令或任意 HTTP 目标。
+WebShell 主机用平台 SDK 的应用 `deploy_id` 和 `owner` 验证当前应用部署所有者。原生桌面主机直接由当前登录用户拥有，只发布本程序创建的本地终端和当前用户的 Herdr 会话，默认关闭远程控制；本地工作区不需要中转或自配对。发现列表中的“可见”不代表“拥有”。授权资源使用主机产生的不透明 grant id，固定绑定后端、完整 selector、目标用户及会话身份。远端不能提交替代 selector、平台票据、任意命令或任意 HTTP 目标。
 
 首版长期委派只覆盖部署所有者自己的 LightOS 及明确配置的 SSH 会话。需要短期平台票据的物理客户端和 MicroVM 不进入长期授权。
 

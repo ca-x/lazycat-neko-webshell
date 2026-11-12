@@ -150,6 +150,39 @@ pub struct Response {
     pub id: u64,
     pub event: Event,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgramState {
+    Unknown,
+    Idle,
+    Working,
+    Done,
+    Blocked,
+    Error,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockedKind {
+    Permission,
+    Question,
+    Auth,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProgramRecord {
+    pub id: String,
+    pub state: ProgramState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<BlockedKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub msg: Option<String>,
+}
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Event {
@@ -191,6 +224,10 @@ pub enum Event {
     TerminalExit {
         stream: String,
         code: i32,
+    },
+    TerminalProgramStatus {
+        stream: String,
+        records: Vec<ProgramRecord>,
     },
     TerminalControl {
         stream: String,
@@ -266,6 +303,69 @@ pub fn herdr_allowed(permission: Permission, method: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn terminal_program_status_roundtrips_a_typed_replacement_table() {
+        let wire = serde_json::json!({
+            "type": "terminal_program_status", "stream": "terminal-1",
+            "records": [{"id": "agent", "state": "unknown", "app": "codex"}]
+        });
+        let event: Event = serde_json::from_value(wire.clone()).unwrap();
+        let Event::TerminalProgramStatus { stream, records } = &event else {
+            panic!("expected program status");
+        };
+        assert_eq!(stream, "terminal-1");
+        assert_eq!(records[0].state, ProgramState::Unknown);
+        assert_eq!(records[0].app.as_deref(), Some("codex"));
+        assert_eq!(serde_json::to_value(event).unwrap(), wire);
+        let empty: Event = serde_json::from_value(serde_json::json!({
+            "type": "terminal_program_status", "stream": "terminal-1", "records": []
+        }))
+        .unwrap();
+        assert!(
+            matches!(empty, Event::TerminalProgramStatus { records, .. } if records.is_empty())
+        );
+    }
+
+    #[test]
+    fn terminal_program_status_rejects_missing_states_and_unknown_fields() {
+        for record in [
+            serde_json::json!({"id": "agent"}),
+            serde_json::json!({"id": "agent", "state": "future_state"}),
+            serde_json::json!({"id": "agent", "state": "working", "activity": "idle"}),
+            serde_json::json!({"id": "agent", "state": "blocked", "kind": "future_kind"}),
+        ] {
+            assert!(
+                serde_json::from_value::<Event>(serde_json::json!({
+                    "type": "terminal_program_status", "stream": "s", "records": [record]
+                }))
+                .is_err()
+            );
+        }
+        assert!(
+            serde_json::from_value::<Event>(serde_json::json!({
+                "type": "terminal_output", "stream": "s", "sequence": 1, "data": "",
+                "replay": false, "reset": false, "gap": false, "records": []
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn older_event_decoders_reject_program_status_instead_of_discarding_it() {
+        #[derive(Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+        enum OlderEvent {
+            Ok,
+        }
+        let event = Event::TerminalProgramStatus {
+            stream: "s".into(),
+            records: Vec::new(),
+        };
+        assert!(
+            serde_json::from_value::<OlderEvent>(serde_json::to_value(event).unwrap()).is_err()
+        );
+    }
+
     #[test]
     fn readonly_is_default_deny_not_prefix_matching() {
         for method in [

@@ -8,7 +8,10 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const VERSION: u8 = 1;
+pub const VERSION: u8 = 2;
+/// Relay transport version; independent from protected-storage schema versions.
+pub const RELAY_VERSION: u8 = 2;
+pub const RELAY_PROTOCOL: &str = "neko.remoted.v2";
 pub const MAX_PLAINTEXT: usize = 61_440;
 pub const MAX_CIPHERTEXT: usize = MAX_PLAINTEXT + 16;
 pub const MAX_RELAY_MESSAGE: usize = 98_304;
@@ -76,7 +79,7 @@ impl RelayAddress {
         if !matches!(role, "host" | "client") {
             return Err(Error::Address("invalid role"));
         }
-        Ok(format!("{}/v1/{role}/{route}", self.0))
+        Ok(format!("{}/v{RELAY_VERSION}/{role}/{route}", self.0))
     }
 }
 impl TryFrom<String> for RelayAddress {

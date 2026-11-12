@@ -90,9 +90,10 @@ impl Client {
             .unwrap()
             .into_client_request()
             .unwrap();
-        request
-            .headers_mut()
-            .insert("sec-websocket-protocol", "neko.remoted.v1".parse().unwrap());
+        request.headers_mut().insert(
+            "sec-websocket-protocol",
+            protocol::RELAY_PROTOCOL.parse().unwrap(),
+        );
         let (mut socket, response) = timeout(
             Duration::from_secs(10),
             tokio_tungstenite::connect_async(request),
@@ -102,7 +103,7 @@ impl Client {
         .unwrap();
         assert_eq!(
             response.headers()["sec-websocket-protocol"],
-            "neko.remoted.v1"
+            protocol::RELAY_PROTOCOL
         );
         let RelayFrame::Connected { peer } = frame(&mut socket).await else {
             panic!("Relay must allocate client")

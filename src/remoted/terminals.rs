@@ -18,6 +18,36 @@ const REPLAY_FRAMES: usize = 128;
 #[path = "terminals/herdr_bridge_tests.rs"]
 pub(in crate::remoted) mod herdr_bridge_tests;
 
+#[cfg(test)]
+#[path = "terminals/program_status_tests.rs"]
+mod program_status_tests;
+
+fn program_record(
+    record: neko_program_status::ProgramRecord,
+) -> neko_remoted_protocol::messages::ProgramRecord {
+    use neko_program_status::{BlockedKind, ProgramState};
+    use neko_remoted_protocol::messages as protocol;
+    protocol::ProgramRecord {
+        id: record.id,
+        state: match record.state {
+            ProgramState::Idle => protocol::ProgramState::Idle,
+            ProgramState::Working => protocol::ProgramState::Working,
+            ProgramState::Done => protocol::ProgramState::Done,
+            ProgramState::Blocked => protocol::ProgramState::Blocked,
+            ProgramState::Error => protocol::ProgramState::Error,
+        },
+        kind: record.kind.map(|kind| match kind {
+            BlockedKind::Permission => protocol::BlockedKind::Permission,
+            BlockedKind::Question => protocol::BlockedKind::Question,
+            BlockedKind::Auth => protocol::BlockedKind::Auth,
+        }),
+        progress: record.progress,
+        app: record.app,
+        title: record.title,
+        msg: record.msg,
+    }
+}
+
 fn replay_tail(mut snapshot: OutputSnapshot) -> OutputSnapshot {
     let mut bytes = 0;
     let mut frames = Vec::new();
@@ -65,6 +95,41 @@ impl OutputStream {
         for (index, chunk) in bytes.chunks(neko_remoted_protocol::FILE_CHUNK).enumerate() {
             self.chunk(chunk, replay, reset && index == 0, gap && index == 0)
                 .await?;
+        }
+        Ok(())
+    }
+    async fn replay(&mut self, snapshot: OutputSnapshot) -> Result<()> {
+        self.write(&[], true, true, snapshot.replay_gap || snapshot.truncated)
+            .await?;
+        for frame in snapshot.frames {
+            self.write(&frame.data, true, false, false).await?;
+        }
+        Ok(())
+    }
+    async fn current_programs(
+        &self,
+        terminal: &ManagedTerminal,
+        revision: &mut Option<u64>,
+    ) -> Result<()> {
+        self.program_status(terminal.program_status_since(*revision), revision)
+            .await
+    }
+    async fn program_status(
+        &self,
+        snapshot: Option<(u64, Vec<neko_program_status::ProgramRecord>)>,
+        revision: &mut Option<u64>,
+    ) -> Result<()> {
+        if let Some((next, records)) = snapshot {
+            let event = Event::TerminalProgramStatus {
+                stream: self.stream.clone(),
+                records: records.into_iter().map(program_record).collect(),
+            };
+            tokio::select! {
+                biased;
+                () = self.cancel.cancelled() => anyhow::bail!("terminal detached"),
+                result = self.events.send(event) => result?,
+            }
+            *revision = Some(next);
         }
         Ok(())
     }
@@ -281,6 +346,16 @@ async fn attach_hc(
     });
     Ok(Backend::Hc(commands))
 }
+fn managed_replay(terminal: &ManagedTerminal) -> OutputSnapshot {
+    let buffer = terminal.output_buffer();
+    let cursor = buffer.snapshot_after_bounded(u64::MAX, 1, 1).last_sequence;
+    replay_tail(buffer.snapshot_after_bounded(
+        cursor.saturating_sub(REPLAY_FRAMES as u64),
+        usize::MAX,
+        usize::MAX,
+    ))
+}
+
 fn attach_managed(
     state: &Arc<AppState>,
     grant: &Grant,
@@ -293,31 +368,36 @@ fn attach_managed(
         .terminal(&grant.session)?
         .context("终端尚未运行，请先在小橘中打开该会话")?;
     let mut source = terminal.subscribe();
-    let buffer = terminal.output_buffer();
-    let cursor = buffer.snapshot_after_bounded(u64::MAX, 1, 1).last_sequence;
-    let snapshot = replay_tail(buffer.snapshot_after_bounded(
-        cursor.saturating_sub(REPLAY_FRAMES as u64),
-        usize::MAX,
-        usize::MAX,
-    ));
+    let snapshot = managed_replay(&terminal);
     let token = cancel.clone();
+    let status_terminal = terminal.clone();
     tokio::spawn(async move {
         let mut sequence = snapshot.last_sequence;
         let mut output = OutputStream::new(stream.clone(), events.clone(), token.clone());
+        if output.replay(snapshot).await.is_err() {
+            return;
+        }
+        let mut revision = None;
         if output
-            .write(&[], true, true, snapshot.replay_gap || snapshot.truncated)
+            .current_programs(&status_terminal, &mut revision)
             .await
             .is_err()
         {
             return;
         }
-        for frame in snapshot.frames {
-            if output.write(&frame.data, true, false, false).await.is_err() {
-                return;
-            }
-        }
+        let mut status_poll = tokio::time::interval(std::time::Duration::from_millis(500));
+        status_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            let message = tokio::select! {()=token.cancelled()=>return,e=source.recv()=>e};
+            let message = tokio::select! {
+                () = token.cancelled() => return,
+                _ = status_poll.tick() => {
+                    if output.current_programs(&status_terminal, &mut revision).await.is_err() {
+                        return;
+                    }
+                    continue;
+                }
+                event = source.recv() => event,
+            };
             match message {
                 Ok(TerminalEvent::Output(frame)) if frame.sequence > sequence => {
                     sequence = frame.sequence;
@@ -328,8 +408,22 @@ fn attach_managed(
                     {
                         return;
                     }
+                    if output
+                        .current_programs(&status_terminal, &mut revision)
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
                 }
                 Ok(TerminalEvent::Exit(exit)) => {
+                    if output
+                        .current_programs(&status_terminal, &mut revision)
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
                     let _ = events
                         .send(Event::TerminalExit {
                             stream: stream.clone(),

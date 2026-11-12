@@ -1,7 +1,9 @@
 //! Single outbound host connection; each peer owns its authenticated Noise state.
+mod credits;
 use super::{heartbeat::Heartbeat, store::Peer};
 use crate::state::AppState;
 use anyhow::{Context, Result, ensure};
+use credits::Receipt;
 use futures::{SinkExt, StreamExt};
 use neko_remoted_protocol::{self as protocol, messages::RelayFrame};
 use std::{
@@ -43,6 +45,18 @@ impl Drop for Link {
 pub enum Input {
     Hello(protocol::crypto::Mode),
     Data(Vec<u8>),
+    CreditedData { data: Vec<u8>, receipt: Receipt },
+}
+impl Input {
+    pub(super) fn consumed(self) -> Self {
+        match self {
+            Self::CreditedData { data, receipt } => {
+                drop(receipt);
+                Self::Data(data)
+            }
+            input => input,
+        }
+    }
 }
 struct Inbound {
     tx: mpsc::Sender<Input>,
@@ -121,7 +135,7 @@ async fn serve(
     }
     request
         .headers_mut()
-        .insert("sec-websocket-protocol", "neko.remoted.v1".parse()?);
+        .insert("sec-websocket-protocol", protocol::RELAY_PROTOCOL.parse()?);
     let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
         .max_message_size(Some(protocol::MAX_RELAY_MESSAGE))
         .max_frame_size(Some(protocol::MAX_RELAY_MESSAGE));
@@ -135,10 +149,11 @@ async fn serve(
         response
             .headers()
             .get("sec-websocket-protocol")
-            .is_some_and(|v| v == "neko.remoted.v1"),
+            .is_some_and(|v| v == protocol::RELAY_PROTOCOL),
         "Relay协议版本不匹配"
     );
     let (tx, mut rx) = mpsc::channel::<RelayFrame>(128);
+    let (completed, mut acknowledgements) = mpsc::unbounded_channel::<u64>();
     let mut peers: HashMap<String, Inbound> = HashMap::new();
     let mut tasks = tokio::task::JoinSet::new();
     let mut ticks = interval(Duration::from_secs(10));
@@ -149,6 +164,10 @@ async fn serve(
                 ()=cancel.cancelled()=>return Ok(()),
                 Some(done)=tasks.join_next(),if !tasks.is_empty()=>{if let Ok(peer)=done{if let Some(p)=peers.remove(&peer){p.cancel.cancel();}
         if let Ok(mut rt)=state.remoted.runtime.lock(){rt.peers.remove(&peer);}let _=tx.try_send(RelayFrame::Closed{peer});}},
+                Some(sequence)=acknowledgements.recv()=>{
+                    let frame=RelayFrame::Acknowledge{peer:"host".into(),sequence};
+                    timeout(Duration::from_secs(5),socket.send(Message::Text(serde_json::to_string(&frame)?.into()))).await.context("Relay确认发送超时")??;
+                },
                 Some(frame)=rx.recv()=>{let text=serde_json::to_string(&frame)?;ensure!(text.len()<=protocol::MAX_RELAY_MESSAGE,"relay message too large");timeout(Duration::from_secs(10),socket.send(Message::Text(text.into()))).await.context("Relay发送超时")??;},
                 message=socket.next()=>{
                  let message=message.context("Relay连接已经断开")??;
@@ -158,7 +177,7 @@ async fn serve(
                   RelayFrame::Opened{peer}=>{
                    ensure!(registered,"relay peer before host registration");
                    if peers.len()>=protocol::MAX_PEERS||peers.contains_key(&peer){let _=tx.try_send(RelayFrame::Closed{peer});continue;}
-                   let(input,incoming)=mpsc::channel(8);let token=cancel.child_token();let credits=Arc::new(Semaphore::new(8));
+                   let(input,incoming)=mpsc::channel(9);let token=cancel.child_token();let credits=Arc::new(Semaphore::new(8));
                    let link=Link{peer:peer.clone(),outgoing:tx.clone(),credits:credits.clone(),cancel:token.clone()};
                    peers.insert(peer.clone(),Inbound{tx:input,credits,cancel:token.clone()});
                    if let Ok(mut rt)=state.remoted.runtime.lock(){rt.peers.insert(peer.clone(),Peer{device:None,cancel:token,rtt:None});}
@@ -166,8 +185,8 @@ async fn serve(
                   },
                   RelayFrame::Hello{peer,mode}=>if let Some(p)=peers.get(&peer) && p.tx.try_send(Input::Hello(mode)).is_err(){p.cancel.cancel();},
                   RelayFrame::Data{peer,data,sequence:Some(sequence)}=>{
-                   if let Some(p)=peers.get(&peer){match protocol::decode(&data,protocol::MAX_CIPHERTEXT){Ok(bytes)=>if p.tx.try_send(Input::Data(bytes)).is_err(){p.cancel.cancel();},Err(_)=>p.cancel.cancel()}}
-                   tx.try_send(RelayFrame::Acknowledge{peer:"host".into(),sequence}).context("relay control queue full")?;
+                   let receipt=Receipt::new(sequence,completed.clone());
+                   if let Some(p)=peers.get(&peer){match protocol::decode(&data,protocol::MAX_CIPHERTEXT){Ok(data)=>if p.tx.try_send(Input::CreditedData{data,receipt}).is_err(){p.cancel.cancel();},Err(_)=>p.cancel.cancel()}}
                   },
                   RelayFrame::Delivered{peer,count}=>if let Some(p)=peers.get(&peer){if count>0&&p.credits.available_permits()+usize::from(count)<=8{p.credits.add_permits(usize::from(count));}else{p.cancel.cancel();}},
                   RelayFrame::Closed{peer}=>if let Some(p)=peers.get(&peer){p.cancel.cancel();},

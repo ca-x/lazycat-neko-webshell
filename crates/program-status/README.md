@@ -1,8 +1,16 @@
 # Program status adapter
 
 This crate owns OSC 7501 parsing, support-probe replies, and the bounded status
-table for one live PTY. It uses `w1 = "0.3"` internally; its public API and wire
+table for one live PTY. Unix uses `w1 = "0.3"` internally; its public API and wire
 records expose no w1 types. Replace the parser here when changing libraries.
+
+Non-Unix platforms, including Windows, use private copies of w1 0.3.0's portable
+OSC and stream modules with their upstream licenses in `src/portable/`. Native
+reports, probes, metadata validation, clear operations, and replacement tables
+work on every platform. Automatic detection and hook process-identity checks
+are unavailable on Windows; they never fabricate inferred status. Linux keeps
+its existing bounded process detector, and other Unix platforms keep the
+existing w1 behavior. Differential tests on Unix check both parser paths.
 
 `Tracker::observe` inspects live output without changing it. Send its returned
 reply bytes to the PTY once, before broadcasting the original output. Never feed

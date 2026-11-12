@@ -2008,7 +2008,7 @@ dependencies = [
 
 [[package]]
 name = "lazycat-neko-webshell"
-version = "0.13.3"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -2277,6 +2277,7 @@ dependencies = [
 name = "neko-program-status"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "serde",
  "serde_json",
  "w1",

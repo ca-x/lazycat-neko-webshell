@@ -470,7 +470,8 @@ async fn serve_authenticated(
                     }
                 },
                 packet = incoming.recv() => {
-                    let Some(Input::Data(cipher)) = packet else { break; };
+                    let Some(packet) = packet else { break; };
+                    let Input::Data(cipher) = packet.consumed() else { break; };
                     let request: Request = protocol::unpack(&channel.decrypt(&cipher)?)?;
                     ensure!(request.id > last, "request sequence replayed");
                     last = request.id;
@@ -508,14 +509,14 @@ async fn serve_authenticated(
                 },
                 Some(event) = output.recv(), if deferred.len() < 8 && (pending.is_some() || deferred.is_empty()) => {
                     state.remoted.current_device(&device.id, device.generation)?;
-                    let stream = match &event { Event::TerminalOutput { stream, .. } | Event::TerminalExit { stream, .. } => Some(stream), _ => None };
+                    let stream = match &event { Event::TerminalOutput { stream, .. } | Event::TerminalExit { stream, .. } | Event::TerminalProgramStatus { stream, .. } => Some(stream), _ => None };
                     if stream.is_some_and(|stream| !streams.contains(stream)) {
                         if pending.is_some() { deferred.push_back(event); }
                     } else { send(link, &mut channel, 0, event).await?; }
                 },
                 () = async {}, if pending.is_none() && !deferred.is_empty() => {
                     let event = deferred.pop_front().context("deferred output unavailable")?;
-                    let stream = match &event { Event::TerminalOutput { stream, .. } | Event::TerminalExit { stream, .. } => Some(stream), _ => None };
+                    let stream = match &event { Event::TerminalOutput { stream, .. } | Event::TerminalExit { stream, .. } | Event::TerminalProgramStatus { stream, .. } => Some(stream), _ => None };
                     if stream.is_none_or(|stream| streams.contains(stream)) { send(link, &mut channel, 0, event).await?; }
                 },
                 _ = ticks.tick() => {
@@ -628,11 +629,11 @@ fn spawn_audit(
 }
 
 async fn receive(link: &Link, incoming: &mut mpsc::Receiver<Input>) -> Result<Input> {
-    tokio::select! {()=link.cancel.cancelled()=>bail!("connection cancelled"),r=timeout(Duration::from_secs(10),incoming.recv())=>r.context("handshake timed out")?.context("connection closed")}
+    tokio::select! {()=link.cancel.cancelled()=>bail!("connection cancelled"),r=timeout(Duration::from_secs(10),incoming.recv())=>r.context("handshake timed out")?.context("connection closed").map(Input::consumed)}
 }
 async fn handshake_data(link: &Link, incoming: &mut mpsc::Receiver<Input>) -> Result<Vec<u8>> {
     match receive(link, incoming).await? {
-        Input::Data(b) => {
+        Input::Data(b) | Input::CreditedData { data: b, .. } => {
             ensure!(b.len() <= 256, "handshake too large");
             Ok(b)
         }

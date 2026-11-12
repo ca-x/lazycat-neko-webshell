@@ -2,11 +2,30 @@
 
 use std::collections::BTreeMap;
 
+#[cfg(not(unix))]
+use portable as protocol;
+use protocol::osc7501::{ParsedReport, parse_report};
+use protocol::stream::{Captured, OutputStream};
 use serde::{Deserialize, Serialize};
-use w1::osc7501::{ParsedReport, parse_report};
-use w1::stream::{Captured, OutputStream};
+#[cfg(unix)]
+use w1 as protocol;
+#[cfg(unix)]
+mod automatic;
+#[cfg(not(unix))]
+#[path = "automatic_stub.rs"]
 mod automatic;
 mod hooks;
+#[cfg(all(test, unix))]
+#[path = "automatic_stub.rs"]
+mod non_unix_automatic;
+#[cfg(all(test, unix))]
+mod portability_tests;
+#[cfg(any(not(unix), test))]
+#[expect(
+    dead_code,
+    reason = "Retain the vendored upstream protocol API for compatibility."
+)]
+mod portable;
 pub use hooks::{MAX_HOOK_BYTES, hook_identity, hook_report};
 
 pub const MAX_RECORDS: usize = 64;
@@ -202,25 +221,25 @@ impl Tracker {
                 let record = ProgramRecord {
                     id: id.clone(),
                     state: match record.state {
-                        w1::OscState::Idle => ProgramState::Idle,
-                        w1::OscState::Working => ProgramState::Working,
-                        w1::OscState::Done => ProgramState::Done,
-                        w1::OscState::Blocked => ProgramState::Blocked,
-                        w1::OscState::Error => ProgramState::Error,
+                        protocol::OscState::Idle => ProgramState::Idle,
+                        protocol::OscState::Working => ProgramState::Working,
+                        protocol::OscState::Done => ProgramState::Done,
+                        protocol::OscState::Blocked => ProgramState::Blocked,
+                        protocol::OscState::Error => ProgramState::Error,
                     },
                     kind: record.kind.map(|kind| match kind {
-                        w1::BlockedKind::Permission => BlockedKind::Permission,
-                        w1::BlockedKind::Question => BlockedKind::Question,
-                        w1::BlockedKind::Auth => BlockedKind::Auth,
+                        protocol::BlockedKind::Permission => BlockedKind::Permission,
+                        protocol::BlockedKind::Question => BlockedKind::Question,
+                        protocol::BlockedKind::Auth => BlockedKind::Auth,
                     }),
                     progress: record.progress,
                     app: record.app,
                     title: record
                         .title
-                        .and_then(|text| w1::osc7501::sanitize_single_line(&text, 192)),
+                        .and_then(|text| protocol::osc7501::sanitize_single_line(&text, 192)),
                     msg: record
                         .msg
-                        .and_then(|text| w1::osc7501::sanitize_single_line(&text, 2048)),
+                        .and_then(|text| protocol::osc7501::sanitize_single_line(&text, 2048)),
                 };
                 if self.records.get(&id) == Some(&record)
                     || (!self.records.contains_key(&id) && self.records.len() >= MAX_RECORDS)
