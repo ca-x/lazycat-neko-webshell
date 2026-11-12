@@ -7,7 +7,9 @@ preserved alongside these files.
 
 The stream module's `crate::osc7501` import is changed to `super::osc7501`
 so the modules remain private to this adapter. Formatting follows this crate;
-two nested encoder conditions use equivalent let chains to satisfy Clippy.
+nested encoder conditions use equivalent let chains, UTF-8 continuation uses
+`if let`, and a reused string uses `clone_into` to satisfy Clippy. The byte
+state machine keeps its upstream layout with a local line-count lint allowance.
 No Unix process, PTY, filesystem inspection, or session-store code is vendored.
 
 Unix builds continue using the upstream `w1` dependency. Non-Unix builds use

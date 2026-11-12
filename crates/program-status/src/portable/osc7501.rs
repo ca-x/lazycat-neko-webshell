@@ -383,7 +383,7 @@ pub fn parse_report(payload: &str) -> Option<ParsedReport> {
                 if !valid_id_strict(value) {
                     return None;
                 }
-                id = value.to_owned();
+                value.clone_into(&mut id);
             }
             "kind" => {
                 if let Some(parsed) = BlockedKind::parse(value) {

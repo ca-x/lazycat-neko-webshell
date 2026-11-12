@@ -3,6 +3,8 @@ use crate::ProgramRecord;
 #[derive(Default)]
 pub(crate) struct Automatic;
 
+// Keep the same receiver-based API as the Unix detector on unsupported targets.
+#[allow(clippy::unused_self)]
 impl Automatic {
     pub fn foreground(&mut self, _process_group: Option<u32>, _cols: u16, _rows: u16) -> bool {
         false

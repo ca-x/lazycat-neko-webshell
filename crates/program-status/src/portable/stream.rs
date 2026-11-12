@@ -144,6 +144,8 @@ impl OutputStream {
         }
     }
 
+    // Keep the vendored state machine aligned with upstream for differential tests.
+    #[allow(clippy::too_many_lines)]
     fn byte(&mut self, b: u8, out: &mut Vec<u8>, captured: &mut Vec<Captured>) {
         match self.state {
             State::Ground => match b {
@@ -156,20 +158,19 @@ impl OutputStream {
                 0xF0..=0xF4 => self.forward_to(b, out, State::Utf8(3)),
                 _ => out.push(b),
             },
-            State::Utf8(n) => match b {
-                0x80..=0xBF => {
+            State::Utf8(n) => {
+                if let 0x80..=0xBF = b {
                     out.push(b);
                     self.state = if n <= 1 {
                         State::Ground
                     } else {
                         State::Utf8(n - 1)
                     };
-                }
-                _ => {
+                } else {
                     self.state = State::Ground;
                     self.byte(b, out, captured);
                 }
-            },
+            }
             State::Esc => match b {
                 b']' => {
                     self.held.push(b);
