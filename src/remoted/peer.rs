@@ -28,6 +28,12 @@ static TRANSFERS: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore
 static DEVICE_TRANSFERS: LazyLock<Mutex<HashMap<String, Weak<Semaphore>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+#[cfg(all(test, unix))]
+#[path = "peer/public_relay_tests.rs"]
+mod public_relay_tests;
+#[cfg(test)]
+pub(super) mod test_target;
+
 fn transfer_permits(device: &str) -> Result<(OwnedSemaphorePermit, OwnedSemaphorePermit)> {
     let mut limits = DEVICE_TRANSFERS
         .lock()
@@ -77,6 +83,12 @@ fn require_write(device: &Device) -> Result<()> {
         return Err(AuthorizationError("只读设备不能执行写操作".into()).into());
     }
     Ok(())
+}
+
+fn resource(grant: &Grant) -> protocol::messages::Resource {
+    let mut resource = grant.resource();
+    resource.terminal = !resource.herdr;
+    resource
 }
 
 fn require_herdr_control(method: &str, controlled: bool) -> Result<()> {
@@ -180,7 +192,7 @@ pub async fn run(
         Event::Ready {
             device_id: device.id.clone(),
             permission: device.permission,
-            resources: device.grants.iter().map(Grant::resource).collect(),
+            resources: device.grants.iter().map(resource).collect(),
         },
     )
     .await?;
@@ -655,7 +667,16 @@ async fn grant(state: &Arc<AppState>, device: &Device, id: &str) -> Result<Grant
             .find(|g| g.id == id)
             .cloned()
             .context("resource was not authorized")?;
-        authority::authorize(state, &grant, &state.remoted.snapshot()?.owner).await?;
+        let owner = state.remoted.snapshot()?.owner;
+        #[cfg(test)]
+        if let Some(authorized) = test_target::authorize(state, &grant, &owner) {
+            authorized?;
+            state
+                .remoted
+                .current_device(&device.id, device.generation)?;
+            return Ok(grant);
+        }
+        authority::authorize(state, &grant, &owner).await?;
         state
             .remoted
             .current_device(&device.id, device.generation)?;
@@ -685,7 +706,7 @@ async fn operation(
 ) -> Result<Event> {
     match operation {
         Operation::Resources {} => Ok(Event::Resources {
-            resources: context.device.grants.iter().map(Grant::resource).collect(),
+            resources: context.device.grants.iter().map(resource).collect(),
         }),
         operation @ (Operation::TerminalAttach { .. }
         | Operation::TerminalDetach { .. }
@@ -847,24 +868,14 @@ async fn herdr_operation(
             if method.starts_with("pane.") && method != "pane.list" {
                 let pane = params["pane_id"].as_str().context("pane_id required")?;
                 submit(admission, false)?;
-                let panes =
-                    crate::plugin::http::terminal_mcp_herdr_adapter::HerdrTerminalAdapter::new(
-                        state.clone(),
-                    )
-                    .list_panes(&g.session)
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                ensure!(
-                    panes.iter().any(|p| p.pane_id == pane),
-                    "Herdr pane不属于授权会话"
-                );
+                super::terminals::require_herdr_pane(state, &g.session, pane).await?;
                 if matches!(
                     method.as_str(),
                     "pane.send_text" | "pane.send_keys" | "pane.send_input" | "pane.resize"
                 ) {
                     let controlled = terminals.values().any(|terminal| {
                         terminal.grant.id == g.id
-                            && matches!(&terminal.backend, super::terminals::Backend::Herdr(attached) if attached == pane)
+                            && matches!(&terminal.backend, super::terminals::Backend::Herdr(attached, _) if attached == pane)
                             && terminal.controls()
                     });
                     require_herdr_control(&method, controlled)?;
@@ -1113,6 +1124,28 @@ mod tests {
         messages::{Permission, RelayFrame},
     };
     use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn resources_distinguish_herdr_from_ordinary_terminals() {
+        for backend in ["herdr", "webshell", "ssh", "hc", "zellij"] {
+            let grant = Grant {
+                id: "grant".into(),
+                session: "session".into(),
+                selector: "target@owner".into(),
+                login: "user".into(),
+                backend: backend.into(),
+                name: "resource".into(),
+                target_signature: String::new(),
+                root: Some("/approved".into()),
+                root_identity: None,
+            };
+            let resource = resource(&grant);
+            assert_eq!(resource.terminal, backend != "herdr", "{backend}");
+            assert_eq!(resource.herdr, backend == "herdr", "{backend}");
+            assert!(resource.files);
+            assert_eq!(resource.id, grant.id);
+        }
+    }
 
     fn channels() -> (Channel, Channel) {
         let client = Identity::generate().unwrap();

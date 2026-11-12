@@ -33,33 +33,7 @@ impl Helper {
             quote(root),
             if read_only { "read-only" } else { "operate" }
         );
-        let mut command = if crate::ssh_backend::is_ssh_selector(&grant.selector) {
-            let p = crate::ssh_backend::load_enabled_profile(&state.database(), &grant.selector)
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-            crate::ssh_backend::profile_script_command(&p, &script, false)
-        } else {
-            ensure!(!grant.login.is_empty(), "目标登录身份缺失");
-            let bootstrap = crate::plugin::resources::files::script_for_session_user(
-                &crate::state::SessionRecord {
-                    id: grant.session.clone(),
-                    host: String::new(),
-                    selector: grant.selector.clone(),
-                    status: String::new(),
-                    cols: 80,
-                    rows: 24,
-                    command: String::new(),
-                    args: vec![],
-                    metadata: std::collections::HashMap::from([(
-                        "loginUser".into(),
-                        grant.login.clone(),
-                    )]),
-                },
-                &script,
-            );
-            let mut c = tokio::process::Command::new(crate::config::LIGHTOSCTL);
-            c.args(["exec", "-i", &grant.selector, "/bin/sh", "-c", &bootstrap]);
-            c
-        };
+        let mut command = target_command(state, grant, &script, read_only)?;
         command
             .kill_on_drop(true)
             .stdin(Stdio::piped())
@@ -170,6 +144,48 @@ impl Drop for Helper {
             });
         }
     }
+}
+
+fn target_command(
+    state: &Arc<AppState>,
+    grant: &Grant,
+    script: &str,
+    read_only: bool,
+) -> Result<tokio::process::Command> {
+    #[cfg(not(test))]
+    let _ = read_only;
+    #[cfg(test)]
+    if let Some(command) = super::peer::test_target::file_command(state, grant, read_only) {
+        return Ok(command);
+    }
+    let command = if crate::ssh_backend::is_ssh_selector(&grant.selector) {
+        let p = crate::ssh_backend::load_enabled_profile(&state.database(), &grant.selector)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        crate::ssh_backend::profile_script_command(&p, script, false)
+    } else {
+        ensure!(!grant.login.is_empty(), "目标登录身份缺失");
+        let bootstrap = crate::plugin::resources::files::script_for_session_user(
+            &crate::state::SessionRecord {
+                id: grant.session.clone(),
+                host: String::new(),
+                selector: grant.selector.clone(),
+                status: String::new(),
+                cols: 80,
+                rows: 24,
+                command: String::new(),
+                args: vec![],
+                metadata: std::collections::HashMap::from([(
+                    "loginUser".into(),
+                    grant.login.clone(),
+                )]),
+            },
+            script,
+        );
+        let mut c = tokio::process::Command::new(crate::config::LIGHTOSCTL);
+        c.args(["exec", "-i", &grant.selector, "/bin/sh", "-c", &bootstrap]);
+        c
+    };
+    Ok(command)
 }
 
 #[cfg(test)]

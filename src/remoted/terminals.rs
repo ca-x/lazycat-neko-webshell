@@ -14,6 +14,10 @@ use tokio_util::sync::CancellationToken;
 const REPLAY_BYTES: usize = 256 * 1024;
 const REPLAY_FRAMES: usize = 128;
 
+#[cfg(all(test, unix))]
+#[path = "terminals/herdr_bridge_tests.rs"]
+pub(in crate::remoted) mod herdr_bridge_tests;
+
 fn replay_tail(mut snapshot: OutputSnapshot) -> OutputSnapshot {
     let mut bytes = 0;
     let mut frames = Vec::new();
@@ -89,7 +93,7 @@ impl OutputStream {
 
 pub enum Backend {
     Managed(Arc<ManagedTerminal>),
-    Herdr(String),
+    Herdr(String, HerdrTerminalAdapter),
     Hc(mpsc::Sender<crate::hc::remoted::Command>),
 }
 pub struct Terminal {
@@ -112,33 +116,77 @@ impl Drop for Terminal {
     }
 }
 
-async fn attach_herdr(
+pub(super) async fn require_herdr_pane(
     state: &Arc<AppState>,
+    session: &str,
+    pane: &str,
+) -> Result<()> {
+    require_herdr_pane_with_adapter(&herdr_adapter(state), session, pane).await
+}
+
+fn herdr_adapter(state: &Arc<AppState>) -> HerdrTerminalAdapter {
+    #[cfg(test)]
+    if let Some(adapter) = super::peer::test_target::adapter(state) {
+        return adapter;
+    }
+    HerdrTerminalAdapter::new(state.clone())
+}
+
+async fn require_herdr_pane_with_adapter(
+    adapter: &HerdrTerminalAdapter,
+    session: &str,
+    pane: &str,
+) -> Result<()> {
+    let response = adapter
+        .snapshot(session)
+        .await
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    require_herdr_pane_in_snapshot(&response, pane)
+}
+
+fn require_herdr_pane_in_snapshot(response: &serde_json::Value, pane: &str) -> Result<()> {
+    let result = response.get("result").unwrap_or(response);
+    // session.snapshot wraps its authoritative collections inside result.snapshot.
+    // Never fall back to a different collection when that envelope is present.
+    let panes = if let Some(snapshot) = result.get("snapshot") {
+        snapshot.get("panes").and_then(serde_json::Value::as_array)
+    } else {
+        result
+            .get("panes")
+            .and_then(serde_json::Value::as_array)
+            .or_else(|| result.get("session")?.get("panes")?.as_array())
+    };
+    ensure!(
+        !pane.is_empty()
+            && panes.is_some_and(|panes| panes
+                .iter()
+                .any(|item| item.get("pane_id").and_then(serde_json::Value::as_str) == Some(pane))),
+        "Herdr pane不属于授权会话"
+    );
+    Ok(())
+}
+
+async fn attach_herdr(
+    adapter: HerdrTerminalAdapter,
     grant: &Grant,
     pane: Option<String>,
     stream: String,
     events: mpsc::Sender<Event>,
     cancel: CancellationToken,
 ) -> Result<Backend> {
-    let adapter = HerdrTerminalAdapter::new(state.clone());
-    let panes = adapter
-        .list_panes(&grant.session)
-        .await
-        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     let pane = pane.context("请选择Herdr pane")?;
-    ensure!(
-        panes.iter().any(|p| p.pane_id == pane),
-        "Herdr pane不属于授权会话"
-    );
+    require_herdr_pane_with_adapter(&adapter, &grant.session, &pane).await?;
     let id = pane.clone();
     let session = grant.session.clone();
     let token = cancel.clone();
+    let reader = adapter.clone();
     tokio::spawn(async move {
         let mut sequence = 0;
+        let mut previous_snapshot: Option<Vec<u8>> = None;
         let mut output = OutputStream::new(stream.clone(), events.clone(), token.clone());
         loop {
             tokio::select! {()=token.cancelled()=>return,()=tokio::time::sleep(std::time::Duration::from_millis(100))=>{}}
-            let result = tokio::select! {()=token.cancelled()=>return,r=adapter.read(&session,&id,sequence,1000,usize::MAX)=>r};
+            let result = tokio::select! {()=token.cancelled()=>return,r=reader.read(&session,&id,sequence,1000,usize::MAX)=>r};
             match result {
                 Ok(read) => {
                     for frame in read.frames {
@@ -148,6 +196,11 @@ async fn attach_herdr(
                         {
                             let trimmed = bytes.len() > REPLAY_BYTES;
                             let bytes = &bytes[bytes.len().saturating_sub(REPLAY_BYTES)..];
+                            // Herdr pane.read is a replacement screen and may omit a sequence.
+                            // Repeated unchanged screens must not saturate the Relay business lane.
+                            if previous_snapshot.as_deref() == Some(bytes) {
+                                continue;
+                            }
                             if output
                                 .write(
                                     bytes,
@@ -160,6 +213,7 @@ async fn attach_herdr(
                             {
                                 return;
                             }
+                            previous_snapshot = Some(bytes.to_vec());
                         }
                     }
                     if read.exited {
@@ -186,7 +240,7 @@ async fn attach_herdr(
             }
         }
     });
-    Ok(Backend::Herdr(pane))
+    Ok(Backend::Herdr(pane, adapter))
 }
 async fn attach_hc(
     state: &Arc<AppState>,
@@ -323,7 +377,17 @@ impl Terminal {
         cancel: CancellationToken,
     ) -> Result<Self> {
         let backend = match grant.backend.as_str() {
-            "herdr" => attach_herdr(&state, &grant, pane, stream, events, cancel.clone()).await?,
+            "herdr" => {
+                attach_herdr(
+                    herdr_adapter(&state),
+                    &grant,
+                    pane,
+                    stream,
+                    events,
+                    cancel.clone(),
+                )
+                .await?
+            }
             "hc" => attach_hc(&state, &grant, read_only, stream, events, cancel.clone()).await?,
             _ => attach_managed(&state, &grant, stream, events, &cancel)?,
         };
@@ -380,7 +444,7 @@ impl Terminal {
         ensure!(self.controls(), "请先取得终端控制权");
         match &self.backend {
             Backend::Managed(t) => t.write_input(data),
-            Backend::Herdr(pane) => HerdrTerminalAdapter::new(self.state.clone())
+            Backend::Herdr(pane, adapter) => adapter
                 .send_input(&self.grant.session, pane, &data)
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string())),
@@ -396,7 +460,7 @@ impl Terminal {
         crate::validation::validate_size(cols, rows).map_err(|e| anyhow::anyhow!(e.to_string()))?;
         match &self.backend {
             Backend::Managed(t) => t.resize(cols, rows),
-            Backend::Herdr(pane) => HerdrTerminalAdapter::new(self.state.clone())
+            Backend::Herdr(pane, adapter) => adapter
                 .resize(&self.grant.session, pane, cols, rows)
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string())),
@@ -415,6 +479,139 @@ mod tests {
     use crate::terminal_manager::OutputFrame;
 
     #[tokio::test]
+    async fn herdr_replacement_screens_emit_only_when_the_screen_changes() {
+        let state = Arc::new(AppState::new_for_test(":memory:".into()));
+        let screen = Arc::new(std::sync::Mutex::new("initial screen".to_owned()));
+        let source = screen.clone();
+        let adapter = HerdrTerminalAdapter::with_test_rpc(state, move |_, operation| {
+            let screen = source.clone();
+            Box::pin(async move {
+                match operation {
+                    crate::herdr::HerdrTerminalOperation::Snapshot => Ok(
+                        serde_json::json!({"result":{"snapshot":{"panes":[{"pane_id":"w1:p1"}]}}}),
+                    ),
+                    crate::herdr::HerdrTerminalOperation::Read { .. } => Ok(
+                        serde_json::json!({"result":{"type":"pane_read","read":{"text":screen.lock().unwrap().clone()}}}),
+                    ),
+                    _ => Err("unexpected operation".into()),
+                }
+            })
+        });
+        let grant = Grant {
+            id: "grant".into(),
+            session: "session".into(),
+            selector: "test@owner".into(),
+            login: "user".into(),
+            backend: "herdr".into(),
+            name: "Herdr".into(),
+            target_signature: String::new(),
+            root: None,
+            root_identity: None,
+        };
+        let cancel = CancellationToken::new();
+        let (events, mut incoming) = mpsc::channel(8);
+        let _backend = attach_herdr(
+            adapter,
+            &grant,
+            Some("w1:p1".into()),
+            "stream".into(),
+            events,
+            cancel.clone(),
+        )
+        .await
+        .unwrap();
+        let initial = tokio::time::timeout(std::time::Duration::from_secs(2), incoming.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(initial, Event::TerminalOutput { data, .. } if data == neko_remoted_protocol::encode(b"initial screen"))
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(350), incoming.recv())
+                .await
+                .is_err(),
+            "unchanged sequence-less Herdr screens must not flood the Relay"
+        );
+        *screen.lock().unwrap() = "changed screen".into();
+        let changed = tokio::time::timeout(std::time::Duration::from_secs(2), incoming.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(changed, Event::TerminalOutput { data, reset: true, .. } if data == neko_remoted_protocol::encode(b"changed screen"))
+        );
+        cancel.cancel();
+    }
+
+    #[test]
+    fn herdr_pane_membership_accepts_the_session_snapshot_contract() {
+        // Same envelope as herdr::tests::parses_workspace_and_tab_lists_from_herdr_snapshot_response.
+        let response = serde_json::json!({
+            "result": {
+                "type": "session_snapshot",
+                "snapshot": {
+                    "focused_workspace_id": "w1",
+                    "panes": [
+                        {"pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1"},
+                        {"pane_id": "w2:p1", "workspace_id": "w2", "tab_id": "w2:t1"}
+                    ]
+                }
+            }
+        });
+        require_herdr_pane_in_snapshot(&response, "w1:p1").unwrap();
+        require_herdr_pane_in_snapshot(&response, "w2:p1").unwrap();
+        assert!(require_herdr_pane_in_snapshot(&response, "w1:p2").is_err());
+    }
+
+    #[test]
+    fn herdr_pane_membership_keeps_supported_flat_and_session_envelopes() {
+        for response in [
+            serde_json::json!({"panes": [{"pane_id": "w1:p1"}]}),
+            serde_json::json!({"result": {"panes": [{"pane_id": "w1:p1"}]}}),
+            serde_json::json!({"result": {"session": {"panes": [{"pane_id": "w1:p1"}]}}}),
+        ] {
+            require_herdr_pane_in_snapshot(&response, "w1:p1").unwrap();
+            assert!(require_herdr_pane_in_snapshot(&response, "w2:p1").is_err());
+        }
+    }
+
+    #[test]
+    fn herdr_pane_membership_never_uses_other_collections_or_partial_ids() {
+        let response = serde_json::json!({"result": {
+            "type": "session_snapshot",
+            "snapshot": {"panes": [{"pane_id": "w1:p1"}]},
+            "panes": [{"pane_id": "w2:p1"}],
+            "session": {"panes": [{"pane_id": "w3:p1"}]}
+        }});
+        for pane in ["w2:p1", "w3:p1", "p1", "w1", "w1:p", " w1:p1", "w1:p1 ", ""] {
+            assert!(require_herdr_pane_in_snapshot(&response, pane).is_err());
+        }
+        let other_session = serde_json::json!({"result": {
+            "snapshot": {"panes": [{"pane_id": "w4:p1"}]}
+        }});
+        require_herdr_pane_in_snapshot(&other_session, "w4:p1").unwrap();
+        assert!(require_herdr_pane_in_snapshot(&response, "w4:p1").is_err());
+    }
+
+    #[test]
+    fn herdr_pane_membership_fails_closed_for_empty_or_malformed_snapshots() {
+        for snapshot in [
+            serde_json::Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"panes": []}),
+            serde_json::json!({"panes": {"pane_id": "w1:p1"}}),
+            serde_json::json!({"panes": [{"id": "w1:p1"}, {"pane_id": null}, {"pane_id": ""}]}),
+        ] {
+            let response = serde_json::json!({"result": {
+                "snapshot": snapshot,
+                "panes": [{"pane_id": "w1:p1"}]
+            }});
+            assert!(require_herdr_pane_in_snapshot(&response, "w1:p1").is_err());
+        }
+    }
+
+    #[tokio::test]
     async fn cancellation_releases_control_while_terminal_is_still_owned_by_target_worker() {
         let state = Arc::new(AppState::new_for_test(":memory:".into()));
         let cancel = CancellationToken::new();
@@ -430,7 +627,7 @@ mod tests {
                 root: None,
                 root_identity: None,
             },
-            backend: Backend::Herdr("pane".into()),
+            backend: Backend::Herdr("pane".into(), HerdrTerminalAdapter::new(state.clone())),
             controller: None,
             cancel: cancel.clone(),
             state,

@@ -23,21 +23,64 @@ pub struct HerdrPaneDescriptor {
 #[derive(Clone)]
 pub struct HerdrTerminalAdapter {
     state: Arc<AppState>,
+    #[cfg(test)]
+    test_rpc: Option<Arc<TestRpc>>,
 }
+
+#[cfg(test)]
+type TestRpc = dyn Fn(String, HerdrTerminalOperation) -> futures::future::BoxFuture<'static, Result<Value, String>>
+    + Send
+    + Sync;
 
 impl HerdrTerminalAdapter {
     pub fn new(state: Arc<AppState>) -> Self {
-        Self { state }
+        Self {
+            state,
+            #[cfg(test)]
+            test_rpc: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_rpc(
+        state: Arc<AppState>,
+        rpc: impl Fn(
+            String,
+            HerdrTerminalOperation,
+        ) -> futures::future::BoxFuture<'static, Result<Value, String>>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            state,
+            test_rpc: Some(Arc::new(rpc)),
+        }
+    }
+
+    async fn request(
+        &self,
+        session_id: &str,
+        operation: HerdrTerminalOperation,
+    ) -> Result<Value, String> {
+        #[cfg(test)]
+        if let Some(rpc) = &self.test_rpc {
+            return rpc(session_id.to_owned(), operation).await;
+        }
+        run_terminal_mcp_operation(&self.state, session_id, operation).await
+    }
+
+    pub async fn snapshot(&self, session_id: &str) -> Result<Value, TerminalMcpError> {
+        self.request(session_id, HerdrTerminalOperation::Snapshot)
+            .await
+            .map_err(map_herdr_error)
     }
 
     pub async fn list_panes(
         &self,
         session_id: &str,
     ) -> Result<Vec<HerdrPaneDescriptor>, TerminalMcpError> {
-        let response =
-            run_terminal_mcp_operation(&self.state, session_id, HerdrTerminalOperation::Snapshot)
-                .await
-                .map_err(map_herdr_error)?;
+        let response = self.snapshot(session_id).await?;
         Ok(collection(&response, "panes")
             .into_iter()
             .filter_map(|pane| {
@@ -64,31 +107,8 @@ impl HerdrTerminalAdapter {
         wait_ms: u64,
         max_bytes: usize,
     ) -> Result<TerminalReadResult, TerminalMcpError> {
-        let mut response = run_terminal_mcp_operation(
-            &self.state,
-            session_id,
-            HerdrTerminalOperation::Read {
-                pane_id: pane_id.to_owned(),
-            },
-        )
-        .await
-        .map_err(map_herdr_error)?;
-        let mut timed_out = false;
-        if !response_has_new_output(&response, after_sequence) && wait_ms > 0 {
-            let waited = run_terminal_mcp_operation(
-                &self.state,
-                session_id,
-                HerdrTerminalOperation::WaitForOutput {
-                    pane_id: pane_id.to_owned(),
-                    after_sequence,
-                    timeout_ms: wait_ms,
-                },
-            )
-            .await
-            .map_err(map_herdr_error)?;
-            timed_out = bool_field(result(&waited), "timed_out");
-            response = run_terminal_mcp_operation(
-                &self.state,
+        let mut response = self
+            .request(
                 session_id,
                 HerdrTerminalOperation::Read {
                     pane_id: pane_id.to_owned(),
@@ -96,6 +116,29 @@ impl HerdrTerminalAdapter {
             )
             .await
             .map_err(map_herdr_error)?;
+        let mut timed_out = false;
+        if !response_has_new_output(&response, after_sequence) && wait_ms > 0 {
+            let waited = self
+                .request(
+                    session_id,
+                    HerdrTerminalOperation::WaitForOutput {
+                        pane_id: pane_id.to_owned(),
+                        after_sequence,
+                        timeout_ms: wait_ms,
+                    },
+                )
+                .await
+                .map_err(map_herdr_error)?;
+            timed_out = bool_field(result(&waited), "timed_out");
+            response = self
+                .request(
+                    session_id,
+                    HerdrTerminalOperation::Read {
+                        pane_id: pane_id.to_owned(),
+                    },
+                )
+                .await
+                .map_err(map_herdr_error)?;
         }
         Ok(normalize_read(
             session_id,
@@ -113,8 +156,7 @@ impl HerdrTerminalAdapter {
         pane_id: &str,
         text: String,
     ) -> Result<(), TerminalMcpError> {
-        run_terminal_mcp_operation(
-            &self.state,
+        self.request(
             session_id,
             HerdrTerminalOperation::SendText {
                 pane_id: pane_id.to_owned(),
@@ -132,8 +174,7 @@ impl HerdrTerminalAdapter {
         pane_id: &str,
         keys: Vec<String>,
     ) -> Result<(), TerminalMcpError> {
-        run_terminal_mcp_operation(
-            &self.state,
+        self.request(
             session_id,
             HerdrTerminalOperation::SendKeys {
                 pane_id: pane_id.to_owned(),
@@ -151,8 +192,7 @@ impl HerdrTerminalAdapter {
         pane_id: &str,
         data: &[u8],
     ) -> Result<(), TerminalMcpError> {
-        run_terminal_mcp_operation(
-            &self.state,
+        self.request(
             session_id,
             HerdrTerminalOperation::SendInput {
                 pane_id: pane_id.to_owned(),
@@ -171,8 +211,7 @@ impl HerdrTerminalAdapter {
         cols: u16,
         rows: u16,
     ) -> Result<(), TerminalMcpError> {
-        run_terminal_mcp_operation(
-            &self.state,
+        self.request(
             session_id,
             HerdrTerminalOperation::Resize {
                 pane_id: pane_id.to_owned(),
@@ -194,11 +233,11 @@ fn normalize_read(
     timed_out: bool,
     response: &Value,
 ) -> TerminalReadResult {
-    let value = result(response);
+    let value = read_result(response);
     let sequence = sequence_field(value).unwrap_or_else(|| after_sequence.saturating_add(1));
     let mut data = data_field(value).unwrap_or_default();
     let has_new_output = !data.is_empty() && sequence > after_sequence;
-    let truncated = data.len() > max_bytes;
+    let truncated = data.len() > max_bytes || bool_field(value, "truncated");
     if truncated {
         data.truncate(max_bytes);
     }
@@ -225,9 +264,14 @@ fn normalize_read(
 }
 
 fn response_has_new_output(response: &Value, after_sequence: u64) -> bool {
-    let value = result(response);
+    let value = read_result(response);
     data_field(value).is_some_and(|data| !data.is_empty())
         && sequence_field(value).is_none_or(|sequence| sequence > after_sequence)
+}
+
+fn read_result(value: &Value) -> &Value {
+    let value = result(value);
+    value.get("read").unwrap_or(value)
 }
 
 fn result(value: &Value) -> &Value {
@@ -255,12 +299,12 @@ fn data_field(value: &Value) -> Option<Vec<u8>> {
     }
     ["text", "content", "output", "data"]
         .into_iter()
-        .find_map(|key| string_field(value, key))
+        .find_map(|key| value.get(key).and_then(Value::as_str).map(str::to_owned))
         .or_else(|| {
             value.get("pane").and_then(|pane| {
                 ["text", "content", "output", "data"]
                     .into_iter()
-                    .find_map(|key| string_field(pane, key))
+                    .find_map(|key| pane.get(key).and_then(Value::as_str).map(str::to_owned))
             })
         })
         .map(String::into_bytes)
@@ -300,6 +344,31 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[tokio::test]
+    async fn default_adapter_still_rejects_unknown_sessions() {
+        let state = Arc::new(AppState::new_for_test(":memory:".into()));
+        assert!(
+            HerdrTerminalAdapter::new(state)
+                .snapshot("unknown-session")
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn reads_the_genuine_herdr_pane_read_envelope() {
+        let response = json!({"id":"inspect","result":{"type":"pane_read","read":{
+            "pane_id":"w1:p1","text":"real-pty-output\n","revision":0,"truncated":false
+        }}});
+        assert!(response_has_new_output(&response, 0));
+        let read = normalize_read("session", "w1:p1", 0, 262_144, false, &response);
+        assert_eq!(read.frames.len(), 1);
+        assert_eq!(
+            read.frames[0].data_base64,
+            BASE64_STANDARD.encode("real-pty-output\n")
+        );
+    }
 
     #[test]
     fn normalizes_bounded_herdr_reads() {

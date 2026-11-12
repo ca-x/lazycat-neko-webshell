@@ -1,4 +1,5 @@
 pub(crate) mod machines;
+mod native_input;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -578,7 +579,7 @@ pub(crate) async fn run_terminal_mcp_operation(
         .await
         .map_err(|err| err.message)?;
 
-    let (method, params, pane_id) = terminal_mcp_operation_request(operation);
+    let (method, params, pane_id) = terminal_mcp_operation_request(operation)?;
     if let Some(pane_id) = pane_id {
         run_herdr_request(&target, "pane.get", json!({ "pane_id": pane_id }))
             .await
@@ -589,10 +590,10 @@ pub(crate) async fn run_terminal_mcp_operation(
         .map_err(|err| err.message)
 }
 
-fn terminal_mcp_operation_request(
+pub(crate) fn terminal_mcp_operation_request(
     operation: HerdrTerminalOperation,
-) -> (&'static str, Value, Option<String>) {
-    match operation {
+) -> Result<(&'static str, Value, Option<String>), String> {
+    Ok(match operation {
         HerdrTerminalOperation::Snapshot => ("session.snapshot", json!({}), None),
         HerdrTerminalOperation::Read { pane_id } => (
             "pane.read",
@@ -625,21 +626,28 @@ fn terminal_mcp_operation_request(
         HerdrTerminalOperation::SendInput {
             pane_id,
             data_base64,
-        } => (
-            "pane.send_input",
-            json!({ "pane_id": pane_id, "data_base64": data_base64 }),
-            Some(pane_id),
-        ),
+        } => {
+            let (method, params) = terminal_mcp_input_request(&pane_id, &data_base64)?;
+            (method, params, Some(pane_id))
+        }
         HerdrTerminalOperation::Resize {
             pane_id,
             cols,
             rows,
-        } => (
-            "pane.resize",
-            json!({ "pane_id": pane_id, "cols": cols, "rows": rows }),
-            Some(pane_id),
-        ),
-    }
+        } => {
+            return Err(format!(
+                "Herdr pane {pane_id} geometry is controlled by its layout; cell resize to {cols}x{rows} is unsupported"
+            ));
+        }
+    })
+}
+
+fn terminal_mcp_input_request(pane: &str, encoded: &str) -> Result<(&'static str, Value), String> {
+    use base64::Engine as _;
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| "invalid Herdr input base64".to_owned())?;
+    native_input::request(pane, &data)
 }
 
 pub(crate) async fn get_herdr_state(
@@ -2341,6 +2349,48 @@ mod tests {
     }
 
     #[test]
+    fn terminal_mcp_input_matches_the_installed_herdr_contract() {
+        let (method, params, _) =
+            terminal_mcp_operation_request(HerdrTerminalOperation::SendInput {
+                pane_id: "w1:p1".into(),
+                data_base64: "cHJpbnRmIGhlbGxvCg==".into(),
+            })
+            .unwrap();
+        assert_eq!(method, "pane.send_text");
+        assert_eq!(params["text"], "printf hello\n");
+        assert!(params.get("keys").is_none());
+        assert!(params.get("data_base64").is_none());
+    }
+
+    #[test]
+    fn herdr_native_input_preserves_key_bytes_and_rejects_unsupported_data() {
+        use base64::Engine as _;
+        for (bytes, _) in [
+            (b"\r".as_slice(), "Enter"),
+            (b"\x03".as_slice(), "ctrl+c"),
+            (b"\x1b[A".as_slice(), "Up"),
+        ] {
+            let (method, params) = super::terminal_mcp_input_request(
+                "w1:p1",
+                &base64::engine::general_purpose::STANDARD.encode(bytes),
+            )
+            .unwrap();
+            assert_eq!(method, "pane.send_text");
+            assert_eq!(params["text"].as_str().unwrap().as_bytes(), bytes);
+        }
+        assert!(super::terminal_mcp_input_request("w1:p1", "invalid-base64").is_err());
+        assert!(super::terminal_mcp_input_request("w1:p1", "/w==").is_err());
+        assert!(
+            terminal_mcp_operation_request(HerdrTerminalOperation::Resize {
+                pane_id: "w1:p1".into(),
+                cols: 100,
+                rows: 40
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
     fn terminal_mcp_operations_map_only_to_typed_pane_methods() {
         let cases = [
             (
@@ -2366,22 +2416,17 @@ mod tests {
             (
                 HerdrTerminalOperation::SendInput {
                     pane_id: "pane-1".to_owned(),
-                    data_base64: "AA==".to_owned(),
+                    data_base64: "YQ==".to_owned(),
                 },
-                "pane.send_input",
-            ),
-            (
-                HerdrTerminalOperation::Resize {
-                    pane_id: "pane-1".to_owned(),
-                    cols: 120,
-                    rows: 32,
-                },
-                "pane.resize",
+                "pane.send_text",
             ),
         ];
 
         for (operation, expected) in cases {
-            assert_eq!(terminal_mcp_operation_request(operation).0, expected);
+            assert_eq!(
+                terminal_mcp_operation_request(operation).unwrap().0,
+                expected
+            );
         }
     }
 
