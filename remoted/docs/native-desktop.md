@@ -109,11 +109,16 @@ gh run download RUN_ID --dir /tmp/remoted-desktop-ci
 macos-15 runner 上指定 CPU target，两个包都显式构建；不同 runner CPU 不表示产物 CPU。
 发布前必须检查四个 job 实际成功，而非看到 workflow 文件就宣称 Windows/Mac 已构建。
 
-公共发布保持现有本机人工授权流程：核对 source tag 指向提交、run 的 head SHA、四个 build-info
-的 `source_sha`/`source_dirty=false`、版本、NSH revision、target、包内元数据与 SHA-256 后，再上传
-独立 desktop release 的新资产。需要校验 Mac `lipo -archs`/`codesign --verify`、Windows EXE 的 PE
-x64 与 ZIP 内容、deb 的 `dpkg-deb --info/--contents`。不要让权限不足的 SOURCE_REPO_TOKEN
-静默退回 broad OAuth，也不要移动旧 Android tag 或覆盖其三个资产。
+桌面端统一发布稳定正式包：使用 Release 构建，Windows x64、Mac arm64、Mac Intel 和
+Linux amd64 deb 必须同时交付。最终 GitHub Release 必须为非 draft、非 prerelease；
+内部构建产物和暂存草稿不能当作发布完成。
+
+公开 Actions 从私有仓库读取构建产物，不重新编译客户端；核对固定 source tag、成功 run
+的 head SHA、四个 build-info 的 `source_sha`/`source_dirty=false`、版本、NSH revision、
+target、包内元数据与 SHA-256 后，发布独立 desktop release。校验覆盖 Mac 代码签名页、
+Windows PE x64 与 ZIP 内容、deb 元数据和二进制；发布后回读公开附件。
+不要让权限不足的 SOURCE_REPO_TOKEN 静默退回 broad OAuth，不移动已有 tag；失败构建
+保留原版本记录，代码修正后使用新的补丁 tag，也不覆盖既有 Android 资产。
 
 ## 定向验证
 

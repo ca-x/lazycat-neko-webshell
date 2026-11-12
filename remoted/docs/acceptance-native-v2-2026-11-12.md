@@ -35,7 +35,9 @@ Relay 通过 26 项 Node 单元测试和九项真实 workerd/Durable Object 集�
   `public_v2_host_pair_shared_pty_readonly_revoke_reconnect_lifecycle`，实际运行约 33 秒，
   一项通过；最终 VT resize 修正后再次实际运行约 43 秒通过，验证生产 Host supervisor、Noise 配对和明确批准、真实共享 PTY、
   本机和远端控制权、断开重连保留同一 PTY、只读拒绝、关闭资源清 grants、撤销后拒绝重连。
-  子进程显式传 `--include-ignored`，并校验确实执行了一项测试，避免 ignored 测试假绿。
+  最终发行源码 `b812aa37ca91fbe7f27ba6ef241b87740009f929` 上又运行一次，
+  33.86 秒一项通过。子进程显式传 `--include-ignored`，并校验确实执行了一项测试，
+  避免 ignored 测试假绿。
 
 Provider 文件验收在隔离 fixture 中将平台目标派发换成本机子进程；这不代表实际
 LightOS 浏览器委托票据的完整验收。原生 host/client 验收使用真实本机 PTY和生产协议路径。
