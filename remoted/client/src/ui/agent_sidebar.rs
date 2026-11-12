@@ -94,14 +94,7 @@ fn rows(model: &Model, active: &str) -> Vec<AgentRow> {
             let Some(app) = record.app.as_deref().filter(|app| !app.trim().is_empty()) else {
                 continue;
             };
-            let status = match record.state {
-                neko_remoted_protocol::messages::ProgramState::Working => "working",
-                neko_remoted_protocol::messages::ProgramState::Blocked => "blocked",
-                neko_remoted_protocol::messages::ProgramState::Error => "error",
-                neko_remoted_protocol::messages::ProgramState::Done => "done",
-                neko_remoted_protocol::messages::ProgramState::Idle => "idle",
-                neko_remoted_protocol::messages::ProgramState::Unknown => "unknown",
-            };
+            let status = icons::program_status(record.state);
             rows.push(AgentRow {
                 key: format!("{}:{}", pane.stream, record.id),
                 target: Target::Terminal(pane.stream.clone()),

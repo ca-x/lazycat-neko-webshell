@@ -10,7 +10,7 @@ use nsh_core::prelude::*;
 #[path = "session_tabs.rs"]
 pub(super) mod session_tabs;
 
-/// One navigation/command row; normal connection status belongs to the sidebar.
+/// One navigation row with compact transport details and session actions.
 pub fn render(ui: Ui) -> impl IntoElement {
     view()
         .border_b_1()
@@ -39,6 +39,16 @@ pub fn render(ui: Ui) -> impl IntoElement {
                         } else {
                             ui.navigation.drawer.update(|open| *open = !*open);
                         }
+                    },
+                ))
+                .child(super::connection::status::render(ui))
+                .child(when(
+                    move || navigation::wide() && !ui.navigation.sidebar.get(),
+                    move || {
+                        text(move || ui.model.with(super::connection::host_names::active_name))
+                            .text_sm()
+                            .number_of_lines(1)
+                            .max_w(px(180.0))
                     },
                 ))
                 .child(

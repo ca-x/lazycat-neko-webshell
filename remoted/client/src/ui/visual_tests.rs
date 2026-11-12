@@ -5,12 +5,12 @@
 //! `NEKO_PREVIEW_DARK=1` selects dark appearance; the default is light.
 //! `NEKO_PREVIEW_SECTION=herdr` selects Herdr; the default selects the ordinary terminal.
 //! Narrow width changes layout only; this remains a native Linux desktop window.
-//! It starts in Terminal mode. Use the real 终端模式 / 对话模式 buttons to switch;
-//! the preview does not force Android defaults or fabricate host acknowledgments.
+//! The preview uses the same fixed terminal grid and input path as the app.
 //! `NEKO_PREVIEW_LIST=1` shows the section's session hierarchy instead of an open pane.
 //! `NEKO_PREVIEW_SETTINGS=1` opens settings, including the actual preference controls.
 //! `NEKO_PREVIEW_LANGUAGE=zh-CN|en-US`, `NEKO_PREVIEW_THEME=<catalog id>` and
 //! `NEKO_PREVIEW_FONT_SIZE=8..40` configure display preferences without touching storage.
+//! `NEKO_PREVIEW_HERDR_TEXT=/tmp/...` uses a captured, real plain-text Herdr screen.
 //! Diagnostics and optional late output retain `NEKO_PREVIEW_DIAGNOSTICS=1` and
 //! `NEKO_PREVIEW_LATE_OUTPUT=1`. Close the window to finish the graphical test.
 use super::{
@@ -173,11 +173,20 @@ fn SessionPreview() -> impl IntoElement {
     ui.pending.with(|pending| {
         for (stream, text) in [
             ("preview-terminal", "\x1b[32mdeveloper@neko\x1b[0m:~/project$ git status\r\nOn branch main\r\nWorking tree clean\r\n\r\n\x1b[31mRED\x1b[0m \x1b[7mINVERSE\x1b[0m \x1b[38;2;12;34;56mTRUECOLOR\x1b[0m\r\n\x1b[32mdeveloper@neko\x1b[0m:~/project$ "),
-            ("preview-herdr", "Herdr · 项目工作区\r\n\r\n\x1b[32mRead-only observer\x1b[0m · select and copy\r\n\x1b[31mRED\x1b[0m \x1b[7mINVERSE\x1b[0m \x1b[38;2;12;34;56mTRUECOLOR\x1b[0m\r\nTake control to send input to this pane.\r\n"),
+            ("preview-herdr", "Herdr · 项目工作区\n\n● Codex 正在处理你的请求\n  检查终端布局与消息视图\n  中文、English 和长链接保持原始行列\nhttps://example.com/projects/neoko-terminal/issues/native-terminal-layout-and-conversation-mode\n\n› 请检查这个项目的测试结果\n\n测试完成：28 passed, 0 failed\n等待下一条指令…\n"),
         ] {
             pending.entry(stream.into()).or_default().push_back(Chunk { text: text.into(), reset: false });
         }
     });
+    if let Some(path) = std::env::var_os("NEKO_PREVIEW_HERDR_TEXT") {
+        let path = std::path::PathBuf::from(path);
+        assert!(path.is_absolute() && path.starts_with(std::env::temp_dir()));
+        let text = std::fs::read_to_string(path).expect("captured Herdr screen");
+        assert!(text.len() <= 256 * 1024, "bounded real screen");
+        ui.pending.with(|pending| {
+            pending.insert("preview-herdr".into(), [Chunk { text, reset: true }].into());
+        });
+    }
     spawn(async move {
         while let Some(command) = receiver.recv().await {
             if enabled("NEKO_PREVIEW_DIAGNOSTICS") {
@@ -248,7 +257,7 @@ fn linux_session_preview() {
     } else {
         nsh_platform_linux::Appearance::Light
     };
-    let root = Root::of::<SessionPreview>()
+    let root = crate::fonts::root(Root::of::<SessionPreview>())
         .tokens(nsh_base::tokens_of(Some(include_str!("theme.json"))).expect("preview theme"));
     let exit = nsh_platform_linux::run_app(
         nsh_platform_linux::AppSource::Rust(root),

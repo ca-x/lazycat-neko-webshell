@@ -120,7 +120,12 @@ fn entries(model: &Model, section: Section, workspace: &str, active: &str) -> Ve
             title: pane.name.clone(),
             target: Target::Stream(pane.stream.clone()),
             active: pane.stream == active,
-            agent: None,
+            agent: icons::primary_program(&pane.programs).map(|record| Agent {
+                pane_id: pane.stream.clone(),
+                kind: record.app.clone().unwrap_or_default(),
+                status: Some(icons::program_status(record.state).into()),
+                ..Agent::default()
+            }),
         });
     }
     entries
@@ -252,74 +257,6 @@ pub fn render(ui: Ui) -> impl IntoElement {
                     })
                 })
                 .text_sm()
-            },
-        ))
-}
-
-pub fn badges(ui: Ui, pane: ReadSignal<crate::controller::Pane>) -> impl IntoElement {
-    view()
-        .flex_row()
-        .items_center()
-        .gap_1()
-        .child(each(
-            move || {
-                pane.with(|pane| {
-                    if pane.kind != PaneKind::Terminal
-                        || !pane.live()
-                        || !ui.model.with(|model| model.ready())
-                    {
-                        return Vec::new();
-                    }
-                    icons::primary_program(&pane.programs)
-                        .cloned()
-                        .into_iter()
-                        .collect::<Vec<_>>()
-                })
-            },
-            |record| {
-                (
-                    record.id.clone(),
-                    record.app.clone(),
-                    format!("{:?}", record.state),
-                )
-            },
-            move |record, _| icons::program(&record.get_untracked()),
-        ))
-        .child(each(
-            move || {
-                pane.with(|pane| {
-                    ui.model.with(|model| {
-                        model
-                            .herdr_workspace
-                            .agents
-                            .iter()
-                            .filter(|agent| {
-                                pane.herdr_grant.as_deref() == Some(model.herdr_grant.as_str())
-                                    && pane.herdr_pane_id.as_deref() == Some(agent.pane_id.as_str())
-                            })
-                            .cloned()
-                            .collect::<Vec<_>>()
-                    })
-                })
-            },
-            |agent| {
-                (
-                    agent.pane_id.clone(),
-                    agent.kind.clone(),
-                    agent.status.clone(),
-                )
-            },
-            move |agent, _| {
-                let agent = agent.get_untracked();
-                view()
-                    .flex_row()
-                    .items_center()
-                    .gap_1()
-                    .child(icons::agent_with_status(
-                        &agent.kind,
-                        agent.status.as_deref(),
-                    ))
-                    .child(icons::activity(agent.status.as_deref()))
             },
         ))
 }

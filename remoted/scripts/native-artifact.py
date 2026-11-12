@@ -62,7 +62,7 @@ def package():
     shutil.copyfile(apk, destination / name)
     provenance = {
         'schemaVersion': 1, 'component': 'neoko-terminal',
-        'version': release, 'protocolVersion': 2,
+        'version': release, 'protocolVersion': 3,
         'sourceRepository': source['repository'], 'sourceCommit': source['commit'],
         'sourceRunId': source['runId'], 'sourceRunAttempt': source['runAttempt'],
         'sourceWorkflow': source['workflow'], 'sourceEvent': source['event'],

@@ -1,8 +1,9 @@
 export type Permission = "read_only" | "operate";
 export type RemoteResource = { id: string; name: string; backend: string; terminal: boolean; herdr: boolean; files: boolean };
+export type ConnectionKind = "local" | "relay" | "connecting" | "direct";
 export type RemoteDevice = {
   id: string; name: string; fingerprint: string; permission: Permission;
-  resources: RemoteResource[]; online: boolean; connections: number; rttMs: number | null;
+  resources: RemoteResource[]; online: boolean; connections: number; rttMs: number | null; connectionTypes?: ConnectionKind[];
 };
 export type PendingDevice = { id: string; name: string; fingerprint: string; expiresInSeconds: number };
 export type RemoteState = {

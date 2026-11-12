@@ -217,7 +217,7 @@ async fn websocket_close_preserves_code_and_reason() {
 }
 
 #[test]
-fn health_requires_exact_v2_protocol_and_version() {
+fn health_requires_current_protocol_and_version() {
     assert!(
         validate_relay_health(&serde_json::json!({
             "protocol": protocol::RELAY_PROTOCOL,
@@ -227,6 +227,7 @@ fn health_requires_exact_v2_protocol_and_version() {
     );
     for health in [
         serde_json::json!({"protocol": "neko.remoted.v1", "version": 1}),
+        serde_json::json!({"protocol": "neko.remoted.v2", "version": 2}),
         serde_json::json!({"protocol": protocol::RELAY_PROTOCOL, "version": 1}),
         serde_json::json!({"protocols": [protocol::RELAY_PROTOCOL], "version": protocol::RELAY_VERSION}),
         serde_json::json!({"protocol": "neko.remoted.v1", "version": 1, "protocols": [protocol::RELAY_PROTOCOL]}),

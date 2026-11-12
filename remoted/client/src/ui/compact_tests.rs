@@ -145,13 +145,12 @@ fn desktop_has_one_compact_tab_bar_and_agents_jump_without_a_duplicate_open_list
 fn android_drawer_keeps_agents_and_workspace_selection_and_closes_after_jump() -> Result<(), String>
 {
     let mut app = start(Os::Android, 390.0)?;
-    app.wait_for("真实终端输出")?;
+    app.wait_for("terminal-observer")?;
     assert!(!app.shows("Space One"));
     app.press("设备侧栏")?;
     app.wait_for("Space One · Tab Two · Claude")?;
     app.press("Space One · Tab One · Codex")?;
-    app.wait_for("真实终端输出")?;
-    app.press("终端模式")?;
+    app.wait_for("terminal-observer")?;
     app.wait_until(
         "drawer closed",
         std::time::Duration::from_secs(3),

@@ -1,7 +1,7 @@
-//! Terminal appearance adapters for NSH's fixed-palette terminal renderer.
+//! Reactive appearance for the native terminal cell renderer.
 
 use super::{Ui, catalog::TerminalTheme};
-use nsh_base::{TerminalColor, TerminalElement, TerminalLine, TerminalStyle, terminal};
+use nsh_base::{TerminalColor, TerminalStyle};
 use nsh_core::prelude::*;
 
 /// Reactive terminal appearance captured from the app's installed preference handle.
@@ -74,24 +74,6 @@ impl Context {
     pub fn style(self, style: TerminalStyle) -> TerminalStyle {
         self.theme().map_or(style, |theme| theme.style(style))
     }
-
-    /// Resolve a copied raw emulator line without losing its stored palette indices.
-    pub fn terminal_line(self, line: TerminalLine) -> TerminalLine {
-        match self.theme() {
-            Some(theme) => theme.line(line),
-            None => line,
-        }
-    }
-
-    /// Build an NSH terminal with reactive font metrics, text, background, and cursor fill.
-    pub fn terminal(self) -> TerminalElement {
-        terminal()
-            .font_size(move || px(self.font_size() as f32))
-            .line_height(move || px(self.line_height()))
-            .bg(move || self.background())
-            .text_color(move || self.foreground())
-            .cursor_style(move |style| style.bg(move || self.cursor()))
-    }
 }
 
 /// Convert a catalog RGB value into an appearance-independent NSH data color.
@@ -120,13 +102,5 @@ impl TerminalTheme {
             style.inverse = false;
         }
         style
-    }
-
-    /// Convert a copied emulator line for rendering; never modify the emulator's palette indices.
-    pub fn line(&self, mut line: TerminalLine) -> TerminalLine {
-        for run in &mut line.runs {
-            run.style = self.style(run.style);
-        }
-        line
     }
 }

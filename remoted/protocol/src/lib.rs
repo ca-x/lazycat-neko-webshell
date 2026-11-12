@@ -8,12 +8,14 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const VERSION: u8 = 2;
+pub const VERSION: u8 = 3;
 /// Relay transport version; independent from protected-storage schema versions.
-pub const RELAY_VERSION: u8 = 2;
-pub const RELAY_PROTOCOL: &str = "neko.remoted.v2";
+pub const RELAY_VERSION: u8 = 3;
+pub const RELAY_PROTOCOL: &str = "neko.remoted.v3";
 pub const MAX_PLAINTEXT: usize = 61_440;
 pub const MAX_CIPHERTEXT: usize = MAX_PLAINTEXT + 16;
+/// Maximum opaque carrier record, including direct-path framing.
+pub const MAX_WIRE_PAYLOAD: usize = 65_536;
 pub const MAX_RELAY_MESSAGE: usize = 98_304;
 pub const FILE_CHUNK: usize = 32_768;
 pub const MAX_PEERS: usize = 16;

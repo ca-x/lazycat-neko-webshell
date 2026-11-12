@@ -196,7 +196,15 @@ pub async fn run(
         },
     )
     .await?;
+    if let Some(name) = reported_host_name() {
+        send(link, &mut channel, 0, Event::HostInfo { name }).await?;
+    }
     serve_authenticated(state, link, incoming, channel, last, device, spawn_work).await
+}
+
+fn reported_host_name() -> Option<String> {
+    let name = hostname::get().ok()?.to_string_lossy().trim().to_owned();
+    (!name.is_empty() && name.len() <= 128 && !name.chars().any(char::is_control)).then_some(name)
 }
 
 struct PairingIdentity<'a> {
@@ -481,6 +489,10 @@ async fn serve_authenticated(
                             if let Some(rtt) = heartbeat.pong(&nonce)
                                 && let Ok(mut runtime) = state.remoted.runtime.lock()
                                 && let Some(peer) = runtime.peers.get_mut(&link.peer) { peer.rtt = Some((rtt, Instant::now())); }
+                        },
+                        Operation::EnableDirect { key } => {
+                            link.enable_direct(protocol::decode32(&key)?)?;
+                            send(link, &mut channel, request.id, Event::DirectReady {}).await?;
                         },
                         Operation::Ping { nonce } => {
                             ensure!(nonce.len() <= 64, "nonce too long");
@@ -1234,6 +1246,7 @@ mod tests {
             let cancel = CancellationToken::new();
             let credits = Arc::new(Semaphore::new(8));
             let link = Link {
+                transport: std::sync::OnceLock::new(),
                 peer: "peer".into(),
                 outgoing,
                 credits: credits.clone(),
@@ -1242,6 +1255,7 @@ mod tests {
             state.remoted.runtime.lock().unwrap().peers.insert(
                 "peer".into(),
                 super::super::store::Peer {
+                    path: None,
                     device: Some(device.id.clone()),
                     cancel: cancel.clone(),
                     rtt: None,
@@ -1501,6 +1515,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let credits = Arc::new(Semaphore::new(8));
         let link = Link {
+            transport: std::sync::OnceLock::new(),
             peer: "peer".into(),
             outgoing,
             credits: credits.clone(),

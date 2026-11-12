@@ -2,6 +2,11 @@ use anyhow::{Context, Result, ensure};
 use neko_remoted_protocol::{self as protocol, RelayAddress, crypto::Identity};
 use serde::{Deserialize, Serialize};
 
+#[path = "storage/reported_hosts.rs"]
+mod reported_hosts;
+pub use reported_hosts::HostNames;
+pub(crate) use reported_hosts::{normalize_host_name, remember_host_name};
+
 const IDENTITY: &str = "remoted.identity.v1";
 const BINDINGS: &str = "remoted.bindings.v1";
 const LAST_RELAY: &str = "remoted.last-relay.v1";
@@ -56,7 +61,7 @@ pub async fn identity() -> Result<Identity> {
     Ok(identity)
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct BindingIdentity {
     relay: RelayAddress,
@@ -78,6 +83,58 @@ impl BindingIdentity {
     }
 }
 
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct HostAliases(Vec<HostAlias>);
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct HostAlias {
+    identity: BindingIdentity,
+    name: String,
+}
+
+impl std::fmt::Debug for HostAliases {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HostAliases")
+            .field("count", &self.0.len())
+            .finish()
+    }
+}
+
+impl HostAliases {
+    pub(crate) fn get(&self, binding: &Binding) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|alias| alias.identity.matches(binding))
+            .map(|alias| alias.name.as_str())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub(crate) fn retain(&mut self, bindings: &[Binding]) {
+        self.0.retain(|alias| {
+            bindings
+                .iter()
+                .any(|binding| alias.identity.matches(binding))
+        });
+    }
+}
+
+pub(crate) fn normalize_host_alias(alias: &str) -> Result<String> {
+    ensure!(
+        !alias.chars().any(|character| character.is_control())
+            && !alias.contains(['\u{2028}', '\u{2029}']),
+        "主机别名不能包含换行或控制字符"
+    );
+    let alias = alias.trim();
+    ensure!(alias.len() <= 128, "主机别名最多为 128 字节");
+    Ok(alias.to_owned())
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SavedBindings {
@@ -87,12 +144,18 @@ struct SavedBindings {
     auto_connect: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     local: Option<bool>,
+    #[serde(default, skip_serializing_if = "HostAliases::is_empty")]
+    aliases: HostAliases,
+    #[serde(default, skip_serializing_if = "HostNames::is_empty")]
+    host_names: HostNames,
 }
 
 pub(crate) struct Preferences {
     pub bindings: Vec<Binding>,
     pub selected: Option<Binding>,
     pub auto_connect: bool,
+    pub aliases: HostAliases,
+    pub host_names: HostNames,
 }
 
 fn decode_bindings(value: Option<&str>) -> Result<SavedBindings> {
@@ -103,6 +166,8 @@ fn decode_bindings(value: Option<&str>) -> Result<SavedBindings> {
             selected: None,
             auto_connect: false,
             local: None,
+            aliases: HostAliases::default(),
+            host_names: HostNames::default(),
         });
     };
     let saved: SavedBindings = if value.trim_start().starts_with('[') {
@@ -116,6 +181,8 @@ fn decode_bindings(value: Option<&str>) -> Result<SavedBindings> {
             selected,
             auto_connect,
             local: None,
+            aliases: HostAliases::default(),
+            host_names: HostNames::default(),
         }
     } else {
         serde_json::from_str(value).context("已配对设备和连接偏好存储损坏")?
@@ -128,6 +195,27 @@ fn decode_bindings(value: Option<&str>) -> Result<SavedBindings> {
     for binding in &saved.bindings {
         validate(binding)?;
     }
+    ensure!(
+        saved.aliases.0.len() <= protocol::MAX_DEVICES,
+        "主机别名过多"
+    );
+    for (index, alias) in saved.aliases.0.iter().enumerate() {
+        ensure!(
+            !alias.name.is_empty() && normalize_host_alias(&alias.name)? == alias.name,
+            "已保存的主机别名无效"
+        );
+        ensure!(
+            saved
+                .bindings
+                .iter()
+                .any(|binding| alias.identity.matches(binding))
+                && !saved.aliases.0[..index]
+                    .iter()
+                    .any(|previous| previous.identity == alias.identity),
+            "已保存的主机别名身份无效"
+        );
+    }
+    saved.host_names.validate(&saved.bindings)?;
     if let Some(selected) = &saved.selected {
         protocol::decode32(&selected.route).context("上次选择的设备 route 损坏")?;
         protocol::decode32(&selected.host_key).context("上次选择的设备公钥损坏")?;
@@ -152,7 +240,46 @@ pub(crate) async fn preferences() -> Result<Preferences> {
         auto_connect: saved.auto_connect && selected.is_some(),
         bindings: saved.bindings,
         selected,
+        aliases: saved.aliases,
+        host_names: saved.host_names,
     })
+}
+
+pub(crate) async fn rename_binding(binding: &Binding, alias: &str) -> Result<HostAliases> {
+    rename_with(load_bindings().await?, binding, alias, |saved| async move {
+        save_bindings(&saved).await
+    })
+    .await
+}
+
+async fn rename_with<Save>(
+    mut saved: SavedBindings,
+    binding: &Binding,
+    alias: &str,
+    persist: impl FnOnce(SavedBindings) -> Save,
+) -> Result<HostAliases>
+where
+    Save: std::future::Future<Output = Result<()>>,
+{
+    validate(binding)?;
+    ensure!(
+        saved.bindings.contains(binding),
+        "该设备配对已变化，请重新选择"
+    );
+    let name = normalize_host_alias(alias)?;
+    saved
+        .aliases
+        .0
+        .retain(|alias| !alias.identity.matches(binding));
+    if !name.is_empty() {
+        saved.aliases.0.push(HostAlias {
+            identity: BindingIdentity::of(binding),
+            name,
+        });
+    }
+    let aliases = saved.aliases.clone();
+    persist(saved).await?;
+    Ok(aliases)
 }
 
 /// Persists only an existing exact host identity; never creates or migrates a binding.
@@ -187,6 +314,8 @@ pub(crate) fn validate(binding: &Binding) -> Result<()> {
 pub async fn remember(binding: Binding) -> Result<Vec<Binding>> {
     let mut saved = load_bindings().await?;
     saved.bindings = remember_in(saved.bindings, binding.clone())?;
+    saved.aliases.retain(&saved.bindings);
+    saved.host_names.retain(&saved.bindings);
     saved.selected = Some(BindingIdentity::of(&binding));
     saved.auto_connect = true;
     saved.local = Some(false);
@@ -205,6 +334,8 @@ fn remember_in(mut saved: Vec<Binding>, binding: Binding) -> Result<Vec<Binding>
 pub async fn forget(binding: &Binding) -> Result<Vec<Binding>> {
     let mut saved = load_bindings().await?;
     saved.bindings = forget_from(saved.bindings, binding);
+    saved.aliases.retain(&saved.bindings);
+    saved.host_names.retain(&saved.bindings);
     if saved
         .selected
         .as_ref()
@@ -239,6 +370,10 @@ pub(crate) async fn select_local_workspace() -> Result<()> {
     saved.local = Some(true);
     save_bindings(&saved).await
 }
+
+#[cfg(test)]
+#[path = "storage/host_names_tests.rs"]
+mod host_names_tests;
 
 #[cfg(test)]
 mod tests {
@@ -344,6 +479,8 @@ mod tests {
             selected: Some(BindingIdentity::of(&old)),
             auto_connect: true,
             local: None,
+            aliases: HostAliases::default(),
+            host_names: HostNames::default(),
         };
         let restored = decode_bindings(Some(&serde_json::to_string(&saved).unwrap())).unwrap();
         assert!(restored.selected.as_ref().unwrap().matches(&old));

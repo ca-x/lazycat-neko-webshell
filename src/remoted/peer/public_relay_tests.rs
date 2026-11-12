@@ -24,6 +24,10 @@ mod keyboard;
 #[path = "public_relay_tests/managed.rs"]
 mod managed;
 
+#[path = "public_relay_tests/socket.rs"]
+mod socket;
+use socket::WireSocket;
+
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 async fn frame(socket: &mut Socket) -> RelayFrame {
@@ -52,33 +56,8 @@ async fn send_frame(socket: &mut Socket, frame: RelayFrame) {
     .unwrap();
 }
 
-async fn payload(socket: &mut Socket, peer: &str) -> Vec<u8> {
-    loop {
-        match frame(socket).await {
-            RelayFrame::Data {
-                data,
-                sequence: Some(sequence),
-                ..
-            } => {
-                send_frame(
-                    socket,
-                    RelayFrame::Acknowledge {
-                        peer: peer.into(),
-                        sequence,
-                    },
-                )
-                .await;
-                return protocol::decode(&data, protocol::MAX_CIPHERTEXT).unwrap();
-            }
-            RelayFrame::Delivered { .. } => {}
-            other => panic!("unexpected public Relay payload: {other:?}"),
-        }
-    }
-}
-
 struct Client {
-    socket: Socket,
-    peer: String,
+    socket: WireSocket,
     channel: Channel,
     next: u64,
     deferred: VecDeque<Response>,
@@ -116,6 +95,7 @@ impl Client {
             },
         )
         .await;
+        let mut socket = WireSocket::new(socket, peer);
         let mut handshake = Handshake::new(
             identity,
             relay,
@@ -126,31 +106,14 @@ impl Client {
             None,
         )
         .unwrap();
-        send_frame(
-            &mut socket,
-            RelayFrame::Data {
-                peer: peer.clone(),
-                data: protocol::encode(&handshake.write().unwrap()),
-                sequence: None,
-            },
-        )
-        .await;
-        handshake.read(&payload(&mut socket, &peer).await).unwrap();
+        socket.send(handshake.write().unwrap()).await;
+        handshake.read(&socket.receive().await).unwrap();
         if !handshake.finished() {
-            send_frame(
-                &mut socket,
-                RelayFrame::Data {
-                    peer: peer.clone(),
-                    data: protocol::encode(&handshake.write().unwrap()),
-                    sequence: None,
-                },
-            )
-            .await;
+            socket.send(handshake.write().unwrap()).await;
         }
         let (channel, _) = handshake.into_channel().unwrap();
         Self {
             socket,
-            peer,
             channel,
             next: 1,
             deferred: VecDeque::new(),
@@ -158,40 +121,26 @@ impl Client {
     }
 
     async fn request(&mut self, operation: Operation) -> u64 {
-        eprintln!(
-            "TRACE send business id={} kind={:?}",
-            self.next,
-            std::mem::discriminant(&operation)
-        );
         let id = self.next;
         self.next += 1;
         let plaintext = protocol::pack(&Request { id, operation }).unwrap();
-        let data = protocol::encode(&self.channel.encrypt(&plaintext).unwrap());
-        send_frame(
-            &mut self.socket,
-            RelayFrame::Data {
-                peer: self.peer.clone(),
-                data,
-                sequence: None,
-            },
-        )
-        .await;
+        self.socket
+            .send(self.channel.encrypt(&plaintext).unwrap())
+            .await;
         id
     }
 
     async fn receive(&mut self) -> Response {
         loop {
-            let bytes = payload(&mut self.socket, &self.peer).await;
+            let bytes = self.socket.receive().await;
             let response: Response =
                 protocol::unpack(&self.channel.decrypt(&bytes).unwrap()).unwrap();
+            if matches!(response.event, Event::HostInfo { .. }) {
+                continue;
+            }
             if let Event::Ping { nonce } = response.event {
                 self.request(Operation::Pong { nonce }).await;
             } else {
-                eprintln!(
-                    "TRACE receive id={} kind={:?}",
-                    response.id,
-                    std::mem::discriminant(&response.event)
-                );
                 return response;
             }
         }
@@ -212,18 +161,39 @@ impl Client {
     }
 
     async fn output(&mut self, stream_id: &str, needle: &[u8]) {
+        let mut tail = Vec::new();
         loop {
             let response = match self.deferred.pop_front() {
                 Some(response) => response,
                 None => self.receive().await,
             };
-            let Event::TerminalOutput { stream, data, .. } = response.event else {
-                panic!("expected terminal output")
+            let (stream, data, reset, gap) = match response.event {
+                Event::TerminalOutput {
+                    stream,
+                    data,
+                    reset,
+                    gap,
+                    ..
+                } => (stream, data, reset, gap),
+                Event::TerminalProgramStatus { stream, .. }
+                | Event::TerminalControl { stream, .. } => {
+                    assert_eq!(stream, stream_id);
+                    continue;
+                }
+                other => panic!("expected terminal output, received {other:?}"),
             };
             assert_eq!(stream, stream_id);
-            let bytes = protocol::decode(&data, protocol::FILE_CHUNK).unwrap();
-            if bytes.windows(needle.len()).any(|part| part == needle) {
+            assert!(!gap, "public fixture must not lose PTY output");
+            if reset {
+                tail.clear();
+            }
+            tail.extend(protocol::decode(&data, protocol::FILE_CHUNK).unwrap());
+            if tail.windows(needle.len()).any(|part| part == needle) {
                 return;
+            }
+            let retain = needle.len().saturating_sub(1);
+            if tail.len() > retain {
+                tail.drain(..tail.len() - retain);
             }
         }
     }

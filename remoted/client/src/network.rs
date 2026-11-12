@@ -15,6 +15,9 @@ use tokio_tungstenite::{
     tungstenite::{Message, client::IntoClientRequest},
 };
 
+mod path;
+use path::Connection;
+
 const DEADLINE: Duration = Duration::from_secs(10);
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -109,9 +112,11 @@ fn validate_relay_health(value: &serde_json::Value) -> Result<()> {
 }
 
 /// Encrypted client session. A single transport task owns the socket and its
-/// delivery credits. Receiving may be cancelled; requests must be awaited once.
+/// delivery credits. Requests are accepted once into a bounded writer queue;
+/// actual send failures surface through receive. Receiving may be cancelled.
 pub struct Session {
-    transport: Transport,
+    transport: Connection,
+    direct_key: Option<[u8; 32]>,
     channel: Channel,
     remote_key: [u8; 32],
     next: u64,
@@ -186,7 +191,7 @@ impl Session {
         )
         .await
         .context("发送主机连接请求失败")?;
-        let mut transport = Transport::start(socket, peer);
+        let mut transport = Connection::start(Transport::start(socket, peer));
         let mut handshake = Handshake::new(identity, relay, route, mode, true, psk, host)?;
         transport
             .send(handshake.write()?)
@@ -206,6 +211,7 @@ impl Session {
         let (channel, remote_key) = handshake.into_channel()?;
         Ok(Self {
             transport,
+            direct_key: None,
             channel,
             remote_key,
             next: 1,
@@ -215,6 +221,7 @@ impl Session {
         &self.remote_key
     }
     pub async fn request(&mut self, operation: Operation) -> Result<u64> {
+        let permit = self.transport.reserve_request()?;
         let id = self.next;
         self.next = self
             .next
@@ -222,7 +229,9 @@ impl Session {
             .context("request sequence exhausted")?;
         let plain = protocol::pack(&Request { id, operation })?;
         let encrypted = self.channel.encrypt(&plain)?;
-        if let Err(error) = self.transport.send(encrypted).await {
+        if let Some(permit) = permit {
+            permit.send(encrypted);
+        } else if let Err(error) = self.transport.send(encrypted).await {
             self.channel.close();
             return Err(error);
         }
@@ -234,28 +243,39 @@ impl Session {
         let result = async {
             let cipher = self.transport.receive().await?;
             let plain = self.channel.decrypt(&cipher)?;
-            Ok(protocol::unpack(&plain)?)
+            let response: Response = protocol::unpack(&plain)?;
+            if matches!(response.event, protocol::messages::Event::DirectReady {}) {
+                let key = self
+                    .direct_key
+                    .context("unexpected direct negotiation reply")?;
+                self.transport.enable_direct(key)?;
+            }
+            Ok(response)
         }
         .await;
         if result.is_err() {
             self.channel.close();
-            self.transport.failed = true;
-            self.transport.task.abort();
+            self.transport.fail();
         }
         result
     }
+    pub fn connection_kind(&self) -> protocol::messages::ConnectionKind {
+        self.transport.kind()
+    }
+    pub async fn enable_direct(&mut self) -> Result<()> {
+        if self.direct_key.is_none() {
+            let key = protocol::random32()?;
+            self.request(Operation::EnableDirect {
+                key: protocol::encode(&key),
+            })
+            .await?;
+            self.direct_key = Some(key);
+        }
+        Ok(())
+    }
     pub async fn close(mut self) {
         self.channel.close();
-        if let Some(shutdown) = self.transport.shutdown.take() {
-            let _ = shutdown.send(());
-        }
-        if timeout(Duration::from_millis(250), &mut self.transport.task)
-            .await
-            .is_err()
-        {
-            self.transport.task.abort();
-            let _ = (&mut self.transport.task).await;
-        }
+        self.transport.close().await;
     }
 }
 struct Write {
@@ -314,6 +334,19 @@ impl Transport {
             shutdown: Some(shutdown),
         }
     }
+    async fn close(&mut self) {
+        if let Some(stop) = self.shutdown.take() {
+            let _ = stop.send(());
+        }
+        if timeout(Duration::from_millis(250), &mut self.task)
+            .await
+            .is_err()
+        {
+            self.task.abort();
+            let _ = (&mut self.task).await;
+        }
+    }
+    #[cfg(test)]
     async fn send(&mut self, data: Vec<u8>) -> Result<()> {
         ensure!(!self.failed, "连接已关闭");
         // Dropping this future also closes the socket and discards unsent writes.
@@ -333,8 +366,9 @@ impl Transport {
             }
         }
     }
+    #[cfg(test)]
     async fn send_inner(&self, data: Vec<u8>) -> Result<()> {
-        ensure!(data.len() <= protocol::MAX_CIPHERTEXT, "消息过大");
+        ensure!(data.len() <= protocol::MAX_WIRE_PAYLOAD, "消息过大");
         let (completed, ack) = tokio::sync::oneshot::channel();
         timeout(DEADLINE, self.outgoing.send(Write { data, completed }))
             .await
@@ -399,7 +433,7 @@ async fn pump(
             frame = next(&mut socket) => match frame? {
                 RelayFrame::Data {peer: source, data, sequence: Some(sequence)} if source == peer => {
                     ensure!(sequence == received_sequence.checked_add(1).context("接收序号耗尽")?, "中转消息序号错误");
-                    let bytes = protocol::decode(&data, protocol::MAX_CIPHERTEXT)?;
+                    let bytes = protocol::decode(&data, protocol::MAX_WIRE_PAYLOAD)?;
                     ensure!(sequence.saturating_sub(acknowledged_sequence) <= 8, "中转超出接收额度");
                     // Relay credits remain spent until the consumer takes these
                     // bytes. Never await queue space here: outbound writes may
@@ -492,6 +526,7 @@ impl Session {
                 channel,
                 remote_key,
                 next: 1,
+                direct_key: None,
                 transport: Transport {
                     outgoing,
                     incoming,
@@ -500,7 +535,8 @@ impl Session {
                     task,
                     failed: false,
                     shutdown: Some(shutdown),
-                },
+                }
+                .into(),
             },
             observed,
         )
@@ -682,7 +718,8 @@ mod tests {
             .await
             .unwrap();
         let mut session = Session {
-            transport: Transport::start(socket, "fixture".into()),
+            transport: Transport::start(socket, "fixture".into()).into(),
+            direct_key: None,
             channel: client_channel,
             remote_key,
             next: 1,
@@ -735,7 +772,8 @@ mod tests {
             .unwrap();
         let (channel, _, remote_key) = channels();
         Session {
-            transport: Transport::start(socket, "fixture".into()),
+            transport: Transport::start(socket, "fixture".into()).into(),
+            direct_key: None,
             channel,
             remote_key,
             next: 1,

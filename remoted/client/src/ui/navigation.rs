@@ -8,30 +8,13 @@ pub enum Section {
     Terminal,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum InteractionMode {
-    Terminal,
-    Conversation,
-}
-impl InteractionMode {
-    pub fn default_for(os: Os) -> Self {
-        if os == Os::Android {
-            Self::Conversation
-        } else {
-            Self::Terminal
-        }
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Presentation {
-    mode: InteractionMode,
     composer: bool,
 }
 impl Default for Presentation {
     fn default() -> Self {
         Self {
-            mode: InteractionMode::default_for(os()),
             composer: os() == Os::Android,
         }
     }
@@ -64,19 +47,9 @@ impl Navigation {
             presentations: signal(HashMap::new()),
         }
     }
-    pub fn mode(self, stream: &str) -> InteractionMode {
-        self.presentations
-            .with(|values| values.get(stream).copied().unwrap_or_default().mode)
-    }
-    pub fn set_mode(self, stream: &str, mode: InteractionMode) {
-        self.presentations
-            .update(|values| values.entry(stream.into()).or_default().mode = mode);
-    }
     pub fn composer_visible(self, stream: &str) -> bool {
-        self.presentations.with(|values| {
-            let value = values.get(stream).copied().unwrap_or_default();
-            value.composer || value.mode == InteractionMode::Conversation
-        })
+        self.presentations
+            .with(|values| values.get(stream).copied().unwrap_or_default().composer)
     }
     pub fn toggle_composer(self, stream: &str) {
         self.presentations.update(|values| {

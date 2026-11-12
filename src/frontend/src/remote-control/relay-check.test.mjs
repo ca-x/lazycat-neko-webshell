@@ -23,19 +23,19 @@ test('opening the socket alone is insufficient; valid JSON health response close
   const result = checkRelayAddress('https://relay.example', {WebSocket: Socket});
   const socket = Socket.instances.at(-1);
   assert.equal(socket.url, 'wss://relay.example/healthz');
-  assert.equal(socket.protocol, 'neko.remoted.v1');
+  assert.equal(socket.protocol, 'neko.remoted.v3');
   let done = false;
   result.then(() => done = true);
   await Promise.resolve();
   assert.equal(done, false);
-  socket.message(JSON.stringify({protocol:'neko.remoted.v1', version:1}));
+  socket.message(JSON.stringify({protocol:'neko.remoted.v3', version:3}));
   await result;
   assert.equal(socket.closed, true);
   assert.equal(socket.onmessage, null);
 });
 
 test('invalid, binary, incompatible and oversized responses fail closed', async () => {
-  for (const data of ['bad json', 'null', '{}', JSON.stringify({protocol:'neko.remoted.v1',version:2}), new Uint8Array(2), ' '.repeat(1025), '橘'.repeat(500)]) {
+  for (const data of ['bad json', 'null', '{}', JSON.stringify({protocol:'neko.remoted.v3',version:2}), new Uint8Array(2), ' '.repeat(1025), '橘'.repeat(500)]) {
     const result = checkRelayAddress('wss://relay.example', {WebSocket: Socket});
     const socket = Socket.instances.at(-1);
     socket.message(data);

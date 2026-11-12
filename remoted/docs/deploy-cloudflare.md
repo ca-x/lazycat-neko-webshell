@@ -32,17 +32,17 @@ curl --fail --show-error --silent "${RELAY_ORIGIN%/}/healthz"
 预期 JSON：
 
 ```json
-{"protocol":"neko.remoted.v2","version":2}
+{"protocol":"neko.remoted.v3","version":3}
 ```
 
-Web 设置在启用前会通过同一个 `/healthz` 入口进行 WebSocket 健康检查，子协议为 `neko.remoted.v2`；收到版本响应后立即关闭，不创建主机或设备连接。若更新小橘后出现健康检查失败，请先同步部署本仓库的 Relay 版本。关闭远程控制不要求 Relay 在线。
+Web 设置在启用前会通过同一个 `/healthz` 入口进行 WebSocket 健康检查，子协议为 `neko.remoted.v3`；收到版本响应后立即关闭，不创建主机或设备连接。若更新小橘后出现健康检查失败，请先同步部署本仓库的 Relay 版本。关闭远程控制不要求 Relay 在线。
 
 此检查只证明 Worker 入口可访问。还需用实际应用验证 WebSocket、主机注册、Noise 配对与权限；HTML 登录页、反向代理挑战或无法透传升级请求的代理都不能替代此协议。
 
 ## 2. 手动配置两端
 
 1. 在具备 LightOS 认证与归属查询能力的小橘终端部署中，以部署所有者身份打开远程控制设置，填写刚部署的 Relay origin 并启用。等待主机状态变为在线。
-2. 在原生客户端单独填写相同 Relay origin。允许 `https://` 或 `wss://`，内部规范为 `wss://`。仅允许 origin，可带端口，不允许账号密码、子路径、query 或 fragment；不要填写 `/healthz` 或 `/v2/host/...`。
+2. 在原生客户端单独填写相同 Relay origin。允许 `https://` 或 `wss://`，内部规范为 `wss://`。仅允许 origin，可带端口，不允许账号密码、子路径、query 或 fragment；不要填写 `/healthz` 或 `/v3/host/...`。
 3. 主机在线后生成设备码，在客户端手动输入。设备码绑定 Relay 地址，不能从码中自动切换 Relay；域名或端口不同也会导致绑定不符。扫码是否可用取决于平台适配和实际设备验证，手动输入是独立流程。
 4. 设备码有效期为 300 秒；生成新码会替换当前邀请。客户端发起配对后，主机端待审批请求有效期为 120 秒。核对设备名称、身份指纹和客户端展示的主机身份，再选择会话与只读/可操作权限并批准。
 5. 用只读设备检查资源列表和终端输出，再按需验证写权限、文件根目录限制与撤销。已绑定设备使用保存的身份重连，不重复使用设备码。
@@ -56,10 +56,10 @@ Web 设置在启用前会通过同一个 `/healthz` 入口进行 WebSocket 健�
 默认不设置 `REGISTRATION_KEY`。主机自行生成并持久化独立 32 字节 routing secret，每次注册都发送：
 
 ```http
-GET /v2/host/<route> HTTP/1.1
+GET /v3/host/<route> HTTP/1.1
 Upgrade: websocket
 Connection: Upgrade
-Sec-WebSocket-Protocol: neko.remoted.v2
+Sec-WebSocket-Protocol: neko.remoted.v3
 Authorization: Bearer <routing_secret>
 ```
 
@@ -134,7 +134,7 @@ Cloudflare 对标准 WebSocket API 的 Durable Object 活跃时长有相应计�
 | 现象 | 检查方向 |
 | --- | --- |
 | `404 NOT_FOUND` | 路径、route 规范编码；接口禁止 query |
-| `426 WEBSOCKET_REQUIRED` / `400 PROTOCOL_REQUIRED` | 是否正确执行 WebSocket 升级及发送 `neko.remoted.v2` 子协议 |
+| `426 WEBSOCKET_REQUIRED` / `400 PROTOCOL_REQUIRED` | 是否正确执行 WebSocket 升级及发送 `neko.remoted.v3` 子协议 |
 | `401 BAD_HOST_CREDENTIAL` | host 的 routing secret 是否与 route 匹配；不要把设备码当 Bearer token |
 | `403 REGISTRATION_DENIED` | 是否误设 `REGISTRATION_KEY`，以及主机是否具备额外头支持 |
 | `503 HOST_OFFLINE` | 当前 route 的主机未连上；healthz 正常也可能出现 |

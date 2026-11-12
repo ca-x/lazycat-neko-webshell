@@ -286,6 +286,12 @@ try {
     await window.controller.refresh();
   })()`);
   assert.equal(await evaluate(`document.querySelector('[data-device-management]').open && document.activeElement === window.permissionDraft && window.permissionDraft.value === 'operate'`), true);
+  await evaluate(`(async () => { window.remote.devices[0].connectionTypes = ['direct']; await window.controller.refresh(); })()`);
+  assert.equal(await evaluate(`document.querySelector('[data-device-path] svg').dataset.kind === 'direct' && document.activeElement === window.permissionDraft && document.querySelector('[data-device-management]').open`), true);
+  await browser.command(["click", "[data-device-path] > summary"]);
+  assert.equal(await evaluate(`document.querySelector('[data-device-path]').open && document.querySelector('[data-connection-detail]').textContent.length > 0`), true);
+  await browser.command(["click", "[data-device-path] > summary"]);
+  await evaluate(`window.permissionDraft.focus()`);
   await evaluate(`(async () => { window.remote.devices[0].name = 'Phone renamed'; await window.controller.refresh(); })()`);
   assert.equal(await evaluate(`document.querySelector('[data-device-management]').open && document.activeElement === document.querySelector('[data-device] select') && document.activeElement.value === 'operate'`), true);
   await evaluate(`(async () => { window.remote.devices[0].name = 'Phone <test>'; await window.controller.refresh(); })()`);

@@ -1,5 +1,6 @@
 //! Single outbound host connection; each peer owns its authenticated Noise state.
 mod credits;
+mod path;
 use super::{heartbeat::Heartbeat, store::Peer};
 use crate::state::AppState;
 use anyhow::{Context, Result, ensure};
@@ -19,6 +20,7 @@ use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 use tokio_util::sync::CancellationToken;
 
 pub struct Link {
+    pub(super) transport: std::sync::OnceLock<neko_remoted_transport::Sender>,
     pub peer: String,
     pub outgoing: mpsc::Sender<RelayFrame>,
     pub credits: Arc<Semaphore>,
@@ -26,6 +28,9 @@ pub struct Link {
 }
 impl Link {
     pub async fn send(&self, bytes: &[u8]) -> Result<()> {
+        if let Some(sender) = self.transport.get() {
+            return sender.send(bytes.to_vec()).await;
+        }
         let permit = tokio::select! {biased;()=self.cancel.cancelled()=>anyhow::bail!("connection closed"),p=self.credits.clone().acquire_owned()=>p?};
         let frame = RelayFrame::Data {
             peer: self.peer.clone(),
@@ -178,15 +183,16 @@ async fn serve(
                    ensure!(registered,"relay peer before host registration");
                    if peers.len()>=protocol::MAX_PEERS||peers.contains_key(&peer){let _=tx.try_send(RelayFrame::Closed{peer});continue;}
                    let(input,incoming)=mpsc::channel(9);let token=cancel.child_token();let credits=Arc::new(Semaphore::new(8));
-                   let link=Link{peer:peer.clone(),outgoing:tx.clone(),credits:credits.clone(),cancel:token.clone()};
+                   let link=Link{transport:std::sync::OnceLock::new(),peer:peer.clone(),outgoing:tx.clone(),credits:credits.clone(),cancel:token.clone()};
                    peers.insert(peer.clone(),Inbound{tx:input,credits,cancel:token.clone()});
-                   if let Ok(mut rt)=state.remoted.runtime.lock(){rt.peers.insert(peer.clone(),Peer{device:None,cancel:token,rtt:None});}
+                   let incoming=link.start_transport(incoming)?;
+                   if let Ok(mut rt)=state.remoted.runtime.lock(){rt.peers.insert(peer.clone(),Peer{path:link.transport.get().cloned(),device:None,cancel:token,rtt:None});}
                    let s=Arc::clone(&state);tasks.spawn(async move{let _=super::peer::run(&s,&link,incoming).await;link.cancel.cancel();link.peer.clone()});
                   },
                   RelayFrame::Hello{peer,mode}=>if let Some(p)=peers.get(&peer) && p.tx.try_send(Input::Hello(mode)).is_err(){p.cancel.cancel();},
                   RelayFrame::Data{peer,data,sequence:Some(sequence)}=>{
                    let receipt=Receipt::new(sequence,completed.clone());
-                   if let Some(p)=peers.get(&peer){match protocol::decode(&data,protocol::MAX_CIPHERTEXT){Ok(data)=>if p.tx.try_send(Input::CreditedData{data,receipt}).is_err(){p.cancel.cancel();},Err(_)=>p.cancel.cancel()}}
+                   if let Some(p)=peers.get(&peer){match protocol::decode(&data,protocol::MAX_WIRE_PAYLOAD){Ok(data)=>if p.tx.try_send(Input::CreditedData{data,receipt}).is_err(){p.cancel.cancel();},Err(_)=>p.cancel.cancel()}}
                   },
                   RelayFrame::Delivered{peer,count}=>if let Some(p)=peers.get(&peer){if count>0&&p.credits.available_permits()+usize::from(count)<=8{p.credits.add_permits(usize::from(count));}else{p.cancel.cancel();}},
                   RelayFrame::Closed{peer}=>if let Some(p)=peers.get(&peer){p.cancel.cancel();},

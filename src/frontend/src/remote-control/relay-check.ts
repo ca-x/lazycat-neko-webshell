@@ -23,7 +23,7 @@ export async function checkRelayAddress(relay: string, options: { WebSocket?: ty
   const Socket = options.WebSocket ?? WebSocket;
   await new Promise<void>((resolve, reject) => {
     let socket: WebSocket;
-    try { socket = new Socket(address, "neko.remoted.v1"); }
+    try { socket = new Socket(address, "neko.remoted.v3"); }
     catch { reject(new RelayCheckError("connection")); return; }
     let settled = false;
     const finish = (reason?: RelayCheckFailure) => {
@@ -42,7 +42,7 @@ export async function checkRelayAddress(relay: string, options: { WebSocket?: ty
         || new TextEncoder().encode(event.data).byteLength > 1024) { finish("response"); return; }
       try {
         const data = JSON.parse(event.data);
-        finish(data?.protocol === "neko.remoted.v1" && data?.version === 1 ? undefined : "response");
+        finish(data?.protocol === "neko.remoted.v3" && data?.version === 3 ? undefined : "response");
       } catch { finish("response"); }
     };
   });

@@ -3,12 +3,12 @@
 neoko-terminal 是独立原生终端，桌面端可直接创建本机终端、hc 持久化终端、接入本机 Herdr，也可与 WebShell 或另一台原生桌面配对。远程 WebShell 连接保留普通终端、Herdr 和文件传输；本机桌面暂不提供文件共享。设置中的“默认会话后端”只影响本机新建会话；切换默认值不会改变已有会话。hc 与 Herdr 缺失时显示安装指南和连接/启动入口，不能静默回退到另一后端。
 产品更名保留 `community.lazycat.neko.remoted` APP_ID 和系统凭据标识，不迁移或清除已有配对。
 可执行文件与 deb 包改名为 `neoko-terminal`；deb 声明替换旧 `neko-remoted-desktop` 包。
-macOS 显示名及目录统一为 `neoko-terminal.app`。
+macOS 目录为 `neoko-terminal.app`；中文系统显示“小橘终端”，英文显示 `neoko-terminal`。Linux 应用菜单也提供中英文名称。
 
-桌面采用独立版本 **0.4.1**，发行源码 tag 为 `neoko-terminal-desktop-v0.4.1`。
-本桌面构件使用共享 crate `0.3.0`，Android 按独立版本更新，既有发布 tag 不变。
+桌面采用独立版本 **0.5.0**，发行源码 tag 为 `neoko-terminal-desktop-v0.5.0`。
+本桌面构件使用共享 crate `0.4.0`，Android 按独立版本更新，既有发布 tag 不变。
 桌面版本进入包名、deb/APP 元数据与 `build-info.json`；`crate_version` 记录共享源码的
-0.3.0。`cargo_binary_sha256` 标识打包前的 Cargo binary（Mac ad-hoc 签名会改变 APP 内的 binary）。
+0.4.0。`cargo_binary_sha256` 标识打包前的 Cargo binary（Mac ad-hoc 签名会改变 APP 内的 binary）。
 桌面包通过独立发行流程发布，不使用 Android 的三资产 publisher。
 
 ## 支持范围
@@ -19,9 +19,10 @@ NSH CLI 的默认桌面打包不包含应用自定义启动锁，且没有所需
 binary 并按平台打包；没有替换或修改 NSH。
 
 正式 `v0.5.0` tag 解引用到上述 SHA。`TerminalApi` 和 emulator trait 无破坏性
-变更；普通终端及 Herdr pane 使用 NSH 原生 Terminal，保留只读/控制视图共用
-一个 emulator 的适配，禁止重复 feed 或由渲染端回复 PTY 查询。共享 buffer 的
-trait 读取不建立响应式订阅，避免 resize/feed 持有借用期间同步重入行渲染。
+变更；普通终端及 Herdr pane 共用 Ghostty VT buffer，应用按原生 cell 的列、占格和
+完整 grapheme 绘制固定网格。NSH Terminal 仅负责原生键盘、IME 和粘贴输入，不决定
+共享 VT 的尺寸。禁止重复 feed 或由渲染端回复 PTY 查询。共享 buffer 的 trait 读取
+不建立响应式订阅，避免 feed 持有借用期间同步重入行渲染。
 Android IME 的验收边界见 [Android 文档](android.md#nsh-050-terminalinput-boundary)。
 
 | 能力 | 桌面实现与限制 |
@@ -54,7 +55,7 @@ Linux 构建依赖（CI 为 Ubuntu 24.04）：
 sudo apt-get install libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   libdbus-1-dev pkg-config dpkg-dev gnome-keyring dbus-x11
 rustup target add x86_64-unknown-linux-gnu
-python3 remoted/client/scripts/build-desktop.py --version 0.4.1 \
+python3 remoted/client/scripts/build-desktop.py --version 0.5.0 \
   --target x86_64-unknown-linux-gnu
 ```
 
@@ -62,7 +63,7 @@ Windows x64 使用 MSVC 和 Windows SDK（GitHub windows-2022 已有）：
 
 ```powershell
 rustup target add x86_64-pc-windows-msvc
-python remoted/client/scripts/build-desktop.py --version 0.4.1 --target x86_64-pc-windows-msvc
+python remoted/client/scripts/build-desktop.py --version 0.5.0 --target x86_64-pc-windows-msvc
 ```
 
 Mac 两个 CPU 分别打独立包；NSH 使用 macOS 14 API，最低系统版本 **14.0**，不是 12/13：
@@ -70,16 +71,16 @@ Mac 两个 CPU 分别打独立包；NSH 使用 macOS 14 API，最低系统版本
 ```sh
 export MACOSX_DEPLOYMENT_TARGET=14.0
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
-python3 remoted/client/scripts/build-desktop.py --version 0.4.1 --target aarch64-apple-darwin
-python3 remoted/client/scripts/build-desktop.py --version 0.4.1 --target x86_64-apple-darwin
+python3 remoted/client/scripts/build-desktop.py --version 0.5.0 --target aarch64-apple-darwin
+python3 remoted/client/scripts/build-desktop.py --version 0.5.0 --target x86_64-apple-darwin
 ```
 
 默认输出 `remoted/client/target/desktop-dist/`，每个目标生成包、独立 build-info 和 SHA-256：
 
-- `neoko-terminal-0.4.1-x86_64-pc-windows-msvc.zip`，内含 EXE、安装说明和许可证。
-- `neoko-terminal-0.4.1-aarch64-apple-darwin.zip`，内含 `neoko-terminal.app`。
-- `neoko-terminal-0.4.1-x86_64-apple-darwin.zip`，独立 Intel APP。
-- `neoko-terminal-0.4.1-x86_64-unknown-linux-gnu.deb`，含 desktop entry、图标、许可证。
+- `neoko-terminal-0.5.0-x86_64-pc-windows-msvc.zip`，内含 EXE、安装说明和许可证。
+- `neoko-terminal-0.5.0-aarch64-apple-darwin.zip`，内含 `neoko-terminal.app`。
+- `neoko-terminal-0.5.0-x86_64-apple-darwin.zip`，独立 Intel APP。
+- `neoko-terminal-0.5.0-x86_64-unknown-linux-gnu.deb`，含 desktop entry、图标、许可证。
 
 Windows 运行前需安装 [Microsoft Visual C++ Redistributable x64](https://aka.ms/vs/17/release/vc_redist.x64.exe)；当前 EXE 导入 `VCRUNTIME140.dll` 和 `VCRUNTIME140_1.dll`，ZIP 未附带这两个运行库。Windows 未签名，可能触发 SmartScreen。Mac **仅 ad-hoc 签名，没有 Developer ID、没有公证**；
 Gatekeeper 可能要求系统设置中的“仍要打开”。不能把 codesign verify 通过称为官方签名或公证。
@@ -99,7 +100,7 @@ Android 使用独立 `neoko-terminal-android-vX.Y.Z` tag，不触发桌面或 We
 ```sh
 # 完成 commit/tag/push 后
 # workflow 必须已存在于默认分支，才能从该 tag 手动 dispatch。
-gh workflow run neoko-terminal-desktop.yml --ref neoko-terminal-desktop-v0.4.1 -f desktop_version=0.4.1
+gh workflow run neoko-terminal-desktop.yml --ref neoko-terminal-desktop-v0.5.0 -f desktop_version=0.5.0
 gh run list --workflow neoko-terminal-desktop.yml --limit 5
 gh run watch RUN_ID --exit-status
 gh run download RUN_ID --dir /tmp/remoted-desktop-ci
@@ -160,5 +161,10 @@ HOME="$test_home" XDG_DATA_HOME="$test_home/data" dbus-run-session sh -c '
 侧栏组织设备和工作区、底部定位 Agent，主区使用单行标签并尽量留给终端。
 实现继续使用本项目的 NSH 组件和语义主题，没有引入 Herdr 的 GPUI 界面实现。
 
-终端和对话是同一会话的两种视图。桌面终端模式以直接键盘输入为主，对话输入框按需出现；
-移动端保留适合触控和输入法的入口。普通终端输出始终明确标为终端输出，不伪装成 Agent 回复。
+所有会话统一使用终端交互，没有 Chat 模式切换。桌面直接键盘输入，输入栏按需展开；
+移动端默认展开适合触控与中文输入法的输入栏，保留 Esc、Ctrl+C 等快捷键。
+Herdr 的纯文本快照会单独规范换行，并保留源列宽；普通 PTY 原始字节不会经过文本规范化。
+
+原生包内嵌 WebShell 同款 Hack Nerd Font Mono、Symbols Nerd Font Mono、Maple Mono NF CN，
+无需联网下载或用户安装字体。源码复用 WebShell 的原文件，包内附带授权文本。
+主机别名只保存在本客户端，可以离线编辑；修改别名不会重新配对或中断会话。

@@ -121,9 +121,24 @@ print('KEY-CAPTURE-PASS' if data==expected else 'KEY-CAPTURE-FAIL:'+data.hex(),f
         input(client, stream, b"\x1b[999~").await,
         Event::Error { .. }
     ));
-    for (bytes, _) in &cases {
-        let event = input(client, stream, bytes).await;
-        assert!(matches!(event, Event::Ok), "key frame {bytes:?}: {event:?}");
+    // Exercise separate key frames with bounded pipelining. Waiting a full
+    // public-network round trip after every key can outlive raw capture even
+    // when each frame is delivered correctly; real typing also overlaps replies.
+    for batch in cases.chunks(4) {
+        let mut requests = Vec::with_capacity(batch.len());
+        for (bytes, _) in batch {
+            let id = client
+                .request(Operation::TerminalInput {
+                    stream: stream.into(),
+                    data: protocol::encode(bytes),
+                })
+                .await;
+            requests.push((id, bytes));
+        }
+        for (id, bytes) in requests {
+            let event = client.response(id).await;
+            assert!(matches!(event, Event::Ok), "key frame {bytes:?}: {event:?}");
+        }
     }
     client.output(stream, b"KEY-CAPTURE-PASS").await;
     eprintln!(

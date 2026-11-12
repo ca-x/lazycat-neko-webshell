@@ -186,6 +186,12 @@ async fn run_inner(
                         }
                         response(link, &mut channel, request.id, Event::Ok).await?;
                     }
+                    Operation::EnableDirect { key } => {
+                        ensure!(ready, "authentication is not ready");
+                        // Device authorization is checked independently of the transport path.
+                        link.enable_direct(protocol::decode32(&key)?)?;
+                        response(link, &mut channel, request.id, Event::DirectReady {}).await?;
+                    }
                     Operation::Ping { nonce } => {
                         ensure!(nonce.len() <= 128, "heartbeat nonce exceeds limit");
                         response(link, &mut channel, request.id, Event::Pong { nonce }).await?;
@@ -195,8 +201,14 @@ async fn run_inner(
             }
             message = responses.recv() => {
                 let message = message.context("business session closed")?;
-                if matches!(message.event, Event::Ready { .. }) { ready = true; }
+                let becoming_ready = matches!(message.event, Event::Ready { .. });
+                if becoming_ready { ready = true; }
                 link.send(&channel.encrypt(&protocol::pack(&message)?)?).await?;
+                if becoming_ready {
+                    if let Some(name) = reported_host_name() {
+                        response(link, &mut channel, 0, Event::HostInfo { name }).await?;
+                    }
+                }
             }
             _ = ticks.tick(), if ready => {
                 ensure!(!ping.as_ref().is_some_and(|(_, sent)| sent.elapsed() >= Duration::from_secs(30)), "device heartbeat timed out");
@@ -303,4 +315,9 @@ async fn pair_identity(
         "pairing persistence acknowledgement required"
     );
     Ok(device)
+}
+
+fn reported_host_name() -> Option<String> {
+    let name = hostname::get().ok()?.to_string_lossy().trim().to_owned();
+    (!name.is_empty() && name.len() <= 128 && !name.chars().any(char::is_control)).then_some(name)
 }

@@ -33,6 +33,13 @@ ${["anyhow", "serde", "serde_json", "tokio", "unicode-width", "nsh-core", "nsh-b
 ${["nsh-engine", "nsh-testing"].map(dependency).join("\n")}
 `);
   const pathLiteral = (path) => JSON.stringify(path);
+  // This crate lives in /tmp. Keep both include_bytes! and registry metadata
+  // pointing at the original WebShell fonts instead of the temporary manifest.
+  const fontSource = (await readFile(join(client, "src/fonts.rs"), "utf8"))
+    .replaceAll('env!("CARGO_MANIFEST_DIR")', pathLiteral(client))
+    .replaceAll(/"(\.\.\/\.\.\/\.\.\/src\/frontend\/public\/fonts\/[^"\n]+)"/g,
+      (_, path) => pathLiteral(resolve(client, "src", path)));
+  await writeFile(join(temporary, "fonts.rs"), fontSource);
   let controlsPath = join(client, "src/ui/controls.rs");
   if (baselineControls) {
     const result = spawnSync("git", ["show", "HEAD:remoted/client/src/ui/controls.rs"], { cwd: client, encoding: "utf8" });
@@ -41,6 +48,7 @@ ${["nsh-engine", "nsh-testing"].map(dependency).join("\n")}
     await writeFile(controlsPath, result.stdout);
   }
   await writeFile(join(temporary, "lib.rs"), `#![allow(dead_code)]
+pub(crate) mod fonts;
 #[path = ${pathLiteral(join(client, "src/preferences.rs"))}]
 pub mod preferences;
 #[path = ${pathLiteral(join(client, "src/terminal.rs"))}]
@@ -52,6 +60,8 @@ ${modelOnly ? "" : `mod ui {
     pub mod preferences;
     #[path = ${pathLiteral(join(client, "src/ui/terminal_colors.rs"))}]
     pub mod terminal_colors;
+    #[path = ${pathLiteral(join(client, "src/ui/screen_text.rs"))}]
+    pub mod screen_text;
     #[path = ${pathLiteral(join(client, "src/ui/terminal_surface.rs"))}]
     pub mod terminal_surface;
     #[path = ${pathLiteral(join(client, "src/ui/terminal_observer.rs"))}]

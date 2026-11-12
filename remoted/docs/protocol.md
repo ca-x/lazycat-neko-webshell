@@ -1,4 +1,4 @@
-# 小橘远程协议 v2
+# 小橘远程协议 v3
 
 本协议用于小橘主机与原生客户端间的远程终端、Herdr 和文件操作。它使用独立的应用消息封装，不声称与 TMP `tmp.pb.v1` 或 Alma Relay 的线协议兼容。共享类型及严格解析器位于 `protocol/src`；线上兼容判断以类型、常量与测试为准。
 
@@ -6,13 +6,13 @@
 
 两端先手动配置同一个 HTTPS/WSS **origin**。拒绝 HTTP、用户信息、路径、查询和 fragment。HTTPS 与 WSS 规范化为同一个 WSS origin，不从设备码自动切换中转。
 
-主机独立生成 32 字节 routing secret；route 为该 secret 的 SHA-256 完整摘要。所有二进制字段使用不带 padding 的规范 base64url。主机连接 `wss://<origin>/v2/host/<route>`，在 Authorization 中携带 `Bearer <routing-secret>`；客户端连接 `/v2/client/<route>`。双方必须协商 WebSocket 子协议 `neko.remoted.v2`。Worker 每次注册或替换主机均重新验证 secret，错误凭据不能踢下现有主机。可选部署级 registration key 只限制首次注册，不参与设备认证。
+主机独立生成 32 字节 routing secret；route 为该 secret 的 SHA-256 完整摘要。所有二进制字段使用不带 padding 的规范 base64url。主机连接 `wss://<origin>/v3/host/<route>`，在 Authorization 中携带 `Bearer <routing-secret>`；客户端连接 `/v3/client/<route>`。双方必须协商 WebSocket 子协议 `neko.remoted.v3`。Worker 每次注册或替换主机均重新验证 secret，错误凭据不能踢下现有主机。可选部署级 registration key 只限制首次注册，不参与设备认证。
 
 Relay 可看到路由凭据、连接元数据、流量大小和握手/密文，不保存应用私钥、邀请 PSK 或懒猫用户票据。TLS 信任中转服务，但中转不能代替主机批准设备；已绑定客户端使用钉住的 Noise 主机公钥重连。
 
 Worker 为每个客户端分配连接级 UUID，发送 `connected` 给客户端及 `opened` 给主机。客户端发送 `hello`，mode 为 `pair` 或 `connect`。Worker 使用实际连接替换所有客户端声明的 peer；peer 不是已认证设备身份。主机替换使旧 generation 的全部客户端断开，旧 close 事件不得影响新主机。主机离线返回 HTTP 503。
 
-v2 没有 v1 路由或子协议回退；Relay、主机和客户端需要协调更新。设备码格式版本与传输版本独立。
+v3 不提供旧版路由或子协议回退；Relay、主机和客户端需要协调更新。设备码格式版本与传输版本独立。
 
 ## 加密与绑定
 
@@ -21,7 +21,7 @@ v2 没有 v1 路由或子协议回退；Relay、主机和客户端需要协调�
 - 首次配对：`Noise_XXpsk3_25519_ChaChaPoly_BLAKE2s`，32 字节随机 PSK。
 - 已批准设备重连：`Noise_IK_25519_ChaChaPoly_BLAKE2s`，客户端钉住主机 static key，主机验证批准列表中的客户端 static key。
 
-Prologue 为 JSON 编码的数组：`["neko-remoted",2,mode,route,relayDigest]`，relayDigest 是规范 WSS origin 的 SHA-256 前 8 字节的 base64url。握手消息不含业务 payload。任意认证、重复密文或解密错误使整个 Channel 失效，不能继续发送或接收。
+Prologue 为 JSON 编码的数组：`["neko-remoted",3,mode,route,relayDigest]`，relayDigest 是规范 WSS origin 的 SHA-256 前 8 字节的 base64url。握手消息不含业务 payload。任意认证、重复密文或解密错误使整个 Channel 失效，不能继续发送或接收。
 
 设备码容器格式仍为 `NR1.<route>.<psk>.<relayDigest>.<checksum>`，checksum 为前四段连接字符串的 SHA-256 前 5 字节。设备码是高熵短期秘密，扫码与手输得到相同内容。校验仅用于输入损坏检查。邀请有效期 5 分钟，一次有效配对即消耗；主机界面仍须明确批准，等待批准最多 120 秒。
 
@@ -34,6 +34,27 @@ Prologue 为 JSON 编码的数组：`["neko-remoted",2,mode,route,relayDigest]`�
 应用发送 `{type:"data",peer,data}`。Worker 在转发时添加接收连接级、从 1 递增的 `sequence`。接收方从有界队列取出记录后发送 `{type:"acknowledge",peer,sequence}`。ACK 精确对应单条 data，不是累计水位；不同设备可以乱序消费，不能替未消费的帧释放 credit。token 必须是当前接收 socket 发放的正安全整数；重复消费或设备关闭后晚到的已发放 token 是幂等空操作，未来 token 或错误 peer 拒绝。Worker 仅首次消费待确认项时，向对应发送方返回 `{type:"delivered",peer,count:1}`。每个 peer 最多有 8 条未消费记录；主机接收窗口为最多 16 个设备各 8 条，共 128 条。
 
 慢客户端只会使其自己的连接关闭，不使主机和其它客户端掉线。客户端传输任务持续消费交付确认，不能把 `delivered` 当业务事件或 Noise 密文。队列满、发送超时和序号错误均关闭连接；操作不自动重试。`delivered` 只确认接收端释放一条有界缓冲，**不证明远端业务操作已执行**。
+
+## NAT 直连与故障回退
+
+v3 在 Relay 的不透明 data 内使用 `NKT1` 封包。每个方向独立分配从 0 开始的 64 位记录序号，
+封包包括类型、序号和原始 Noise 密文；握手也从第一条记录开始使用同一封装。
+接收方仅按序交付一次，再交给 Noise 解密。最多保留八条未消费记录及八条窗口内的乱序记录。
+这一层累计消费 ACK 与 Worker 的逐帧精确 ACK 分开计算，均不表示业务操作已执行。
+
+主机返回 `ready` 后，客户端通过 Noise 发送 `enable_direct`，携带本连接新生成的 32 字节随机密钥；
+主机验证设备授权后返回 `direct_ready`。这把密钥仅保护当前连接的 ICE 信令，不能作为设备身份。
+SDP 与 DTLS 指纹通过 AEAD 加密后在现有 Relay 中交换，有界协商后台尝试 STUN/ICE 打洞，
+不要求两端拥有公网 IP、开放端口或配置端口映射。可靠有序的 WebRTC DataChannel 打开后才标记为直连。
+协商失败、对称 NAT 或 UDP 被阻止时继续使用 WSS；WSS 不因直连可用而关闭。
+
+直连中断或记录确认超时后，本连接永久回退 WSS，并重发尚未确认记录的**原始密文封包**。
+接收端序号去重使重复封包不进入 Noise，也不再次执行输入。不得为了通道切换重新加密同一记录，
+不得重试结果未知的应用请求。配对撤销、权限 generation 改变和关闭远程控制仍取消整个连接，
+包括直连任务。终端、Herdr 与文件均使用这一套传输，不增加新的终端探针回复方。
+
+认证后的 `host_info` 返回主机名称。客户端按主机身份保存名称，显示优先级为本地别名、
+上次返回的主机名称、指纹；本地改名不重新配对，不改变授权身份。
 
 ## 授权与控制权
 

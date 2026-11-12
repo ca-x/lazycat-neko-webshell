@@ -20,7 +20,7 @@ export function createDeviceList(container: HTMLElement, tr: Translate) {
       }
       if (!rows.size) container.replaceChildren();
       for (const [index, device] of devices.entries()) {
-        const { rttMs, connections, online, ...content } = device;
+        const { rttMs, connections, online, connectionTypes, ...content } = device;
         const signature = JSON.stringify([content, tr("remote.title")]);
         const previous = rows.get(device.id);
         let element = previous?.element;
@@ -31,7 +31,9 @@ export function createDeviceList(container: HTMLElement, tr: Translate) {
           const interactive = "summary, select, button";
           const focusIndex = previous ? Array.from(previous.element.querySelectorAll(interactive)).indexOf(document.activeElement!) : -1;
           if (previous) {
-            element.querySelector<HTMLDetailsElement>("details")!.open = previous.element.querySelector<HTMLDetailsElement>("details")!.open;
+            for (const selector of ["[data-device-management]", "[data-device-path]"]) {
+              element.querySelector<HTMLDetailsElement>(selector)!.open = previous.element.querySelector<HTMLDetailsElement>(selector)!.open;
+            }
             if (previous.permission === device.permission) element.querySelector<HTMLSelectElement>("select")!.value = previous.element.querySelector<HTMLSelectElement>("select")!.value;
             previous.element.replaceWith(element);
           }

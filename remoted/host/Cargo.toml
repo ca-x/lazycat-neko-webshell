@@ -13,8 +13,10 @@ libghostty-vt = { git = "https://github.com/uzaaft/libghostty-rs", rev = "cd4d49
 anyhow = "1"
 base64 = "0.22"
 futures-util = "0.3"
+hostname = "0.3.1"
 neko-hc-client = { path = "../../crates/hc-client" }
 neko-remoted-protocol = { path = "../protocol" }
+neko-remoted-transport = { path = "../transport" }
 neko-program-status = { path = "../../crates/program-status" }
 portable-pty = "0.9"
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }

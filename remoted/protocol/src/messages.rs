@@ -44,6 +44,17 @@ pub enum RelayFrame {
     },
 }
 
+/// The active connection path, independently from resource access permissions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionKind {
+    Local,
+    #[default]
+    Relay,
+    Connecting,
+    Direct,
+}
+
 /// Backend chosen when creating a session. Existing resources keep their own backend.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -95,6 +106,11 @@ pub enum Operation {
     },
     Pong {
         nonce: String,
+    },
+    /// Enable ICE only after authentication. This fresh connection-scoped key
+    /// protects signaling carried over the opaque Relay path.
+    EnableDirect {
+        key: String,
     },
     Resources {},
     TerminalAttach {
@@ -196,6 +212,12 @@ pub struct ProgramRecord {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Event {
+    /// Actual host metadata; clients may keep their own display alias.
+    HostInfo {
+        name: String,
+    },
+    /// The responder is ready for encrypted ICE signaling on this connection.
+    DirectReady {},
     Pending {
         fingerprint: String,
     },

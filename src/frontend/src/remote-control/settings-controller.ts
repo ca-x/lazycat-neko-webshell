@@ -1,3 +1,4 @@
+import { updateConnectionView } from "./connection-view.ts";
 import "./settings.css";
 import { checkRelayAddress, RelayCheckError } from "./relay-check.ts";
 import { remoteApi, RemoteApiError, type Invitation, type Permission, type RemoteAction, type RemoteState } from "./api.ts";
@@ -120,6 +121,7 @@ export function createRemoteControlSettings(options: {
       const device = state.devices.find(item => item.id === row.dataset.device);
       if (!device) continue;
       const online = !stale && state.enabled && status === "online" && device.online;
+      updateConnectionView(row.querySelector<HTMLElement>("[data-device-path]")!, device.connectionTypes ?? ["relay"], online, tr);
       row.querySelector<HTMLElement>("[data-device-status]")!.textContent = tr(online ? "remote.connected" : "remote.disconnected", { count: device.connections });
       row.querySelector<HTMLElement>("[data-device-rtt]")!.textContent = `${tr("remote.deviceRtt")}: ${format(freshRtt(device.rttMs, online, receivedAt, now()))}`;
     }
@@ -168,7 +170,7 @@ export function createRemoteControlSettings(options: {
       updatePending(find<HTMLElement>("[data-remote-pending]"), next.pending, sessions, tr);
       pendingSignature = nextPendingSignature;
     }
-    const nextDeviceSignature = JSON.stringify([next.devices.map(({ rttMs, connections, ...device }) => device), tr("remote.title")]);
+    const nextDeviceSignature = JSON.stringify([next.devices.map(({ rttMs, connections, connectionTypes, ...device }) => device), tr("remote.title")]);
     if (deviceSignature !== nextDeviceSignature) {
       deviceList.render(next.devices);
       deviceSignature = nextDeviceSignature;

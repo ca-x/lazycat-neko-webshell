@@ -24,10 +24,29 @@ pub struct Run {
     pub style: Style,
 }
 
+/// A renderable native cell. Wide-character tails are omitted; blank slots
+/// (including wide-wrap head spacers) retain their native column and style.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cell {
+    /// Zero-based column in the native row, including omitted tail slots.
+    pub column: usize,
+    /// Occupied native columns, independent of Unicode or font measurements.
+    pub width: usize,
+    /// The complete native grapheme, or one space for a blank slot.
+    pub text: String,
+    /// Resolved native style, with unchanged palette indices where possible.
+    pub style: Style,
+}
+
+struct Row {
+    runs: Vec<Run>,
+    cells: Vec<Cell>,
+}
+
 pub struct Emulator {
     terminal: Terminal<'static, 'static>,
     render: RenderState<'static>,
-    cache: (usize, Vec<Vec<Run>>),
+    cache: (usize, Vec<Row>),
     events: Rc<RefCell<Vec<Event>>>,
 }
 
@@ -99,27 +118,40 @@ impl Emulator {
     }
 
     pub fn line(&mut self, index: usize) -> Result<Vec<Run>, Error> {
-        if index >= self.line_count()? {
-            return Ok(Vec::new());
-        }
-        let (start, lines) = &self.cache;
-        if let Some(line) = index
-            .checked_sub(*start)
-            .and_then(|offset| lines.get(offset))
-        {
-            return Ok(line.clone());
-        }
-        let start = index.min(self.terminal.scrollback_rows()?);
-        self.terminal.scroll_viewport(ScrollViewport::Row(start));
-        let result = self.read_viewport();
-        self.terminal.scroll_viewport(ScrollViewport::Bottom);
-        let lines = result?;
-        let line = lines.get(index - start).cloned().unwrap_or_default();
-        self.cache = (start, lines);
-        Ok(line)
+        Ok(self
+            .row(index)?
+            .map(|row| row.runs.clone())
+            .unwrap_or_default())
     }
 
-    fn read_viewport(&mut self) -> Result<Vec<Vec<Run>>, Error> {
+    /// Read native cells without changing the cursor, modes, or reply authority.
+    ///
+    /// Returns an empty vector for a row outside the screen and scrollback.
+    ///
+    /// # Errors
+    /// Returns the native error if the render snapshot cannot be read.
+    pub fn cells(&mut self, index: usize) -> Result<Vec<Cell>, Error> {
+        Ok(self
+            .row(index)?
+            .map(|row| row.cells.clone())
+            .unwrap_or_default())
+    }
+
+    fn row(&mut self, index: usize) -> Result<Option<&Row>, Error> {
+        if index >= self.line_count()? {
+            return Ok(None);
+        }
+        if index < self.cache.0 || index - self.cache.0 >= self.cache.1.len() {
+            let start = index.min(self.terminal.scrollback_rows()?);
+            self.terminal.scroll_viewport(ScrollViewport::Row(start));
+            let result = self.read_viewport();
+            self.terminal.scroll_viewport(ScrollViewport::Bottom);
+            self.cache = (start, result?);
+        }
+        Ok(self.cache.1.get(index - self.cache.0))
+    }
+
+    fn read_viewport(&mut self) -> Result<Vec<Row>, Error> {
         let palette = self.terminal.color_palette()?;
         let defaults = self.terminal.default_color_palette()?;
         let resolve = |color: StyleColor, default: Option<libghostty_vt::color::Rgb>| match color {
@@ -139,12 +171,19 @@ impl Emulator {
         while let Some(row) = rows.next() {
             let mut cells = cells.update(row)?;
             let mut runs: Vec<Run> = Vec::new();
+            let mut native_cells = Vec::new();
+            let mut column = 0;
             while let Some(cell) = cells.next() {
+                // The iterator visits every native slot, including wide tails.
+                // Never infer columns from the text of a cell or a whole run.
+                let native_column = column;
+                column += 1;
                 let raw = cell.raw_cell()?;
-                let wide = raw.wide()?;
-                if wide == CellWide::SpacerTail {
-                    continue;
-                }
+                let width = match raw.wide()? {
+                    CellWide::Wide => 2,
+                    CellWide::Narrow | CellWide::SpacerHead => 1,
+                    CellWide::SpacerTail => continue,
+                };
                 let mut style = cell.style()?;
                 style.fg_color = resolve(style.fg_color, foreground);
                 style.bg_color = resolve(
@@ -165,10 +204,22 @@ impl Emulator {
                 if let Some(run) = runs.last_mut().filter(|run| run.style == style) {
                     run.text.push_str(&text);
                 } else {
-                    runs.push(Run { text, style });
+                    runs.push(Run {
+                        text: text.clone(),
+                        style,
+                    });
                 }
+                native_cells.push(Cell {
+                    column: native_column,
+                    width,
+                    text,
+                    style,
+                });
             }
-            lines.push(runs);
+            lines.push(Row {
+                runs,
+                cells: native_cells,
+            });
         }
         Ok(lines)
     }

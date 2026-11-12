@@ -1,6 +1,10 @@
 //! Literal vocabulary for host UI migration; dynamic values use translated `{}` templates.
 
 pub(super) const LITERALS: &[(&str, &str)] = &[
+    (
+        "此画面超出显示上限，部分内容已截断。",
+        "This screen exceeds the display limit; some content was clipped.",
+    ),
     ("设备与会话", "Devices and sessions"),
     ("添加主机", "Add host"),
     ("已配对主机", "Paired hosts"),
@@ -221,10 +225,7 @@ pub(super) const LITERALS: &[(&str, &str)] = &[
         "远程终端；取得控制权后可输入",
         "Remote terminal; take control to type",
     ),
-    (
-        "远程终端输出（只读，可选择和复制）",
-        "Remote terminal output (read only; select and copy)",
-    ),
+    ("终端输出，可选择和复制", "Terminal output; select and copy"),
     (
         "此会话为只读授权。",
         "This session has read-only authorization.",

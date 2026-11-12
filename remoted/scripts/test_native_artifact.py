@@ -65,7 +65,7 @@ class ArtifactContractTests(unittest.TestCase):
         self.assertEqual({p.name for p in destination.iterdir()},
                          {name, 'checksums.txt', 'provenance.json'})
         record = json.loads((destination / 'provenance.json').read_text())
-        self.assertEqual(record['protocolVersion'], 2)
+        self.assertEqual(record['protocolVersion'], 3)
         self.assertEqual(record['schemaVersion'], 1)
         self.assertEqual(record['sourceCommit'], 'a' * 40)
         self.assertEqual(record['sourceWorkflow'], 'neoko-terminal-android.yml')

@@ -353,7 +353,8 @@ fn view(manager: &Remoted) -> Result<Value> {
     let devices:Vec<_>=saved.devices.iter().map(|d|{
   let peers:Vec<_>=rt.peers.values().filter(|p|p.device.as_deref()==Some(&d.id)&&!p.cancel.is_cancelled()).collect();
   let rtt=peers.iter().filter_map(|p|fresh(p.rtt)).max();
-  json!({"id":d.id,"name":d.name,"fingerprint":neko_remoted_protocol::decode32(&d.public_key).map(|k|neko_remoted_protocol::fingerprint(&k)).unwrap_or_default(),"permission":d.permission,"resources":d.grants.iter().map(super::store::Grant::resource).collect::<Vec<_>>(),"online":!peers.is_empty(),"connections":peers.len(),"rttMs":rtt})
+  let connection_types: Vec<_> = peers.iter().map(|p| p.path.as_ref().map_or(neko_remoted_protocol::messages::ConnectionKind::Relay, neko_remoted_transport::Sender::kind)).collect();
+  json!({"id":d.id,"name":d.name,"fingerprint":neko_remoted_protocol::decode32(&d.public_key).map(|k|neko_remoted_protocol::fingerprint(&k)).unwrap_or_default(),"permission":d.permission,"resources":d.grants.iter().map(super::store::Grant::resource).collect::<Vec<_>>(),"online":!peers.is_empty(),"connections":peers.len(),"rttMs":rtt,"connectionTypes":connection_types})
  }).collect();
     let pending:Vec<_>=rt.pending.values().filter(|p|p.created.elapsed()<Duration::from_mins(2)).map(|p|json!({"id":p.id,"name":p.name,"fingerprint":neko_remoted_protocol::decode32(&p.key).map(|k|neko_remoted_protocol::fingerprint(&k)).unwrap_or_default(),"expiresInSeconds":120-p.created.elapsed().as_secs()})).collect();
     Ok(

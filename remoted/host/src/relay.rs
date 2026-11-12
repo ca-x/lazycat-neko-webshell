@@ -1,3 +1,4 @@
+mod path;
 use crate::{
     peer,
     state::{Core, DEADLINE},
@@ -45,6 +46,7 @@ impl Drop for Receipt {
 }
 #[derive(Clone)]
 pub(crate) struct Link {
+    transport: Arc<std::sync::OnceLock<neko_remoted_transport::Sender>>,
     pub peer: String,
     outgoing: mpsc::Sender<RelayFrame>,
     credits: Arc<Semaphore>,
@@ -52,6 +54,9 @@ pub(crate) struct Link {
 }
 impl Link {
     pub async fn send(&self, data: &[u8]) -> Result<()> {
+        if let Some(sender) = self.transport.get() {
+            return sender.send(data.to_vec()).await;
+        }
         ensure!(
             data.len() <= protocol::MAX_CIPHERTEXT,
             "encrypted message exceeds bound"
@@ -224,8 +229,9 @@ async fn connection(
                         let (input, incoming) = mpsc::channel(9);
                         let token = cancel.child_token();
                         let credits = Arc::new(Semaphore::new(8));
-                        let link = Link { peer: peer.clone(), outgoing: outgoing.clone(), credits: credits.clone(), cancel: token.clone() };
+                        let link = Link { transport: Arc::new(std::sync::OnceLock::new()), peer: peer.clone(), outgoing: outgoing.clone(), credits: credits.clone(), cancel: token.clone() };
                         peers.0.insert(peer.clone(), Inbound { incoming: input, credits, cancel: token });
+                        let incoming = link.start_transport(incoming)?;
                         let core = core.clone(); let relay = relay.clone(); let finished = finished.clone();
                         tokio::spawn(async move {
                             peer::run(core, relay, link, incoming).await;
@@ -238,7 +244,7 @@ async fn connection(
                         ensure!(registered && sequence > 0, "invalid Relay sequence");
                         let receipt = Receipt { sequence, completed: completed.clone() };
                         if let Some(p) = peers.0.get(&peer) {
-                            match protocol::decode(&data, protocol::MAX_CIPHERTEXT) {
+                            match protocol::decode(&data, protocol::MAX_WIRE_PAYLOAD) {
                                 Ok(data) => if p.incoming.try_send(Input::CreditedData { data, receipt }).is_err() { p.cancel.cancel(); },
                                 Err(_) => p.cancel.cancel(),
                             }
@@ -283,6 +289,7 @@ pub(crate) fn test_link() -> (Link, mpsc::Receiver<RelayFrame>, Arc<Semaphore>) 
     let credits = Arc::new(Semaphore::new(8));
     (
         Link {
+            transport: Arc::new(std::sync::OnceLock::new()),
             peer: "isolated-fixture".into(),
             outgoing,
             credits: credits.clone(),

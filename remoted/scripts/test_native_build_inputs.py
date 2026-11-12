@@ -28,7 +28,7 @@ class NativeBuildInputsTests(unittest.TestCase):
         ghostty = repo / 'remoted/ghostty'
         ghostty.mkdir(parents=True)
         shutil.copyfile(inputs.ROOT / 'ghostty/toolchain.json', ghostty / 'toolchain.json')
-        paths = ['remoted/client/a.rs', 'remoted/protocol/a.rs', 'remoted/host/a.rs',
+        paths = ['remoted/client/a.rs', 'remoted/protocol/a.rs', 'remoted/host/a.rs', 'remoted/transport/a.rs',
                  'remoted/themes/catalog.json', 'remoted/ghostty/a.rs',
                  'crates/hc-client/a.rs', 'crates/program-status/a.rs', 'remoted/scripts/build.py']
         for name in paths:

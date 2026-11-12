@@ -8,7 +8,7 @@ use nsh_core::prelude::*;
 use nsh_engine::{EngineConfig, Root};
 use nsh_testing::Headless;
 
-fn fixture(observe: bool, scrollback: bool) -> impl IntoElement {
+fn fixture(scrollback: bool) -> impl IntoElement {
     let catalog = Catalog::shared().expect("test catalog");
     let mut saved = Preferences::defaults(catalog);
     saved.appearance = Appearance::Light;
@@ -28,17 +28,8 @@ fn fixture(observe: bool, scrollback: bool) -> impl IntoElement {
     }
     let buffer = surface.buffer.clone();
     let raw = surface.buffer.clone();
-    let size = signal((80, 24));
-    let content = if observe {
-        terminal_observer::render(surface.buffer, size).into_element()
-    } else {
-        provide_context(surface.factory());
-        context
-            .terminal()
-            .component_ref(&surface.reference)
-            .flex_1()
-            .into_element()
-    };
+    let size = signal(None::<(u16, u16)>);
+    let content = terminal_observer::render(surface.buffer, size, || false);
     view()
         .flex_1()
         .min_h(px(0.0))
@@ -67,8 +58,8 @@ fn fixture(observe: bool, scrollback: bool) -> impl IntoElement {
                 "geometry={}x{};request={}x{}",
                 buffer.size.get().cols,
                 buffer.size.get().rows,
-                size.get().0,
-                size.get().1
+                size.get().unwrap_or((80, 24)).0,
+                size.get().unwrap_or((80, 24)).1
             )
         }))
         .child(text(move || {
@@ -100,17 +91,12 @@ fn fixture(observe: bool, scrollback: bool) -> impl IntoElement {
 
 #[component]
 fn Observer() -> impl IntoElement {
-    fixture(true, false)
-}
-
-#[component]
-fn Interactive() -> impl IntoElement {
-    fixture(false, false)
+    fixture(false)
 }
 
 #[component]
 fn Scrollback() -> impl IntoElement {
-    fixture(true, true)
+    fixture(true)
 }
 
 fn start<Component: nsh_core::element::Component<Props = ()>>() -> Headless {
@@ -130,20 +116,29 @@ fn observer_uses_terminal_defaults_ansi_inverse_font_and_selection_with_light_ui
 -> Result<(), String> {
     let mut app = start::<Observer>();
     app.wait_for("terminal-observer")?;
-    assert_eq!(app.screen().span_style("PLAIN")?.color, rgb(0xcdd6f4));
-    assert_eq!(app.screen().span_style("RED")?.color, rgb(0xf38ba8));
-    assert_eq!(app.screen().span_style("INVERSE")?.color, rgb(0x1e1e2e));
-    assert_eq!(app.screen().span_style("TRUE")?.color, rgb(0x0c2238));
-    assert_eq!(app.screen().span_style("PLAIN")?.font_size.0, 14.0);
-    assert!(app.screen().in_selectable_view("text:/^PLAIN/")?);
+    assert_eq!(app.screen().span_style("P")?.color, rgb(0xcdd6f4));
+    assert_eq!(
+        app.screen().span_style("text:R >> nth=0")?.color,
+        rgb(0xf38ba8)
+    );
+    assert_eq!(app.screen().span_style("V")?.color, rgb(0x1e1e2e));
+    assert_eq!(app.screen().span_style("T")?.color, rgb(0x0c2238));
+    assert_eq!(app.screen().span_style("P")?.font_size.0, 14.0);
+    assert!(
+        app.screen()
+            .in_selectable_view("id:terminal-grid-row >> nth=0")?
+    );
     app.wait_for("cursor=true;selection=true")?;
     app.press("Light terminal")?;
     app.wait_for("selected=light")?;
-    assert_eq!(app.screen().span_style("PLAIN")?.color, rgb(0));
-    assert_eq!(app.screen().span_style("RED")?.color, rgb(0xbb0000));
-    assert_eq!(app.screen().span_style("INVERSE")?.color, rgb(0xffffff));
-    assert_eq!(app.screen().span_style("TRUE")?.color, rgb(0x0c2238));
-    assert_eq!(app.screen().span_style("PLAIN")?.font_size.0, 20.0);
+    assert_eq!(app.screen().span_style("P")?.color, rgb(0));
+    assert_eq!(
+        app.screen().span_style("text:R >> nth=0")?.color,
+        rgb(0xbb0000)
+    );
+    assert_eq!(app.screen().span_style("V")?.color, rgb(0xffffff));
+    assert_eq!(app.screen().span_style("T")?.color, rgb(0x0c2238));
+    assert_eq!(app.screen().span_style("P")?.font_size.0, 20.0);
     app.wait_for("geometry=80x24;request=80x24")?;
     app.wait_for("raw=Some(Indexed(1))")?;
     app.set_viewport(Size::new(px(280.0), px(500.0)))?;
@@ -173,18 +168,27 @@ fn observer_uses_terminal_defaults_ansi_inverse_font_and_selection_with_light_ui
     );
     app.press("Dark terminal")?;
     app.wait_for("selected=catppuccin-mocha")?;
-    assert_eq!(app.screen().span_style("RED")?.color, rgb(0xf38ba8));
+    assert_eq!(
+        app.screen().span_style("text:R >> nth=0")?.color,
+        rgb(0xf38ba8)
+    );
     Ok(())
 }
 
 #[test]
-fn shared_emulator_recolors_existing_ansi_without_new_output() -> Result<(), String> {
-    let mut app = start::<Interactive>();
-    app.wait_for("text:/PLAIN/")?;
-    assert_eq!(app.screen().span_style("RED")?.color, rgb(0xf38ba8));
+fn existing_native_cells_recolor_without_new_output() -> Result<(), String> {
+    let mut app = start::<Observer>();
+    app.wait_for("terminal-observer")?;
+    assert_eq!(
+        app.screen().span_style("text:R >> nth=0")?.color,
+        rgb(0xf38ba8)
+    );
     app.press("Light terminal")?;
     app.wait_for("selected=light")?;
-    assert_eq!(app.screen().span_style("RED")?.color, rgb(0xbb0000));
+    assert_eq!(
+        app.screen().span_style("text:R >> nth=0")?.color,
+        rgb(0xbb0000)
+    );
     app.wait_for("raw=Some(Indexed(1))")?;
     Ok(())
 }
@@ -197,7 +201,6 @@ fn observer_scrolls_real_history_without_resizing_or_exposing_input() -> Result<
         .screen()
         .texts()
         .into_iter()
-        .filter(|text| text.starts_with("ROW-"))
         .map(str::to_owned)
         .collect();
     app.scroll("terminal-observer", px(-180.0))?;
@@ -205,21 +208,17 @@ fn observer_scrolls_real_history_without_resizing_or_exposing_input() -> Result<
         .screen()
         .texts()
         .into_iter()
-        .filter(|text| text.starts_with("ROW-"))
         .map(str::to_owned)
         .collect();
     assert_ne!(
         after, before,
         "vertical scroll must reveal different history rows"
     );
-    let row = app
-        .screen()
-        .texts()
-        .into_iter()
-        .find(|text| text.starts_with("ROW-"))
-        .ok_or("no rendered history row")?
-        .to_owned();
-    assert!(app.screen().in_selectable_view(&row)?);
+    assert!(app.screen().texts().join("").contains("ROW-"));
+    assert!(
+        app.screen()
+            .in_selectable_view("id:terminal-grid-row >> nth=0")?
+    );
     assert_eq!(
         app.screen().input_text("远程终端；取得控制权后可输入")?,
         None

@@ -22,13 +22,25 @@ impl std::fmt::Display for Failure {
     }
 }
 
+/// One native render cell; columns and widths come directly from Ghostty.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GridCell {
+    pub column: usize,
+    pub width: usize,
+    pub text: String,
+    pub style: TerminalStyle,
+}
+
 struct State {
     kernel: Option<Emulator>,
     failure: Option<Failure>,
     failure_pending: bool,
     lines: BTreeMap<usize, TerminalLine>,
+    cells: BTreeMap<usize, Vec<GridCell>>,
     count: usize,
     modes: TerminalModes,
+    #[cfg(test)]
+    fail_next_query: Option<&'static str>,
 }
 
 impl State {
@@ -50,7 +62,19 @@ impl State {
         if self.failure.is_some() {
             return None;
         }
-        match query(self.kernel.as_mut()?) {
+        #[cfg(test)]
+        let result = if self
+            .fail_next_query
+            .take_if(|expected| *expected == operation)
+            .is_some()
+        {
+            Err(Error::OutOfMemory)
+        } else {
+            query(self.kernel.as_mut()?)
+        };
+        #[cfg(not(test))]
+        let result = query(self.kernel.as_mut()?);
+        match result {
             Ok(value) => Some(value),
             Err(error) => {
                 self.fail(operation, error);
@@ -85,8 +109,11 @@ impl GhosttyEmulator {
             failure: None,
             failure_pending: false,
             lines: BTreeMap::new(),
+            cells: BTreeMap::new(),
             count: usize::from(size.rows),
             modes: TerminalModes::default(),
+            #[cfg(test)]
+            fail_next_query: None,
         }))
     }
 
@@ -94,6 +121,33 @@ impl GhosttyEmulator {
         let emulator = Self::from_kernel(size, None);
         emulator.0.borrow_mut().fail("initialize", error);
         emulator
+    }
+
+    /// Read native grid cells, retaining the last successful row after a failure.
+    /// No cells are synthesized for unread rows or the separate diagnostic line.
+    pub(crate) fn cells(&self, index: usize) -> Vec<GridCell> {
+        let mut state = self.0.borrow_mut();
+        if let Some(cells) = state.query("render cells", |kernel| kernel.cells(index)) {
+            let cells: Vec<_> = cells
+                .into_iter()
+                .map(|cell| GridCell {
+                    column: cell.column,
+                    width: cell.width,
+                    text: cell.text,
+                    style: terminal_style(cell.style),
+                })
+                .collect();
+            if index < state.count {
+                state.cells.insert(index, cells.clone());
+            }
+            return cells;
+        }
+        state.cells.get(&index).cloned().unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_query(&self, operation: &'static str) {
+        self.0.borrow_mut().fail_next_query = Some(operation);
     }
 
     pub fn failure(&self) -> Option<Failure> {
@@ -109,22 +163,24 @@ fn color(color: StyleColor) -> Option<TerminalColor> {
     }
 }
 
+fn terminal_style(source: neko_ghostty::Style) -> TerminalStyle {
+    let mut style = TerminalStyle::default();
+    style.fg = color(source.fg_color);
+    style.bg = color(source.bg_color);
+    style.bold = source.bold;
+    style.dim = source.faint;
+    style.italic = source.italic;
+    style.underline = source.underline != Underline::None;
+    style.strikethrough = source.strikethrough;
+    style.inverse = source.inverse;
+    style.hidden = source.invisible;
+    style
+}
+
 fn line(runs: Vec<neko_ghostty::Run>) -> TerminalLine {
     TerminalLine::new(
         runs.into_iter()
-            .map(|run| {
-                let mut style = TerminalStyle::default();
-                style.fg = color(run.style.fg_color);
-                style.bg = color(run.style.bg_color);
-                style.bold = run.style.bold;
-                style.dim = run.style.faint;
-                style.italic = run.style.italic;
-                style.underline = run.style.underline != Underline::None;
-                style.strikethrough = run.style.strikethrough;
-                style.inverse = run.style.inverse;
-                style.hidden = run.style.invisible;
-                TerminalRun::new(run.text, style)
-            })
+            .map(|run| TerminalRun::new(run.text, terminal_style(run.style)))
             .collect(),
     )
 }
@@ -149,6 +205,7 @@ impl TerminalEmulator for GhosttyEmulator {
         if let Some(count) = state.query("line count", |kernel| kernel.line_count()) {
             state.count = count;
             state.lines.retain(|index, _| *index < count);
+            state.cells.retain(|index, _| *index < count);
         }
         state
             .count
@@ -243,6 +300,11 @@ mod tests {
         let mut emulator = GhosttyEmulator::new(TerminalSize::new(80, 24), 100).unwrap();
         for _ in 0..2 {
             emulator.feed(b"\x1b[5n\x1b[6n\x1b[c\x1b]0;title\x07\x07");
+            let cursor = emulator.cursor();
+            emulator.cells(0);
+            emulator.cells(1);
+            emulator.line(0);
+            assert_eq!(emulator.cursor(), cursor);
             let events = emulator.take_events();
             assert!(
                 !events
@@ -309,5 +371,119 @@ mod tests {
                 .text()
                 .contains("initialize")
         );
+    }
+
+    #[test]
+    fn native_cells_map_ascii_cjk_and_full_combining_graphemes() {
+        let mut emulator = GhosttyEmulator::new(TerminalSize::new(12, 2), 10).unwrap();
+        emulator.feed(" A中e\u{301}文!".as_bytes());
+        let cells = emulator.cells(0);
+        assert_eq!(
+            cells[..6]
+                .iter()
+                .map(|cell| (cell.column, cell.width, cell.text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, 1, " "),
+                (1, 1, "A"),
+                (2, 2, "中"),
+                (4, 1, "e\u{301}"),
+                (5, 2, "文"),
+                (7, 1, "!")
+            ]
+        );
+        assert_eq!(cells.len(), 10);
+        assert_eq!(cells.last().unwrap().column, 11);
+        assert_eq!(
+            cells
+                .iter()
+                .map(|cell| cell.text.as_str())
+                .collect::<String>(),
+            emulator.line(0).text()
+        );
+        assert!(emulator.cells(usize::MAX).is_empty());
+        assert!(emulator.failure().is_none());
+    }
+
+    #[test]
+    fn native_cells_follow_mode_2027_instead_of_recounting_characters() {
+        let family = "👨\u{200d}👩\u{200d}👧\u{200d}👦";
+        for clustered in [false, true] {
+            let mut emulator = GhosttyEmulator::new(TerminalSize::new(20, 2), 0).unwrap();
+            emulator.feed(if clustered {
+                b"\x1b[?2027h"
+            } else {
+                b"\x1b[?2027l"
+            });
+            emulator.feed(format!("{family}A").as_bytes());
+            let cells = emulator.cells(0);
+            let end = cells.iter().position(|cell| cell.text == "A").unwrap();
+            assert_eq!(
+                (cells[end].column, cells[end].width),
+                (if clustered { 2 } else { 8 }, 1)
+            );
+            assert!(cells[..end].iter().all(|cell| cell.width == 2));
+            assert_eq!(
+                cells[..end]
+                    .iter()
+                    .map(|cell| cell.text.as_str())
+                    .collect::<String>(),
+                family
+            );
+            assert_eq!(end, if clustered { 1 } else { 4 });
+        }
+    }
+
+    #[test]
+    fn native_cells_map_all_styles_without_moving_wide_cell_boundaries() {
+        let mut emulator = GhosttyEmulator::new(TerminalSize::new(12, 2), 0).unwrap();
+        emulator.feed(
+            "\x1b[31m中\x1b[1;2;3;4;7;8;9;38;2;12;34;56;48;5;200m文\x1b[0;32mB\x1b[44m\x1b[K"
+                .as_bytes(),
+        );
+        let cells = emulator.cells(0);
+        assert_eq!((cells[0].column, cells[0].width), (0, 2));
+        assert_eq!(cells[0].style.fg, Some(TerminalColor::Indexed(1)));
+        assert_eq!((cells[1].column, cells[1].width), (2, 2));
+        let style = cells[1].style;
+        assert_eq!(style.fg, Some(TerminalColor::Rgb(12, 34, 56)));
+        assert_eq!(style.bg, Some(TerminalColor::Indexed(200)));
+        assert!(
+            style.bold
+                && style.dim
+                && style.italic
+                && style.underline
+                && style.strikethrough
+                && style.inverse
+                && style.hidden
+        );
+        assert_eq!(cells[2].column, 4);
+        assert_eq!(cells[2].style.fg, Some(TerminalColor::Indexed(2)));
+        assert_eq!(cells[3].style.bg, Some(TerminalColor::Indexed(4)));
+        assert_eq!(cells[1].style, emulator.line(0).runs[1].style);
+    }
+
+    #[test]
+    fn native_cells_freeze_after_failure_without_synthesizing_positions() {
+        let mut emulator = GhosttyEmulator::new(TerminalSize::new(12, 2), 10).unwrap();
+        emulator.feed("中e\u{301} keep".as_bytes());
+        let count = emulator.line_count();
+        let saved = emulator.cells(0);
+        emulator
+            .0
+            .get_mut()
+            .fail("render cells", Error::OutOfMemory);
+        emulator.feed(b"must not replace native cells");
+        emulator.resize(TerminalSize::new(20, 3));
+        assert_eq!(emulator.cells(0), saved);
+        assert!(emulator.cells(1).is_empty());
+        assert!(emulator.cells(count).is_empty());
+        assert!(emulator.cells(usize::MAX).is_empty());
+        assert_eq!(emulator.line_count(), count + 1);
+        assert_eq!(emulator.take_events().len(), 2);
+        assert!(emulator.take_events().is_empty());
+        assert_eq!(emulator.failure().unwrap().operation, "render cells");
+        let failed = GhosttyEmulator::failed(TerminalSize::default(), Error::OutOfMemory);
+        assert!(failed.cells(0).is_empty());
     }
 }

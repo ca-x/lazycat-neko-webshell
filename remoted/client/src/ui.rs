@@ -9,6 +9,7 @@ mod hosting;
 mod navigation;
 mod preferences;
 mod resources;
+mod screen_text;
 mod session_list;
 mod shell;
 mod sidebar;
@@ -66,13 +67,19 @@ pub fn App() -> impl IntoElement {
 /// Shared production navigation frame; startup services are owned by App.
 fn frame() -> impl IntoElement {
     let ui = use_context::<state::Ui>().expect("App provides the native UI controller context");
+    #[cfg(not(target_os = "android"))]
+    effect(|| {
+        let mut attributes = nsh_core::desktop::WindowAttributes::default();
+        attributes.title = Some(crate::preferences::tr("app.name").to_string());
+        nsh_core::element::desktop::main_window().set(attributes);
+    });
     nav_stack()
         .flex_1()
         .bg(move || theme().background)
         .text_color(move || theme().foreground)
         .child(
             nav_page()
-                .title("neoko-terminal")
+                .title(move || crate::preferences::tr("app.name"))
                 .header_visible(false)
                 .pop_on_back(move || !ui.secondary())
                 .on_back_press(move || ui.back())

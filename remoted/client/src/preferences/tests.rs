@@ -1,5 +1,5 @@
 use super::*;
-use nsh_base::{TerminalColor, TerminalLine, TerminalRun, TerminalStyle};
+use nsh_base::{TerminalColor, TerminalStyle};
 
 #[test]
 fn catalog_covers_web_inkstone_and_restty_with_licenses() -> Result<()> {
@@ -96,23 +96,18 @@ fn translation_keys_and_literal_sources_are_unambiguous() {
 }
 
 #[test]
-fn themed_lines_preserve_truecolor_and_resolve_inverse_defaults() -> Result<()> {
+fn themed_styles_preserve_truecolor_and_resolve_inverse_defaults() -> Result<()> {
     let catalog = catalog::Catalog::shared()?;
     let theme = catalog.find("catppuccin-mocha").expect("shared Web theme");
     let mut style = TerminalStyle::default();
     style.fg = Some(TerminalColor::Indexed(1));
     style.bg = Some(TerminalColor::Rgb(12, 34, 56));
     style.bold = true;
-    let line = TerminalLine::new(vec![TerminalRun::new("hello", style)]);
-    let mapped = theme.line(line.clone());
-    assert_eq!(mapped.text(), line.text());
-    assert_eq!(mapped.runs[0].style.bg, style.bg);
-    assert!(mapped.runs[0].style.bold);
-    assert_eq!(
-        mapped.runs[0].style.fg,
-        Some(TerminalColor::Rgb(243, 139, 168))
-    );
-    assert_eq!(line.runs[0].style.fg, Some(TerminalColor::Indexed(1)));
+    let mapped = theme.style(style);
+    assert_eq!(mapped.bg, style.bg);
+    assert!(mapped.bold);
+    assert_eq!(mapped.fg, Some(TerminalColor::Rgb(243, 139, 168)));
+    assert_eq!(style.fg, Some(TerminalColor::Indexed(1)));
     let mut inverse = TerminalStyle::default();
     inverse.inverse = true;
     let inverse = theme.style(inverse);

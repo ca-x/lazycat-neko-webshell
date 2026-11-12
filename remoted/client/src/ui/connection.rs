@@ -5,7 +5,11 @@ use super::{
 use crate::controller::{Command, Phase};
 use nsh_core::prelude::*;
 
+#[path = "host_names.rs"]
+pub(super) mod host_names;
+mod paired_hosts;
 mod public_relay;
+pub(super) mod status;
 
 pub fn render(ui: Ui) -> impl IntoElement {
     let address = signal(ui.model.with_untracked(|model| {
@@ -38,6 +42,7 @@ pub fn render(ui: Ui) -> impl IntoElement {
             .gap_4()
             .child(appearance_settings())
             .child(host_settings(ui))
+            .child(paired_hosts::render(ui))
             .child(heading("连接远程主机"))
             .child(when(
                 move || ui.model.with(|model| model.phase == Phase::Offline) || expanded.get(),
@@ -163,67 +168,6 @@ pub fn render(ui: Ui) -> impl IntoElement {
                                     name: name.get_untracked(),
                                 });
                             },
-                        ))
-                        .child(heading("已配对设备"))
-                        .child(hint(
-                            "忘记仅清除本机配对，不撤销主机授权；如需撤销，请在小橘管理此设备。",
-                        ))
-                        .child(each(
-                            move || {
-                                ui.model.with(|model| {
-                                    model
-                                        .bindings
-                                        .iter()
-                                        .filter(|binding| {
-                                            Some(&binding.relay) == model.relay.as_ref()
-                                        })
-                                        .cloned()
-                                        .collect::<Vec<_>>()
-                                })
-                            },
-                            |binding| binding.device_id.clone(),
-                            move |binding, _| {
-                                view()
-                                    .gap_2()
-                                    .child(hint(move || {
-                                        binding.with(|binding| {
-                                            format!(
-                                                "设备 {} · 主机 {}",
-                                                binding.device_id,
-                                                neko_remoted_protocol::decode32(&binding.host_key)
-                                                    .map(|key| neko_remoted_protocol::fingerprint(
-                                                        &key
-                                                    ))
-                                                    .unwrap_or_else(|_| "指纹损坏".into())
-                                            )
-                                        })
-                                    }))
-                                    .child(action(
-                                        "重新连接",
-                                        false,
-                                        || false,
-                                        move || {
-                                            ui.send(Command::Reconnect(binding.get_untracked()))
-                                        },
-                                    ))
-                                    .child(action(
-                                        "忘记此配对（仅本机）",
-                                        false,
-                                        || false,
-                                        move || ui.send(Command::Forget(binding.get_untracked())),
-                                    ))
-                            },
-                        ))
-                        .child(when(
-                            move || {
-                                ui.model.with(|model| {
-                                    !model
-                                        .bindings
-                                        .iter()
-                                        .any(|binding| Some(&binding.relay) == model.relay.as_ref())
-                                })
-                            },
-                            || hint("此 Relay 尚无已配对设备。"),
                         ))
                 },
             ))

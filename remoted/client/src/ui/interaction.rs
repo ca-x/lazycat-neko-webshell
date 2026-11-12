@@ -1,13 +1,8 @@
-//! Presentation-only interaction modes. Both modes observe the same terminal Surface.
+//! Terminal control, optional IME composer and pane actions.
 use super::super::{controls, state::Ui};
-use crate::{
-    controller::{Pane, interaction::SubmissionState},
-    preferences::tr,
-};
+use crate::{controller::Pane, preferences::tr};
 use nsh_base::{button, theme};
 use nsh_core::{element::ImageSrc, prelude::*};
-
-pub use crate::ui::navigation::InteractionMode as Mode;
 
 /// Shared with the single workspace tab bar, so the terminal needs no second toolbar.
 pub fn toolbar(ui: Ui, pane: ReadSignal<Pane>) -> impl IntoElement {
@@ -52,12 +47,8 @@ pub fn toolbar(ui: Ui, pane: ReadSignal<Pane>) -> impl IntoElement {
                 ));
             },
         ))
-        .child(mode_button(ui, pane))
         .child(when(
-            move || {
-                os() != nsh_core::platform::Os::Android
-                    && pane.with(|pane| ui.navigation.mode(&pane.stream) == Mode::Terminal)
-            },
+            || true,
             move || {
                 view().tooltip(controls::tooltip("会话输入")).child(
                     button()
@@ -204,64 +195,6 @@ pub fn toolbar(ui: Ui, pane: ReadSignal<Pane>) -> impl IntoElement {
         )
 }
 
-fn mode_button(ui: Ui, pane: ReadSignal<Pane>) -> impl IntoElement {
-    let conversation =
-        move || pane.with(|pane| ui.navigation.mode(&pane.stream) == Mode::Conversation);
-    let label = move || {
-        tr(if conversation() {
-            "终端模式"
-        } else {
-            "对话模式"
-        })
-    };
-    view().tooltip(controls::tooltip(label)).child(
-        button()
-            .accessibility_label(label)
-            .selected(conversation)
-            .on_press(move || {
-                pane.with_untracked(|pane| {
-                    ui.navigation.set_mode(
-                        &pane.stream,
-                        if conversation() {
-                            Mode::Terminal
-                        } else {
-                            Mode::Conversation
-                        },
-                    );
-                })
-            })
-            .w(controls::control_size)
-            .h(controls::control_size)
-            .flex_shrink(0.0)
-            .items_center()
-            .justify_center()
-            .rounded(move || theme().radius)
-            .bg(move || theme().background.opacity(0.0))
-            .selected_style(|style| style.bg(move || theme().accent))
-            .hover(|style| style.bg(move || theme().secondary))
-            .focus(|style| style.outline(px(2.0)).outline_color(move || theme().ring))
-            .active(|style| style.opacity(0.75))
-            .child(
-                when(conversation, || {
-                    svg(ImageSrc::svg_markup(include_str!(
-                        "icons/TerminalSquare.svg"
-                    )))
-                    .w(px(18.0))
-                    .h(px(18.0))
-                    .text_color(move || theme().foreground)
-                })
-                .otherwise(|| {
-                    svg(ImageSrc::svg_markup(include_str!(
-                        "icons/MessageSquare.svg"
-                    )))
-                    .w(px(18.0))
-                    .h(px(18.0))
-                    .text_color(move || theme().foreground)
-                }),
-            ),
-    )
-}
-
 fn related_panes(
     model: &crate::controller::Model,
     open: &Pane,
@@ -282,78 +215,6 @@ fn related_panes(
         .filter(|pane| Some(pane.tab_id.as_str()) == tab)
         .cloned()
         .collect()
-}
-
-pub fn submissions(ui: Ui, pane: ReadSignal<Pane>) -> impl IntoElement {
-    let reference = element_ref();
-    let latest = computed(move || {
-        let stream = pane.with(|pane| pane.stream.clone());
-        ui.model.with(|model| {
-            model
-                .interaction
-                .entries()
-                .filter(|entry| entry.stream == stream)
-                .last()
-                .map(|entry| entry.id)
-        })
-    });
-    effect(move || {
-        latest.get();
-        reference.scroll_to_end(false);
-    });
-    scroll()
-        .element_ref(&reference)
-        .max_h(px(220.0))
-        .child(view().gap_2().px_3().child(each(
-            move || {
-                let stream = pane.with(|pane| pane.stream.clone());
-                ui.model.with(|model| {
-                    model
-                        .interaction
-                        .entries()
-                        .filter(|entry| entry.stream == stream)
-                        .cloned()
-                        .collect::<Vec<_>>()
-                })
-            },
-            |entry| (entry.id, entry.state),
-            move |entry, _| {
-                view().items_end().child(
-                    view()
-                        .w_full()
-                        .max_w(px(640.0))
-                        .gap_1()
-                        .px_3()
-                        .py_2()
-                        .rounded(move || theme().radius)
-                        .bg(move || theme().secondary)
-                        .child(
-                            text(move || tr("你提交的文本"))
-                                .text_xs()
-                                .font_weight(FontWeight::SEMIBOLD),
-                        )
-                        .child(
-                            text(move || entry.with(|entry| entry.text.clone()))
-                                .select_text()
-                                .text_sm(),
-                        )
-                        .child(
-                            text(move || {
-                                entry.with(|entry| {
-                                    tr(match entry.state {
-                                        SubmissionState::Pending => "等待主机确认输入…",
-                                        SubmissionState::Accepted => "主机已接受输入",
-                                        SubmissionState::Rejected => "输入未被接受",
-                                        SubmissionState::Unknown => "输入结果未知；未自动重发",
-                                    })
-                                })
-                            })
-                            .text_xs()
-                            .text_color(move || theme().muted_foreground),
-                        ),
-                )
-            },
-        )))
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -504,10 +365,8 @@ mod tests {
     }
 
     #[test]
-    fn switching_modes_keeps_draft_control_and_shared_vt_without_replaying_output()
+    fn composer_toggle_keeps_draft_control_and_shared_vt_without_replaying_output()
     -> Result<(), String> {
-        assert_eq!(Mode::default_for(Os::Linux), Mode::Terminal);
-        assert_eq!(Mode::default_for(Os::Android), Mode::Conversation);
         for os in [Os::Linux, Os::Android] {
             let mut app = start::<OperateFixture>(os)?;
             app.wait_for("PTY")?;
@@ -515,40 +374,30 @@ mod tests {
                 app.press("会话输入")?;
             }
             app.wait_for("输入内容，发送到当前会话…")?;
-            assert_eq!(app.shows("真实终端输出"), os == Os::Android);
+            assert!(app.screen().press_target("对话模式")?.is_none());
             app.type_text("会话输入", "草稿猫")?;
             app.press("fixture output")?;
-            if os != Os::Android {
-                app.press("对话模式")?;
-            }
-            app.wait_for("真实终端输出")?;
-            app.wait_for("REAL_PTY_OUTPUT")?;
-            assert!(app.screen().in_selectable_view("REAL_PTY_OUTPUT")?);
             app.press("fixture inspect")?;
             app.wait_for("VT colored=true bracketed=true occurrences=1 controlling=true")?;
-            app.press("终端模式")?;
-            app.wait_until("terminal mode selected", Duration::from_secs(3), |screen| {
-                !screen.texts().contains(&"真实终端输出")
-            })?;
+            app.press("会话输入")?;
+            app.press("会话输入")?;
             assert_eq!(app.screen().input_text("会话输入")?, Some("草稿猫"));
-            app.press("对话模式")?;
             app.press("fixture inspect")?;
             app.wait_for("VT colored=true bracketed=true occurrences=1 controlling=true")?;
             assert!(app.shows("REQUESTS=0"));
             app.press("发送")?;
             app.wait_for("submitted 草稿猫")?;
             app.wait_for("REQUESTS=1")?;
-            assert!(!app.shows("主机已接受输入"));
             assert_eq!(app.screen().input_text("会话输入")?, Some(""));
-            app.press("终端模式")?;
-            app.press("对话模式")?;
+            app.press("会话输入")?;
+            app.press("会话输入")?;
             assert!(app.shows("REQUESTS=1"));
         }
         Ok(())
     }
 
     #[test]
-    fn terminal_mode_keeps_native_text_and_control_keyboard_input() -> Result<(), String> {
+    fn terminal_keeps_native_text_and_control_keyboard_input() -> Result<(), String> {
         let mut app = start::<OperateFixture>(Os::Linux)?;
         app.wait_until("native terminal input", Duration::from_secs(3), |screen| {
             screen
@@ -563,9 +412,8 @@ mod tests {
         app.wait_for("keyboard [3]")?;
         app.press_key("up")?;
         app.wait_for("keyboard [27, 91, 65]")?;
-        app.press("对话模式")?;
-        app.wait_for("真实终端输出")?;
-        app.press("终端模式")?;
+        app.press("会话输入")?;
+        app.press("会话输入")?;
         app.wait_until(
             "native terminal input restored",
             Duration::from_secs(3),
@@ -583,13 +431,13 @@ mod tests {
     }
 
     #[test]
-    fn readonly_and_disconnected_modes_never_send_composer_or_control_bytes() -> Result<(), String>
+    fn readonly_and_disconnected_panes_never_send_composer_or_control_bytes() -> Result<(), String>
     {
         let mut app = start::<ReadonlyFixture>(Os::Android)?;
         app.wait_for("此会话为只读授权。")?;
         assert!(app.type_text("会话输入", "blocked").is_err());
-        for mode in ["终端模式", "对话模式"] {
-            app.press(mode)?;
+        for _ in 0..2 {
+            app.press("会话输入")?;
             assert!(app.type_text("会话输入", "blocked").is_err());
             assert!(!app.shows("中断 Ctrl+C"));
             assert!(app.shows("REQUESTS=0"));

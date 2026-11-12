@@ -8,7 +8,7 @@ The WebShell and native clients must provide the same terminal and Agent workflo
 
 ## Standalone desktop and remote-only mobile
 
-Windows, macOS and Linux are complete terminal applications: local shells, local workspaces and tabs work without a paired host, Relay address, Relay connectivity or LazyCat client. Remote devices are additional workspaces in the same application. Optional hosting allows explicit pairing from another desktop or Android, independently of local usage. Android is remote-only and must not show a local-shell or host-server entry. Terminal and conversation views, themes, language and Agent state belong to this shared workflow.
+Windows, macOS and Linux are complete terminal applications: local shells, local workspaces and tabs work without a paired host, Relay address, Relay connectivity or LazyCat client. Remote devices are additional workspaces in the same application. Optional hosting allows explicit pairing from another desktop or Android, independently of local usage. Android is remote-only and must not show a local-shell or host-server entry. The fixed terminal grid, optional native input composer, themes, language and Agent state belong to this shared workflow. There is no Chat mode.
 
 ## Backend preference
 

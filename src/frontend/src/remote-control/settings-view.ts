@@ -1,3 +1,4 @@
+import { connectionView } from "./connection-view.ts";
 import type { MessageKey } from "../i18n";
 import { escapeHtml } from "../utils.ts";
 import type { PendingDevice, RemoteDevice } from "./api.ts";
@@ -45,7 +46,7 @@ export function permissionSelect(tr: Translate, name: string, value = "read_only
 export function renderPending(pending: PendingDevice[], sessions: SessionChoice[], tr: Translate): string {
   if (!pending.length) return `<p class="settings-help">${escapeHtml(tr("remote.noPending"))}</p>`;
   return pending.map(device => `<form class="remote-device" data-pending="${escapeHtml(device.id)}">
-    <h5>${escapeHtml(device.name)}</h5><p class="remote-fingerprint">${escapeHtml(tr("remote.fingerprint"))}: ${escapeHtml(device.fingerprint)}</p>
+    <div class="remote-device-heading"><h5>${escapeHtml(device.name)}</h5>${connectionView}</div><p class="remote-fingerprint">${escapeHtml(tr("remote.fingerprint"))}: ${escapeHtml(device.fingerprint)}</p>
     <p data-pending-expiry="${escapeHtml(device.id)}"></p>
     <fieldset><legend>${escapeHtml(tr("remote.resources"))}</legend>${sessions.length ? sessions.map(session => `<div class="remote-resource">
       <label><input type="checkbox" name="session" value="${escapeHtml(session.id)}"> <span>${escapeHtml(session.name)} <small>${escapeHtml(session.selector)} · ${escapeHtml(session.backend)}</small></span></label>
@@ -59,7 +60,7 @@ export function renderPending(pending: PendingDevice[], sessions: SessionChoice[
 export function renderDevices(devices: RemoteDevice[], tr: Translate): string {
   if (!devices.length) return `<p class="settings-help">${escapeHtml(tr("remote.noDevices"))}</p>`;
   return devices.map(device => `<article class="remote-device" data-device="${escapeHtml(device.id)}">
-    <h5>${escapeHtml(device.name)}</h5>
+    <div class="remote-device-heading"><h5>${escapeHtml(device.name)}</h5>${connectionView}</div>
     <p data-device-status></p><p data-device-rtt></p>
     <p>${escapeHtml(tr("remote.currentPermission"))}: ${escapeHtml(tr(device.permission === "operate" ? "remote.operate" : "remote.readOnly"))}</p>
     <details data-device-management><summary>${escapeHtml(tr("remote.manageDevice"))}</summary>

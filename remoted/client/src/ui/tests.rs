@@ -223,7 +223,7 @@ fn ObserverScrollFixture() -> impl IntoElement {
             .map(|index| format!("\x1b[32mROW-{index:03}\x1b[0m\r\n"))
             .collect(),
     );
-    terminal_observer::render(surface.buffer, signal((80, 24)))
+    terminal_observer::render(surface.buffer, signal(None), || false)
 }
 
 fn start<C: Component<Props = ()>>(width: f32, scheme: ColorScheme) -> Headless {
@@ -380,19 +380,15 @@ fn operate_workspace_requires_explicit_control_and_uses_real_herdr_and_file_requ
 }
 
 #[test]
-fn readonly_and_uncontrolled_panes_have_no_editable_input_but_keep_selectable_output() {
+fn readonly_and_uncontrolled_panes_reject_edits_but_keep_selectable_output() {
     for permission in [Permission::ReadOnly, Permission::Operate] {
         let mut app = match permission {
             Permission::ReadOnly => start::<ReadOnlyFixture>(390.0, ColorScheme::Light),
             Permission::Operate => start::<OperateFixture>(390.0, ColorScheme::Light),
         };
         app.wait_for("terminal-observer").unwrap();
-        assert_eq!(
-            app.screen()
-                .input_text("远程终端；取得控制权后可输入")
-                .unwrap(),
-            None
-        );
+        assert!(!app.screen().enabled("terminal-native-input").unwrap());
+        assert!(app.type_text("terminal-native-input", "x").is_err());
         assert!(
             app.screen()
                 .in_selectable_view("terminal-observer")
@@ -426,15 +422,6 @@ fn terminal_control_switch_preserves_ansi_state_without_duplicate_feed_or_query_
     assert_eq!(before.matches("唯一猫").count(), 1);
     assert!(app.shows("INPUTS=0"));
     app.press("测试授予控制").unwrap();
-    // Android starts in Conversation mode; control alone must not switch the user's mode.
-    app.wait_for("真实终端输出").unwrap();
-    assert_eq!(
-        app.screen()
-            .input_text("远程终端；取得控制权后可输入")
-            .unwrap(),
-        None
-    );
-    app.press("终端模式").unwrap();
     app.wait_until(
         "native input after control",
         Duration::from_secs(3),
@@ -509,12 +496,9 @@ fn terminal_control_switch_preserves_ansi_state_without_duplicate_feed_or_query_
     .unwrap();
     app.press("测试释放控制").unwrap();
     app.wait_for("terminal-observer").unwrap();
-    assert_eq!(
-        app.screen()
-            .input_text("远程终端；取得控制权后可输入")
-            .unwrap(),
-        None
-    );
+    assert!(!app.screen().enabled("terminal-native-input").unwrap());
+    assert!(app.type_text("terminal-native-input", "x").is_err());
+    assert!(app.shows("INPUTS=1"));
     app.press("测试读取缓冲").unwrap();
     assert!(
         app.screen()
@@ -563,14 +547,12 @@ fn readonly_observer_has_real_scrollback_and_selectable_rows_without_an_input() 
     let mut app = start::<ObserverScrollFixture>(390.0, ColorScheme::Light);
     app.wait_for("terminal-observer").unwrap();
     app.scroll("terminal-observer", px(-180.0)).unwrap();
-    let row = app
-        .screen()
-        .texts()
-        .into_iter()
-        .find(|text| text.starts_with("ROW-"))
-        .unwrap()
-        .to_owned();
-    assert!(app.screen().in_selectable_view(&row).unwrap());
+    assert!(app.screen().texts().join("").contains("ROW-"));
+    assert!(
+        app.screen()
+            .in_selectable_view("id:terminal-grid-row >> nth=0")
+            .unwrap()
+    );
     assert_eq!(
         app.screen()
             .input_text("远程终端；取得控制权后可输入")
@@ -725,7 +707,7 @@ fn herdr_and_ordinary_terminals_are_distinct_navigation_with_distinct_attach_req
 fn ObserverShortFixture() -> impl IntoElement {
     let surface = terminal_surface::Surface::new();
     surface.write("PLAIN screen output".into());
-    terminal_observer::render(surface.buffer, signal((80, 24)))
+    terminal_observer::render(surface.buffer, signal(None), || false)
 }
 
 #[test]
@@ -741,13 +723,7 @@ fn short_observer_screen_starts_at_the_top_of_a_tall_viewport() -> Result<(), St
             .ok_or("observer has no viewport")?;
         let first = nodes
             .iter()
-            .find(|node| {
-                !node.hidden
-                    && node
-                        .text
-                        .as_ref()
-                        .is_some_and(|text| text.text.text.starts_with("PLAIN"))
-            })
+            .find(|node| !node.hidden && node.test_id.as_deref() == Some("terminal-grid-row"))
             .ok_or("first terminal row is not rendered")?;
         assert!(
             (first.bounds.origin.y.0 - viewport.bounds.origin.y.0).abs() < 24.0,
@@ -805,5 +781,45 @@ fn observer_keeps_source_columns_and_horizontal_scroll_after_zero_size_mount() -
     app.set_viewport(Size::new(px(1200.0), px(1000.0)))?;
     app.wait_for("PLAIN screen output")?;
     assert!(app.screen().in_selectable_view("PLAIN screen output")?);
+    Ok(())
+}
+
+#[component]
+fn UnicodeGridFixture() -> impl IntoElement {
+    let surface = terminal_surface::Surface::new();
+    surface.write(format!(
+        "{}A\r\n{}B\r\ne\u{301}C\r\nxD\r\n\x1b[?2027h👩‍👩‍👧‍👦Z\r\nxxY",
+        "猫".repeat(20),
+        ".".repeat(40)
+    ));
+    terminal_observer::render(surface.buffer, signal(None), || false)
+}
+
+#[test]
+fn native_grid_keeps_cjk_combining_and_emoji_at_ghostty_columns() -> Result<(), String> {
+    let mut app = start::<UnicodeGridFixture>(1000.0, ColorScheme::Dark);
+    app.wait_for("terminal-observer")?;
+    let nodes = app.screen().layout_nodes();
+    let glyph = |want: &str| {
+        nodes
+            .iter()
+            .find(|node| {
+                node.text
+                    .as_ref()
+                    .is_some_and(|text| text.text.text == want)
+            })
+            .ok_or_else(|| format!("missing grapheme {want:?}"))
+    };
+    // Compare the same source column across independent rows. This remains
+    // valid when the native platform rounds the measured cell width to pixels.
+    for (left, right) in [("A", "B"), ("C", "D"), ("Z", "Y")] {
+        assert!(
+            (glyph(left)?.bounds.origin.x.0 - glyph(right)?.bounds.origin.x.0).abs() < 0.5,
+            "{left} and {right} must occupy the same native column"
+        );
+    }
+    assert!(glyph("e\u{301}")?.bounds.size.width.0 > 0.0);
+    assert!(glyph("👩‍👩‍👧‍👦")?.bounds.size.width.0 > 0.0);
+    assert!(app.screen().in_selectable_view("text:A")?);
     Ok(())
 }

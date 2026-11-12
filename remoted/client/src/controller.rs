@@ -8,7 +8,7 @@ use neko_remoted_protocol::{
     self as protocol, RelayAddress,
     code::DeviceCode,
     crypto::Identity,
-    messages::{Event, FileEntry, Operation, Permission, Resource, Response},
+    messages::{ConnectionKind, Event, FileEntry, Operation, Permission, Resource, Response},
     utf8::Decoder,
 };
 use std::{
@@ -22,7 +22,9 @@ use std::{
 use tokio::sync::mpsc;
 
 mod connection_scope;
+mod host_names;
 pub mod interaction;
+mod latency;
 #[cfg(not(target_os = "android"))]
 mod local_workspace;
 mod retirement;
@@ -89,6 +91,13 @@ pub struct Model {
     pub host_busy: bool,
     pub relay: Option<RelayAddress>,
     pub bindings: Vec<Binding>,
+    pub aliases: storage::HostAliases,
+    pub host_names: storage::HostNames,
+    pub remote_host_name: String,
+    pub connection_kind: ConnectionKind,
+    /// Latest authenticated client-to-host round trip, never the Relay socket RTT.
+    pub latency_ms: Option<u64>,
+    pub alias_saving: Option<Binding>,
     /// Selected saved host, retained while offline so the UI can retry it.
     pub active_binding: Option<Binding>,
     /// Workspace actions must carry this value through Client::send_for.
@@ -189,6 +198,10 @@ pub enum Command {
     },
     Reconnect(Binding),
     Forget(Binding),
+    RenameBinding {
+        binding: Binding,
+        alias: String,
+    },
     Disconnect,
     /// Lifecycle detach: stop this process without disabling saved auto-connect.
     Suspend,
@@ -421,6 +434,7 @@ struct Actor {
     model: Model,
     scope: Arc<ConnectionScope>,
     retry: Retry,
+    latency: latency::Latency,
     unknown_outcome: bool,
     attachments: HashMap<String, Attachment>,
     restoring: HashMap<String, Restoration>,
@@ -462,6 +476,7 @@ impl Actor {
             model: Model::default(),
             scope,
             retry: Retry::default(),
+            latency: latency::Latency::default(),
             unknown_outcome: false,
             attachments: HashMap::new(),
             restoring: HashMap::new(),
@@ -491,6 +506,8 @@ impl Actor {
 
     fn restore_preferences(&mut self, preferences: storage::Preferences) -> Option<Binding> {
         self.model.bindings = preferences.bindings;
+        self.model.aliases = preferences.aliases;
+        self.model.host_names = preferences.host_names;
         self.model.active_binding = preferences.selected.clone();
         preferences
             .auto_connect
@@ -501,6 +518,10 @@ impl Actor {
     async fn publish(&self) {
         self.scope.select(self.model.active_binding.clone());
         let mut model = self.model.clone();
+        model.latency_ms = self.reported_latency(Instant::now());
+        if let Some(session) = &self.session {
+            model.connection_kind = session.connection_kind();
+        }
         model.opening = self.outstanding.values().any(|request| {
             matches!(&request.kind, Pending::Attach(_) | Pending::Restore { .. })
                 || matches!(&request.kind, Pending::Herdr { method, .. } if method == "session.snapshot")
@@ -591,6 +612,18 @@ impl Actor {
                     Ok(())
                 }
                 Incoming::Tick => {
+                    match self.latency_tick(Instant::now()).await {
+                        Ok(true) => self.publish().await,
+                        Ok(false) => {}
+                        Err(error) => {
+                            self.disconnected().await;
+                            if self.model.generation == self.scope.current() {
+                                self.connection_result(Err(error)).await;
+                                self.publish().await;
+                            }
+                            continue;
+                        }
+                    }
                     if let Some(at) = self.retry.at {
                         if at > Instant::now() {
                             self.model.reconnect_in_seconds = Some(
@@ -640,6 +673,7 @@ impl Actor {
     }
 
     async fn disconnected(&mut self) {
+        self.clear_latency();
         self.model.interaction.interrupted();
         if self.retry.enabled {
             self.capture_restoration();
@@ -654,6 +688,8 @@ impl Actor {
         self.handshake_deadline = None;
         self.output.clear();
         self.model.phase = Phase::Offline;
+        self.model.remote_host_name.clear();
+        self.model.connection_kind = ConnectionKind::Connecting;
         self.model.permission = None;
         self.model.resources.clear();
         for pane in &mut self.model.panes {
@@ -743,6 +779,7 @@ impl Actor {
     }
 
     fn clear_workspace(&mut self) {
+        self.model.remote_host_name.clear();
         self.model.interaction = interaction::History::default();
         self.output.clear();
         self.outstanding.clear();
@@ -1062,12 +1099,17 @@ impl Actor {
                     self.disconnected().await;
                 }
                 self.model.bindings = storage::forget(&binding).await?;
+                self.model.aliases.retain(&self.model.bindings);
+                self.model.host_names.retain(&self.model.bindings);
                 if self.model.active_binding.as_ref() == Some(&binding) {
                     self.model.active_binding = None;
                     self.clear_workspace();
                 }
                 self.model.notice =
                     "已忘记本机配对；主机授权未撤销，如需撤销请在小橘管理此设备。".into();
+            }
+            Command::RenameBinding { binding, alias } => {
+                self.rename_binding(binding, alias).await;
             }
             Command::Check(address) => {
                 ensure!(
@@ -1421,6 +1463,7 @@ impl Actor {
 
     async fn response(&mut self, response: Response) -> Result<bool> {
         self.last_received = Instant::now();
+        let kind_changed = self.refresh_latency(Instant::now());
         let mut changed = true;
         let pending = self
             .outstanding
@@ -1430,10 +1473,10 @@ impl Actor {
             if let Event::TerminalAttached { stream, .. } = response.event {
                 self.retire_stream(&stream);
             }
-            return Ok(false);
+            return Ok(kind_changed);
         }
         if self.is_retired_event(&response.event) {
-            return Ok(false);
+            return Ok(kind_changed);
         }
         let input_changed = self.input_response(&pending, &response.event);
         match response.event {
@@ -1470,6 +1513,8 @@ impl Actor {
                         return Err(error.context("安全保存失败，未发送配对确认"));
                     }
                 };
+                self.model.aliases.retain(&self.model.bindings);
+                self.model.host_names.retain(&self.model.bindings);
                 self.model.local = false;
                 self.model.active_binding = Some(binding.clone());
                 self.retry.arm();
@@ -1479,6 +1524,8 @@ impl Actor {
                 self.model.phase = Phase::AwaitingReady;
                 self.handshake_deadline = Some(Instant::now() + Duration::from_secs(30));
             }
+            Event::HostInfo { name } => self.reported_host_name(name).await,
+            Event::DirectReady {} => changed = false,
             Event::Ready {
                 device_id,
                 permission,
@@ -1494,6 +1541,11 @@ impl Actor {
                 );
                 self.outstanding.clear();
                 self.model.phase = Phase::Ready;
+                self.model.connection_kind = self
+                    .session
+                    .as_ref()
+                    .map(WorkspaceChannel::connection_kind)
+                    .unwrap_or(ConnectionKind::Relay);
                 self.model.error.clear();
                 self.handshake_deadline = None;
                 self.model.permission = Some(permission);
@@ -1502,6 +1554,9 @@ impl Actor {
                 self.retry.connected_at = Some(Instant::now());
                 self.model.reconnect_in_seconds = None;
                 self.model.notice = self.outcome_notice();
+                if let Some(session) = &mut self.session {
+                    session.enable_direct().await?;
+                }
                 let requests = self.restoration_requests();
                 for (previous, attachment) in requests {
                     self.request(
@@ -1529,8 +1584,8 @@ impl Actor {
                     .await?;
                 changed = false;
             }
-            Event::Pong { .. } => {
-                changed = false;
+            Event::Pong { nonce } => {
+                changed = self.latency_pong(response.id, &nonce, Instant::now());
             }
             Event::Ok => {
                 changed = input_changed;
@@ -1652,7 +1707,7 @@ impl Actor {
             } => {
                 let output = self.output.get_mut(&stream).context("未知终端输出")?;
                 if output.sequence.is_some_and(|last| sequence <= last) {
-                    return Ok(false);
+                    return Ok(kind_changed);
                 }
                 let missing = output
                     .sequence
@@ -1864,7 +1919,7 @@ impl Actor {
             }
             Event::Cancelled { transfer } => {
                 if self.completed.as_ref() == Some(&transfer) {
-                    return Ok(false);
+                    return Ok(kind_changed);
                 }
                 ensure!(
                     self.transfer
@@ -1958,7 +2013,7 @@ impl Actor {
                 );
             }
         }
-        Ok(changed)
+        Ok(changed || kind_changed)
     }
 }
 
@@ -1974,6 +2029,8 @@ fn ordinary_terminal_capabilities(mut resources: Vec<Resource>) -> Vec<Resource>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod restoration;
 
     fn actor() -> Actor {
         Actor::new(mpsc::channel(32).0)
@@ -2590,6 +2647,8 @@ mod tests {
             bindings: vec![binding.clone()],
             selected: Some(binding.clone()),
             auto_connect: true,
+            aliases: storage::HostAliases::default(),
+            host_names: storage::HostNames::default(),
         });
         assert_eq!(automatic, Some(binding.clone()));
         assert_eq!(actor.model.active_binding, Some(binding.clone()));
@@ -2598,7 +2657,9 @@ mod tests {
                 .restore_preferences(storage::Preferences {
                     bindings: vec![binding.clone()],
                     selected: Some(binding),
-                    auto_connect: false
+                    auto_connect: false,
+                    aliases: storage::HostAliases::default(),
+                    host_names: storage::HostNames::default(),
                 })
                 .is_none()
         );
@@ -2790,6 +2851,8 @@ mod tests {
                 bindings: actor.model.bindings.clone(),
                 selected: actor.model.active_binding.clone(),
                 auto_connect: auto.load(Ordering::Acquire),
+                aliases: actor.model.aliases.clone(),
+                host_names: actor.model.host_names.clone(),
             };
             assert_eq!(actor.restore_preferences(preferences).is_some(), !manual);
         }
@@ -2836,54 +2899,76 @@ mod tests {
                 "failed attempts must retain restore descriptors"
             );
         }
-        let (session, mut requests) = Session::observed();
-        actor.session = Some(session.into());
-        actor.binding = Some(target.clone());
-        actor.model.phase = Phase::AwaitingReady;
-        actor
-            .response(Response {
-                id: 0,
-                event: Event::Ready {
-                    device_id: target.device_id,
-                    permission: Permission::Operate,
-                    resources,
-                },
-            })
-            .await
-            .unwrap();
-        assert_eq!(actor.outstanding.len(), 2);
+        let mut previous_direct_key = None;
         for _ in 0..2 {
-            let request = requests.recv().await.unwrap();
-            assert!(
-                matches!(request.operation, Operation::TerminalAttach { .. }),
-                "only attach may be replayed"
-            );
+            let (session, mut requests) = Session::observed();
+            actor
+                .reconnect_with(
+                    target.clone(),
+                    ReconnectMode::Retry,
+                    async { Ok(()) },
+                    async { Ok((Identity::generate()?, session)) },
+                )
+                .await
+                .unwrap();
             actor
                 .response(Response {
-                    id: request.id,
-                    event: Event::TerminalAttached {
-                        stream: format!("new-{}", request.id),
-                        name: "resumed".into(),
-                        read_only: false,
+                    id: 0,
+                    event: Event::Ready {
+                        device_id: target.device_id.clone(),
+                        permission: Permission::Operate,
+                        resources: resources.clone(),
                     },
                 })
                 .await
                 .unwrap();
+            let negotiation = requests.recv().await.unwrap();
+            let Operation::EnableDirect { key } = negotiation.operation else {
+                panic!("Ready must negotiate direct transport before restoring attachments")
+            };
+            let key = protocol::decode32(&key).expect("direct key must encode exactly 32 bytes");
+            assert!(key != [0; 32], "direct key must not be empty");
+            assert!(key != protocol::decode32(&target.host_key).unwrap());
+            assert!(key != protocol::decode32(&target.route).unwrap());
+            assert!(
+                previous_direct_key != Some(key),
+                "each reconnected session must negotiate a fresh direct key"
+            );
+            previous_direct_key = Some(key);
+            assert_eq!(actor.outstanding.len(), 2);
+            for _ in 0..2 {
+                let request = requests.recv().await.unwrap();
+                assert!(
+                    matches!(request.operation, Operation::TerminalAttach { .. }),
+                    "after one direct negotiation, only attach may be replayed"
+                );
+                actor
+                    .response(Response {
+                        id: request.id,
+                        event: Event::TerminalAttached {
+                            stream: format!("new-{}", request.id),
+                            name: "resumed".into(),
+                            read_only: false,
+                        },
+                    })
+                    .await
+                    .unwrap();
+            }
+            assert!(requests.try_recv().is_err());
+            assert!(actor.restoring.is_empty());
+            assert_eq!(actor.model.panes.len(), 2);
+            assert!(actor.model.panes.iter().all(|p| !p.controller && p.live()));
+            assert!(
+                actor
+                    .validate(&Operation::TerminalInput {
+                        stream: actor.model.panes[0].stream.clone(),
+                        data: "unsafe".into()
+                    })
+                    .is_err()
+            );
+            actor.disconnected().await;
+            assert!(requests.recv().await.is_none());
         }
-        assert!(requests.try_recv().is_err());
-        assert!(actor.restoring.is_empty());
-        assert_eq!(actor.model.panes.len(), 2);
-        assert!(actor.model.panes.iter().all(|p| !p.controller && p.live()));
-        assert!(
-            actor
-                .validate(&Operation::TerminalInput {
-                    stream: actor.model.panes[0].stream.clone(),
-                    data: "unsafe".into()
-                })
-                .is_err()
-        );
-        actor.disconnected().await;
-        assert!(requests.recv().await.is_none());
     }
 
     #[tokio::test]

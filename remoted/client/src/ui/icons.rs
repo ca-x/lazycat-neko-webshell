@@ -128,36 +128,16 @@ pub fn activity(status: Option<&str>) -> impl IntoElement + use<> {
         .tooltip(super::tooltip(label))
 }
 
-pub fn program(
-    record: &neko_remoted_protocol::messages::ProgramRecord,
-) -> impl IntoElement + use<> {
+pub fn program_status(state: neko_remoted_protocol::messages::ProgramState) -> &'static str {
     use neko_remoted_protocol::messages::ProgramState;
-    let status = match record.state {
-        ProgramState::Unknown => None,
-        ProgramState::Idle => Some("idle"),
-        ProgramState::Working => Some("working"),
-        ProgramState::Done => Some("done"),
-        ProgramState::Blocked => Some("blocked"),
-        ProgramState::Error => Some("error"),
-    };
-    let app = record.app.clone();
-    view()
-        .flex_row()
-        .items_center()
-        .gap_1()
-        .child(agent_with_status(
-            record.app.as_deref().unwrap_or_default(),
-            status,
-        ))
-        .child(
-            text(move || {
-                app.clone()
-                    .map(SharedString::from)
-                    .unwrap_or_else(|| tr("终端程序"))
-            })
-            .text_xs(),
-        )
-        .child(activity(status))
+    match state {
+        ProgramState::Working => "working",
+        ProgramState::Blocked => "blocked",
+        ProgramState::Error => "error",
+        ProgramState::Done => "done",
+        ProgramState::Idle => "idle",
+        ProgramState::Unknown => "unknown",
+    }
 }
 
 pub fn primary_program(

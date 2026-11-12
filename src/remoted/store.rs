@@ -102,6 +102,7 @@ pub struct Pending {
     pub decision: oneshot::Sender<Device>,
 }
 pub struct Peer {
+    pub path: Option<neko_remoted_transport::Sender>,
     pub device: Option<String>,
     pub cancel: CancellationToken,
     pub rtt: Option<(u64, Instant)>,

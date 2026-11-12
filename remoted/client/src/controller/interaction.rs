@@ -29,6 +29,7 @@ pub struct History {
 }
 
 impl History {
+    #[cfg(test)]
     pub fn entries(&self) -> impl Iterator<Item = &Submission> {
         self.entries.iter()
     }

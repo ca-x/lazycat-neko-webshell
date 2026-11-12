@@ -361,6 +361,10 @@ async fn pair_host(
     assert!(matches!(peer.receive().await.event, Event::Approved { .. }));
     peer.send(Operation::AcknowledgePairing {}).await;
     assert!(matches!(peer.receive().await.event, Event::Ready { .. }));
+    let Event::HostInfo { name } = peer.receive().await.event else {
+        panic!("host metadata required");
+    };
+    assert_eq!(name, hostname::get().unwrap().to_string_lossy().trim());
     peer
 }
 #[tokio::test]
@@ -1208,15 +1212,14 @@ async fn closing_a_resource_removes_durable_grants_without_granting_replacement_
     host.close_terminal(&replacement).await.unwrap();
 }
 
-// An independent protocol client used only by the explicit public-v2 acceptance test.
+// An independent protocol client used only by the explicit public-v3 acceptance test.
 // It uses real TLS/WebSocket/Noise and acknowledges each exact inbound token after decoding.
 #[cfg(unix)]
 type PublicSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 #[cfg(unix)]
 struct PublicPeer {
-    socket: PublicSocket,
-    peer: String,
+    socket: public_path::WireSocket,
     channel: protocol::crypto::Channel,
     next: u64,
 }
@@ -1258,31 +1261,8 @@ async fn public_frame(socket: &mut PublicSocket) -> protocol::messages::RelayFra
     .expect("public Relay receive timeout")
 }
 #[cfg(unix)]
-async fn public_ciphertext(socket: &mut PublicSocket, peer: &str) -> Vec<u8> {
-    use protocol::messages::RelayFrame;
-    loop {
-        match public_frame(socket).await {
-            RelayFrame::Data {
-                data,
-                sequence: Some(sequence),
-                ..
-            } => {
-                let data = protocol::decode(&data, protocol::MAX_CIPHERTEXT).unwrap();
-                public_send(
-                    socket,
-                    RelayFrame::Acknowledge {
-                        peer: peer.into(),
-                        sequence,
-                    },
-                )
-                .await;
-                return data;
-            }
-            RelayFrame::Delivered { count: 1..=8, .. } | RelayFrame::Pong { .. } => {}
-            _ => panic!("unexpected public Relay frame"),
-        }
-    }
-}
+#[path = "tests/public_path.rs"]
+mod public_path;
 #[cfg(unix)]
 impl PublicPeer {
     async fn open(
@@ -1326,7 +1306,7 @@ impl PublicPeer {
         )
         .await
         .expect("public TLS connect timeout")
-        .expect("public v2 TLS/WebSocket connect failed");
+        .expect("public v3 TLS/WebSocket connect failed");
         assert_eq!(
             response.headers()["sec-websocket-protocol"],
             protocol::RELAY_PROTOCOL
@@ -1342,6 +1322,7 @@ impl PublicPeer {
             },
         )
         .await;
+        let mut socket = public_path::WireSocket::new(socket, peer);
         let mut handshake = Handshake::new(
             identity,
             &relay,
@@ -1352,34 +1333,15 @@ impl PublicPeer {
             (mode == protocol::crypto::Mode::Connect).then(|| host.0.core.identity.public()),
         )
         .unwrap();
-        public_send(
-            &mut socket,
-            RelayFrame::Data {
-                peer: peer.clone(),
-                data: protocol::encode(&handshake.write().unwrap()),
-                sequence: None,
-            },
-        )
-        .await;
-        handshake
-            .read(&public_ciphertext(&mut socket, &peer).await)
-            .unwrap();
+        socket.send(handshake.write().unwrap()).await;
+        handshake.read(&socket.receive().await).unwrap();
         if !handshake.finished() {
-            public_send(
-                &mut socket,
-                RelayFrame::Data {
-                    peer: peer.clone(),
-                    data: protocol::encode(&handshake.write().unwrap()),
-                    sequence: None,
-                },
-            )
-            .await;
+            socket.send(handshake.write().unwrap()).await;
         }
         let (channel, key) = handshake.into_channel().unwrap();
         assert_eq!(&key, host.0.core.identity.public());
         Self {
             socket,
-            peer,
             channel,
             next: 1,
         }
@@ -1388,23 +1350,19 @@ impl PublicPeer {
         let id = self.next;
         self.next += 1;
         let bytes = protocol::pack(&protocol::messages::Request { id, operation }).unwrap();
-        let data = protocol::encode(&self.channel.encrypt(&bytes).unwrap());
-        public_send(
-            &mut self.socket,
-            protocol::messages::RelayFrame::Data {
-                peer: self.peer.clone(),
-                data,
-                sequence: None,
-            },
-        )
-        .await;
+        self.socket
+            .send(self.channel.encrypt(&bytes).unwrap())
+            .await;
         id
     }
     async fn receive(&mut self) -> Response {
         loop {
-            let data = public_ciphertext(&mut self.socket, &self.peer).await;
+            let data = self.socket.receive().await;
             let response: Response =
                 protocol::unpack(&self.channel.decrypt(&data).unwrap()).unwrap();
+            if matches!(response.event, Event::HostInfo { .. }) {
+                continue;
+            }
             if let Event::Ping { nonce } = response.event {
                 self.send(Operation::Pong { nonce }).await;
             } else {
@@ -1424,25 +1382,9 @@ impl PublicPeer {
         let _ = self.socket.close(None).await;
     }
     async fn disconnected(&mut self) {
-        use futures_util::StreamExt;
-        tokio::time::timeout(Duration::from_secs(15), async {
-            while let Some(message) = self.socket.next().await {
-                match message {
-                    Ok(tokio_tungstenite::tungstenite::Message::Close(_)) | Err(_) => return,
-                    Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
-                        if matches!(
-                            serde_json::from_str::<protocol::messages::RelayFrame>(&text),
-                            Ok(protocol::messages::RelayFrame::Closed { .. })
-                        ) {
-                            return;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        })
-        .await
-        .expect("revoked public socket did not disconnect");
+        tokio::time::timeout(Duration::from_secs(15), self.socket.disconnected())
+            .await
+            .expect("revoked public socket did not disconnect");
     }
     async fn output(&mut self, marker: &[u8]) {
         tokio::time::timeout(Duration::from_secs(15), async {
@@ -1472,22 +1414,22 @@ async fn public_wait(host: &Host, predicate: impl Fn(&HostSnapshot) -> bool) {
         }
     })
     .await
-    .expect("public host snapshot deadline (requires deployed v2 Relay)");
+    .expect("public host snapshot deadline (requires deployed v3 Relay)");
 }
 
 /// Explicit opt-in: unique in-memory store/route/PTYs, real production host supervisor,
 /// real public TLS/WebSocket/Noise. No provisioning, deployment, or persistent pairing.
 #[cfg(unix)]
 #[tokio::test]
-#[ignore = "requires NEKO_NATIVE_HOST_PUBLIC_RELAY pointing to an already deployed v2 Relay"]
-async fn public_v2_host_pair_shared_pty_readonly_revoke_reconnect_lifecycle() {
+#[ignore = "requires NEKO_NATIVE_HOST_PUBLIC_RELAY pointing to an already deployed v3 Relay"]
+async fn public_v3_host_pair_shared_pty_readonly_revoke_reconnect_lifecycle() {
     if controlled_shell_child(
-        "tests::public_v2_host_pair_shared_pty_readonly_revoke_reconnect_lifecycle",
+        "tests::public_v3_host_pair_shared_pty_readonly_revoke_reconnect_lifecycle",
     ) {
         return;
     }
     let relay = std::env::var("NEKO_NATIVE_HOST_PUBLIC_RELAY")
-        .expect("set NEKO_NATIVE_HOST_PUBLIC_RELAY=https://your-deployed-v2-relay");
+        .expect("set NEKO_NATIVE_HOST_PUBLIC_RELAY=https://your-deployed-v3-relay");
     let (save, saved) = store();
     let host = start(None, save.clone()).await.unwrap();
     host.manage(Action::Configure {
@@ -1499,7 +1441,7 @@ async fn public_v2_host_pair_shared_pty_readonly_revoke_reconnect_lifecycle() {
     .unwrap();
     public_wait(&host, |s| s.status == "online").await;
     let terminal = host
-        .create_terminal("isolated public-v2 PTY".into())
+        .create_terminal("isolated public-v3 PTY".into())
         .await
         .unwrap();
     let ungranted = host
@@ -1534,7 +1476,7 @@ async fn public_v2_host_pair_shared_pty_readonly_revoke_reconnect_lifecycle() {
         PublicPeer::open(&host, &identity, protocol::crypto::Mode::Pair, Some(&code)).await;
     let id = peer
         .send(Operation::Identify {
-            name: "public-v2 isolated acceptance".into(),
+            name: "public-v3 isolated acceptance".into(),
         })
         .await;
     assert!(matches!(peer.reply(id).await, Event::Pending { .. }));

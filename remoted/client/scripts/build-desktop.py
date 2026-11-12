@@ -17,10 +17,13 @@ import zipfile
 
 CLIENT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CLIENT.parent / 'scripts'))
+sys.path.insert(0, str(CLIENT / 'scripts'))
 import native_build_inputs
+import native_fonts
 NSH_REV = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1"
 APP_ID = "community.lazycat.neko.remoted"
 BINARY = "neoko-terminal"
+CHINESE_NAME = "小橘终端"
 
 
 def run(*args, **kwargs):
@@ -64,6 +67,7 @@ def main():
         shutil.copy2(CLIENT / "android/licenses/NSH-LICENSE-APACHE", licenses / "NSH-LICENSE-APACHE")
         shutil.copy2(CLIENT / "android/licenses/NOTICE", licenses / "NOTICE")
         native_build_inputs.stage_licenses(licenses)
+        native_fonts.stage_licenses(licenses)
         (stage / "INSTALL.txt").write_text(
             "neoko-terminal desktop " + args.version + "\nThe default local terminal works without a Relay.\n"
             "For remote connections, configure the same HTTPS/WSS Relay as the remote host, then paste/type its device code.\n"
@@ -94,7 +98,13 @@ def main():
             shutil.copy2(stage / "INSTALL.txt", docs / "INSTALL.txt")
             desktop = root / f"usr/share/applications/{APP_ID}.desktop"
             desktop.parent.mkdir(parents=True)
-            desktop.write_text(f"[Desktop Entry]\nType=Application\nName=neoko-terminal\nName[zh_CN]=neoko-terminal\nExec={BINARY}\nIcon={APP_ID}\nTerminal=false\nCategories=Network;RemoteAccess;\nStartupWMClass={APP_ID}\n", encoding="utf-8")
+            desktop.write_text(
+                f"[Desktop Entry]\nType=Application\nName={CHINESE_NAME}\n"
+                f"Name[en]={BINARY}\nName[en_US]={BINARY}\n"
+                + "".join(f"Name[{locale}]={CHINESE_NAME}\n" for locale in ("zh", "zh_CN", "zh_TW", "zh_HK", "zh_SG", "zh_MO"))
+                + f"Keywords={BINARY};{CHINESE_NAME};小橘;terminal;console;shell;ssh;remote;终端;命令行;远程;\n"
+                f"Exec={BINARY}\nIcon={APP_ID}\nTerminal=false\nCategories=Network;RemoteAccess;\nStartupWMClass={APP_ID}\n",
+                encoding="utf-8")
             icon = root / f"usr/share/pixmaps/{APP_ID}.png"
             icon.parent.mkdir(parents=True)
             shutil.copy2(CLIENT / "android/res/drawable/neko.png", icon)
@@ -117,9 +127,15 @@ def main():
             (macos / BINARY).chmod(0o755)
             with (contents / "Info.plist").open("wb") as handle:
                 plistlib.dump({"CFBundleIdentifier": APP_ID, "CFBundleName": "neoko-terminal", "CFBundleDisplayName": "neoko-terminal",
+                              "CFBundleDevelopmentRegion": "en", "CFBundleLocalizations": ["en", "zh", "zh-Hans", "zh-Hant"],
                               "CFBundleExecutable": BINARY, "CFBundlePackageType": "APPL", "CFBundleShortVersionString": args.version,
                               "CFBundleVersion": args.version, "LSMinimumSystemVersion": os.environ.get("MACOSX_DEPLOYMENT_TARGET", "14.0"),
                               "NSHighResolutionCapable": True}, handle)
+            for locale, name in (("en", BINARY), ("zh", CHINESE_NAME), ("zh-Hans", CHINESE_NAME), ("zh-Hant", CHINESE_NAME)):
+                localized = resources / f"{locale}.lproj"
+                localized.mkdir()
+                (localized / "InfoPlist.strings").write_text(
+                    f'"CFBundleName" = "{name}";\n"CFBundleDisplayName" = "{name}";\n', encoding="utf-8")
             shutil.copytree(licenses, resources / "licenses")
             shutil.copy2(stage / "INSTALL.txt", resources / "INSTALL.txt")
             (resources / "build-info.json").write_text(json.dumps(info, indent=2) + "\n")

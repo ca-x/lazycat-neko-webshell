@@ -87,6 +87,7 @@ if [[ "$native_lib" != "$work/package/lib/arm64-v8a/libnsh.so" ]]; then
     cp "$native_lib" "$work/package/lib/arm64-v8a/libnsh.so"
 fi
 if [[ -n ${NEKO_ANDROID_ASSETS:-} ]]; then cp -R "$NEKO_ANDROID_ASSETS/." "$work/package/assets/"; fi
+python3 "$client_dir/scripts/native_fonts.py" stage-android "$work/package/assets"
 cp "$client_dir/android/licenses/ZXing-LICENSE" "$work/package/assets/licenses/ZXing-LICENSE"
 cp "$client_dir/android/licenses/NSH-LICENSE-APACHE" "$work/package/assets/licenses/NSH-LICENSE-APACHE"
 cp "$client_dir/android/licenses/NOTICE" "$work/package/assets/licenses/NOTICE"
@@ -123,6 +124,7 @@ for license in ZXing-LICENSE NSH-LICENSE-APACHE NOTICE; do
 done
 unzip -p "$output/neko-remoted.apk" assets/licenses/NEKO-LICENSE | cmp "$client_dir/../LICENSE" -
 python3 "$client_dir/../scripts/native_build_inputs.py" verify-apk "$output/neko-remoted.apk" "$work/build-inputs.json"
+python3 "$client_dir/scripts/native_fonts.py" verify-apk "$output/neko-remoted.apk"
 certificate=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$output/signature.txt")
 [[ "$certificate" =~ ^[0-9a-fA-F]{64}$ ]] || { echo 'Could not read signing certificate fingerprint' >&2; exit 1; }
 apk_sha=$(sha256sum "$output/neko-remoted.apk" | awk '{print $1}')

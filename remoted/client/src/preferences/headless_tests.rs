@@ -48,7 +48,6 @@ fn Fixture() -> impl IntoElement {
         )
         .child(text(move || format!("state={:?}", ui.state())))
         .child(text(move || format!("theme={}", ui.theme().id)))
-        .child(preferences::current_context().terminal().h(px(100.0)))
 }
 
 fn reset(value: Option<String>) {

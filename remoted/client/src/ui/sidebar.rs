@@ -1,13 +1,11 @@
 use super::{
+    connection::host_names,
     controls::{hint, icon_action, icons::Icon, session_row, tooltip},
     navigation::Section,
     resources,
     state::Ui,
 };
-use crate::{
-    controller::Command,
-    preferences::{tr, tr_format},
-};
+use crate::{controller::Command, preferences::tr};
 use nsh_base::theme;
 use nsh_core::prelude::*;
 #[path = "agent_sidebar.rs"]
@@ -54,20 +52,26 @@ pub fn render(ui: Ui) -> impl IntoElement {
                     .child(each(
                         move || ui.model.with(|model| model.bindings.clone()),
                         |binding| (binding.relay.origin().to_owned(), binding.route.clone()),
-                        move |binding, index| {
+                        move |binding, _| {
                             view()
                                 .tooltip(tooltip(move || {
                                     binding.with(|binding| {
                                         format!(
                                             "{} · {}",
                                             binding.relay.origin(),
-                                            &binding.host_key[..8.min(binding.host_key.len())]
+                                            host_names::fingerprint(binding)
                                         )
                                     })
                                 }))
                                 .child(session_row(
                                     Icon::Monitor,
-                                    move || tr_format("主机 {}", &[&(index.get() + 1)]),
+                                    move || {
+                                        binding.with(|binding| {
+                                            ui.model.with(|model| {
+                                                host_names::display_name(model, binding)
+                                            })
+                                        })
+                                    },
                                     move || {
                                         binding.with(|binding| {
                                             ui.model.with(|model| {
@@ -141,24 +145,14 @@ pub fn render(ui: Ui) -> impl IntoElement {
                 .gap_1()
                 .border_t_1()
                 .border_color(move || theme().border)
+                .child(super::connection::status::render(ui))
                 .child(
-                    view()
+                    text(move || ui.model.with(host_names::active_name))
+                        .text_xs()
+                        .number_of_lines(1)
                         .flex_1()
                         .min_w(px(0.0))
-                        .tooltip(tooltip(move || ui.model.with(|model| tr(model.status()))))
-                        .child(
-                            text(move || {
-                                ui.model.with(|model| {
-                                    tr(if model.ready() {
-                                        "已连接"
-                                    } else {
-                                        model.status()
-                                    })
-                                })
-                            })
-                            .text_xs()
-                            .text_color(move || theme().muted_foreground),
-                        ),
+                        .text_color(move || theme().muted_foreground),
                 )
                 .child(icon_action(
                     Icon::Settings,
