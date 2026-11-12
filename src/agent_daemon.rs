@@ -1439,7 +1439,7 @@ mod tests {
 
     #[test]
     fn agent_compatibility_window_is_valid() {
-        assert_eq!(AGENT_VERSION, 22);
+        assert_eq!(AGENT_VERSION, 23);
         assert_eq!(MIN_SUPPORTED_AGENT_VERSION, 11);
     }
 
