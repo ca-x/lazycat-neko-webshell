@@ -92,12 +92,35 @@ Linux GTK 原生程序在任务独有 Xvfb、隔离 DBus/系统密钥环和 XDG 
 发现的引导作用域、重复点击与空态文案已修正，并有针对性回归。该窄窗口属于 Linux
 GTK，不能当作 Android 实机证据。新增状态使用现有语义主题和按压反馈，不额外添加动画。
 
+正式 Linux amd64 deb 也在同一隔离环境中完成启动、设置恢复、切换默认后端、
+创建真实本机 fish、显式取得控制权、键盘输入 `echo formalready` 并读取实际返回。
+该包版本为 0.4.1、源码为 `970055db848f0cf853495fca973e455366403183`，
+SHA-256 为 `c5e1b330819f2d29f488a1aafbb7b25aef22162f54fcd95aa6a37500cf9899be`。
+两个 macOS 包已核对正式二进制架构、版本、来源和 ad-hoc 代码签名页；这不是 Mac 真机运行证据。
+
+正式公开 Android APK 已在任务独有 API 35/arm64 Android 模拟器中以 `adb install -r`
+从 0.2.0/build 7 覆盖升级至 0.3.0/build 8，应用 ID 和生产签名不变，
+`firstInstallTime` 保持不变。APK 为非 debuggable，v3 签名和 16 KiB 对齐检查通过。
+使用独立跨应用 UiAutomation 驱动，直接操作原始正式 APK，没有改签应用或关闭系统签名检查。
+完成公共 Relay 上的新设备码配对与主机批准、保存简体中文偏好、强制停止后冷启动自动连接、
+普通终端附着、取得控制权及对话模式下的中文原生输入。通过原生输入框提交
+`printf '%s\n' 'ANDROID-V2-中文成功'`，界面显示“主机已接受输入”，
+真实 PTY 日志和客户端终端都出现独立输出行 `ANDROID-V2-中文成功`，不是只检查命令回显。
+
+最终 `android_managed_terminal_harness` 实际运行 299.84 秒，结果为一项通过、零项失败；
+认证连接两次、控制状态变化两次，`expectedOutputSeen=true`、`outputGap=false`。
+测试完成后显式通知 fixture 结束，其隔离主机和 PTY 正常清理。
+前置尝试中存在设备码过期、测试驱动签名目标不匹配及未点中按钮等失败，
+它们不计为产品验收通过；最终证据使用独立外部驱动、按钮可点击父节点和新配对 fixture。
+这是正式 APK 的模拟器操作证据，不代表 Android 真机、完整输入法组合过程或旧配对跨版本恢复已验收。
+
 ## 发行和平台边界
 
 私有 Actions 构建，公开 Actions 校验来源、版本、不可移动 tag、GitHub artifact digest、
 包内容、Ghostty 输入和许可后发布；公开仓库不重建原生客户端。
 Android 正式包必须保持生产证书、应用 ID、版本和 16 KiB 对齐。
 Windows/macOS 包以各自原生 runner 的 CI 和包检查为证据，没有声称已在这些平台真机使用。
+Windows 包尚未签名，macOS 使用 ad-hoc 签名，未进行 Developer ID 公证。
 
 483 项终端主题来自既有 WebShell 主题目录，应用外观、主题、字号和中文/英文独立保存。
 NSH 当前 Terminal trait 无法表达的鼠标协议、Kitty 键盘和图片等能力没有额外宣称支持。
@@ -109,6 +132,33 @@ NSH 当前 Terminal trait 无法表达的鼠标协议、Kitty 键盘和图片等
 用户于 2026-11-12 确认粘贴卡死是操作系统问题，重启已恢复；停止应用侧排查并删除临时诊断
 测试，不将此事件写入软件修复清单。详细证据和限制见 `paste-diagnosis-2026-11-12.md`。
 
-WebShell 0.14.2 私有构建 `43185111106` 已通过，公开发布运行 `43189700537` 已通过，
-公开 Release 于 2026-11-12 发布为非 draft 的稳定版本，附 LPK 与 checksums.txt。
-Android 与桌面包仍以之后各平台的实际构建和公开发布回读为准，不能据此记录声称已交付。
+## 正式发布回读
+
+WebShell 0.14.2 私有构建 `43185111106` 和公开发布 `43189700537` 均通过，
+2026-11-12T09:14:53Z 发布稳定 Release，附 LPK 与 checksums.txt。正式公开 LPK 已下载，
+SHA-256 为 `35f38857b03f4a39bb3fe10110121a8655bc67985ecf1778da9fa9b2accc8e83`，
+包内应用 ID 与 0.14.2 版本一致。喵喵商店与官方商店提交成功，不代表商店审核已通过。
+
+桌面 0.4.1 私有构建 `43197003064` 的四个平台全部成功，源码为
+`970055db848f0cf853495fca973e455366403183`；公开发布 `43203367322` 成功，
+2026-11-12T10:47:28Z 发布为非 draft、非 prerelease，共 12 个附件。
+公开 tag `neoko-terminal-desktop-v0.4.1` 固定在公开提交
+`fc19b61d6e9436e528829938055ec0748c4d0541`，与私有源码 SHA 分开记录。
+0.4.0 构建未通过，保留其原始 tag 和空草稿，不移动 tag、不冒称已交付该版本。
+
+Android 0.3.0/build 8 私有构建 `43195173719` 成功，源码为
+`b812aa37ca91fbe7f27ba6ef241b87740009f929`；公开发布 `43203582587` 成功，
+2026-11-12T10:48:52Z 发布为非 draft、非 prerelease，附 APK、checksums.txt、provenance.json。
+公开 tag `neoko-terminal-android-v0.3.0` 保留既有公开提交
+`758a1ce4f7c57b73c45d3660e3b8bb1d9c3a61e1`，发布工作流验证它是可信 main 的祖先。
+APK SHA-256 为 `36efb652fba248822ac8329bd5c36091a2888d19a03c32d3773fad595b2abf91`。
+
+四个桌面原始 Actions ZIP 已校验 GitHub artifact digest，包内平台架构、版本和来源清单一致；
+12 个桌面公开附件全部下载并与私有产物逐字节比对一致。Android 三个公开附件与 WebShell
+两个公开附件也已下载并核对 GitHub 资产摘要。最后回读确认三个 Release 均为
+`draft=false`、`prerelease=false`，附件数分别为 12、3、2。
+公开 main 提交 `67e7664c40473b67ac9aeedeaa9a8b61178814a7` 的发布检查
+`43203473823` 和 `43203473890` 均成功。
+
+后续桌面端统一交付 Release 构建的稳定正式包，Windows x64、macOS arm64、macOS Intel
+和 Linux amd64 deb 齐备后完成公开稳定 Release；草稿、预发布和临时 Actions 产物不算正式交付。
