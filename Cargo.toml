@@ -19,7 +19,7 @@ buffa-types = "0.9.1"
 bytes = "1.11.0"
 capnp = "0.26.2"
 capnp-futures = "0.26.1"
-capnp-rpc = "0.26.1"
+capnp-rpc = "0.27.4"
 connectrpc = { version = "0.8.1", features = ["axum"] }
 futures = "0.3.31"
 hostname = "0.3.1"
