@@ -61,10 +61,14 @@ impl Ui {
                         ui.model.set(*model);
                     }
                     Update::Output {
+                        generation,
                         stream,
                         text,
                         reset,
                     } => {
+                        if generation != ui.model.with_untracked(|model| model.generation) {
+                            continue;
+                        }
                         let api = ui.refs.with(|refs| refs.get(&stream).cloned());
                         if let Some(api) = api {
                             ui.flush(&stream, &api);

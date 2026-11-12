@@ -1,5 +1,6 @@
-//! Shared navigation state. Transport state stays in the controller.
-use nsh_core::prelude::*;
+//! Presentation state only; transport and control ownership stay in the controller.
+use nsh_core::{platform::Os, prelude::*};
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Section {
@@ -7,31 +8,97 @@ pub enum Section {
     Terminal,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InteractionMode {
+    Terminal,
+    Conversation,
+}
+impl InteractionMode {
+    pub fn default_for(os: Os) -> Self {
+        if os == Os::Android {
+            Self::Conversation
+        } else {
+            Self::Terminal
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Presentation {
+    mode: InteractionMode,
+    composer: bool,
+}
+impl Default for Presentation {
+    fn default() -> Self {
+        Self {
+            mode: InteractionMode::default_for(os()),
+            composer: os() == Os::Android,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct Navigation {
     pub section: Signal<Section>,
     pub drawer: Signal<bool>,
+    pub sidebar: Signal<bool>,
     pub settings: Signal<bool>,
     pub files: Signal<bool>,
+    /// The grant is part of the workspace identity; different hosts may reuse IDs.
+    pub workspace: Signal<(String, String)>,
+    presentations: Signal<HashMap<String, Presentation>>,
 }
-
 impl Navigation {
     pub fn new(setup: bool) -> Self {
         Self {
-            section: signal(Section::Herdr),
+            section: signal(if os() == Os::Android {
+                Section::Herdr
+            } else {
+                Section::Terminal
+            }),
             drawer: signal(false),
+            sidebar: signal(true),
             settings: signal(setup),
             files: signal(false),
+            workspace: signal((String::new(), String::new())),
+            presentations: signal(HashMap::new()),
         }
     }
-
+    pub fn mode(self, stream: &str) -> InteractionMode {
+        self.presentations
+            .with(|values| values.get(stream).copied().unwrap_or_default().mode)
+    }
+    pub fn set_mode(self, stream: &str, mode: InteractionMode) {
+        self.presentations
+            .update(|values| values.entry(stream.into()).or_default().mode = mode);
+    }
+    pub fn composer_visible(self, stream: &str) -> bool {
+        self.presentations.with(|values| {
+            let value = values.get(stream).copied().unwrap_or_default();
+            value.composer || value.mode == InteractionMode::Conversation
+        })
+    }
+    pub fn toggle_composer(self, stream: &str) {
+        self.presentations.update(|values| {
+            let value = values.entry(stream.into()).or_default();
+            value.composer = !value.composer;
+        });
+    }
+    pub fn retain_sessions(self, streams: &[String]) {
+        if self
+            .presentations
+            .with_untracked(|values| values.keys().any(|key| !streams.contains(key)))
+        {
+            self.presentations
+                .update(|values| values.retain(|key, _| streams.contains(key)));
+        }
+    }
     pub fn show_session(self) {
         self.drawer.set(false);
         self.settings.set(false);
         self.files.set(false);
     }
 }
-
 pub fn wide() -> bool {
     window().width.0 >= 760.0
 }

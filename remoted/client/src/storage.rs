@@ -85,6 +85,8 @@ struct SavedBindings {
     bindings: Vec<Binding>,
     selected: Option<BindingIdentity>,
     auto_connect: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    local: Option<bool>,
 }
 
 pub(crate) struct Preferences {
@@ -100,6 +102,7 @@ fn decode_bindings(value: Option<&str>) -> Result<SavedBindings> {
             bindings: Vec::new(),
             selected: None,
             auto_connect: false,
+            local: None,
         });
     };
     let saved: SavedBindings = if value.trim_start().starts_with('[') {
@@ -112,6 +115,7 @@ fn decode_bindings(value: Option<&str>) -> Result<SavedBindings> {
             bindings,
             selected,
             auto_connect,
+            local: None,
         }
     } else {
         serde_json::from_str(value).context("已配对设备和连接偏好存储损坏")?
@@ -161,6 +165,7 @@ pub(crate) async fn select_binding(binding: &Binding) -> Result<()> {
     );
     saved.selected = Some(BindingIdentity::of(binding));
     saved.auto_connect = true;
+    saved.local = Some(false);
     save_bindings(&saved).await
 }
 pub(crate) async fn stop_auto_connect() -> Result<()> {
@@ -184,6 +189,7 @@ pub async fn remember(binding: Binding) -> Result<Vec<Binding>> {
     saved.bindings = remember_in(saved.bindings, binding.clone())?;
     saved.selected = Some(BindingIdentity::of(&binding));
     saved.auto_connect = true;
+    saved.local = Some(false);
     save_bindings(&saved).await?;
     Ok(saved.bindings)
 }
@@ -218,6 +224,20 @@ fn forget_from(mut saved: Vec<Binding>, binding: &Binding) -> Vec<Binding> {
             && item.host_key == binding.host_key)
     });
     saved
+}
+
+/// Returns the selected workspace without conflating it with hosting configuration.
+#[cfg(not(target_os = "android"))]
+pub(crate) async fn local_workspace() -> Result<Option<bool>> {
+    Ok(load_bindings().await?.local)
+}
+
+/// Saves the local selection together with the existing remote reconnect preference.
+#[cfg(not(target_os = "android"))]
+pub(crate) async fn select_local_workspace() -> Result<()> {
+    let mut saved = load_bindings().await?;
+    saved.local = Some(true);
+    save_bindings(&saved).await
 }
 
 #[cfg(test)]
@@ -323,6 +343,7 @@ mod tests {
             bindings: vec![old.clone(), rotated.clone()],
             selected: Some(BindingIdentity::of(&old)),
             auto_connect: true,
+            local: None,
         };
         let restored = decode_bindings(Some(&serde_json::to_string(&saved).unwrap())).unwrap();
         assert!(restored.selected.as_ref().unwrap().matches(&old));

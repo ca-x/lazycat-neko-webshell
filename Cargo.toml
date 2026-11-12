@@ -7,7 +7,7 @@ default-run = "lazycat-neko-webshell"
 
 [workspace]
 exclude = ["remoted"]
-members = ["crates/herdr-socket-bridge", "crates/program-status", "crates/plugin"]
+members = ["crates/hc-client", "crates/herdr-socket-bridge", "crates/program-status", "crates/plugin"]
 resolver = "3"
 
 [dependencies]
@@ -27,6 +27,7 @@ http-body = "1.0.1"
 lzc-sdk = { version = "0.2.0", default-features = false, features = ["gateway"] }
 libc = "0.2.186"
 mime_guess = "2.0.5"
+neko-hc-client = { path = "crates/hc-client" }
 neko-herdr-socket-bridge = { path = "crates/herdr-socket-bridge" }
 neko-plugin = { path = "crates/plugin" }
 neko-program-status = { path = "crates/program-status" }

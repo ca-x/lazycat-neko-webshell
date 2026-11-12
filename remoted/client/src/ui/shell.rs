@@ -20,6 +20,13 @@ pub(super) fn Body(cx: Scope<NoEvent>) -> impl IntoElement {
         }
     });
     effect(move || {
+        ui.navigation.retain_sessions(&ui.model.with(|model| {
+            model
+                .panes
+                .iter()
+                .map(|pane| pane.stream.clone())
+                .collect::<Vec<_>>()
+        }));
         if navigation::wide() {
             ui.navigation.drawer.set(false);
         }
@@ -42,13 +49,16 @@ pub(super) fn Body(cx: Scope<NoEvent>) -> impl IntoElement {
         .pb(move || cx.insets().bottom.max(keyboard_height()))
         .pl(move || cx.insets().left)
         .pr(move || cx.insets().right)
-        .child(when(navigation::wide, move || {
-            view()
-                .w(px(280.0))
-                .border_r_1()
-                .border_color(move || theme().border)
-                .child(sidebar::render(ui))
-        }))
+        .child(when(
+            move || navigation::wide() && ui.navigation.sidebar.get(),
+            move || {
+                view()
+                    .w(px(224.0))
+                    .border_r_1()
+                    .border_color(move || theme().border)
+                    .child(sidebar::render(ui))
+            },
+        ))
         .child(workspace::render(ui))
         .child(
             sheet()
@@ -74,3 +84,7 @@ pub(super) fn Body(cx: Scope<NoEvent>) -> impl IntoElement {
                 .child(sidebar::render(ui)),
         )
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "compact_tests.rs"]
+mod compact_tests;

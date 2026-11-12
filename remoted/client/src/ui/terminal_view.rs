@@ -1,24 +1,31 @@
 use super::{
-    controls::{action, hint},
+    controls::{
+        hint,
+        icons::{self, Icon},
+    },
     state::Ui,
     terminal_observer,
     terminal_surface::Surface,
 };
 use crate::controller::{Command, Pane, PaneKind};
+use crate::preferences::{current_context, tr};
 use neko_remoted_protocol::messages::Operation;
-use nsh_base::{TerminalEvent, terminal, theme};
+use nsh_base::TerminalEvent;
 use nsh_core::prelude::*;
 
+#[path = "interaction.rs"]
+pub(super) mod interaction;
+
 pub fn render(ui: Ui, pane: ReadSignal<Pane>) -> impl IntoElement {
-    let more = signal(false);
+    let appearance = current_context();
+    let mode = computed(move || pane.with(|pane| ui.navigation.mode(&pane.stream)));
     let surface = Surface::new();
     let reference = surface.reference;
     provide_context(surface.factory());
     let size = signal((80_u16, 24_u16));
     let writable = computed(move || ui.model.with(|model| model.writable()));
-    let controlling = computed(move || {
-        pane.with(|pane| pane.controller && !pane.read_only && pane.exit.is_none())
-    });
+    let controlling =
+        computed(move || pane.with(|pane| pane.controller && !pane.read_only && pane.live()));
     effect(move || {
         let visible = pane.with(|p| p.stream == ui.active.get())
             && !ui.navigation.settings.get()
@@ -50,122 +57,92 @@ pub fn render(ui: Ui, pane: ReadSignal<Pane>) -> impl IntoElement {
     view()
         .flex_1()
         .min_h(px(0.0))
-        .gap_2()
         .style_when(
             move || pane.with(|pane| pane.stream != ui.active.get()),
             |style| style.hidden(),
         )
-        .child(
-            view()
-                .px_4()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .child(
-                    text(move || {
-                        pane.with(|pane| {
-                            format!(
-                                "{} · {}",
-                                pane.name,
-                                match pane.exit {
-                                    Some(code) => format!("已退出（{code}）"),
-                                    None if pane.controller => "已取得控制权".into(),
-                                    None => "只读浏览".into(),
-                                }
-                            )
+        .child(when(
+            move || pane.with(|pane| pane.unavailable.is_some()),
+            move || {
+                view()
+                    .px_4()
+                    .gap_1()
+                    .child(hint(move || {
+                        tr("会话连接已中断。关闭此标签后，可从会话列表重新打开。")
+                    }))
+                    .child(
+                        text(move || {
+                            pane.with(|pane| pane.unavailable.clone().unwrap_or_default())
                         })
-                    })
-                    .text_sm()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .number_of_lines(1),
-                )
-                .child(action(
-                    move || {
-                        if pane.with(|pane| pane.controller) {
-                            "释放控制权"
-                        } else {
-                            "取得控制权"
-                        }
-                    },
-                    false,
-                    move || {
-                        !ui.model.with(|model| model.writable())
-                            || pane.with(|pane| pane.read_only || pane.exit.is_some())
-                    },
-                    move || {
-                        let pane = pane.get_untracked();
-                        ui.send(Command::Request(Operation::TerminalControl {
-                            stream: pane.stream,
-                            take: !pane.controller,
-                        }));
-                    },
-                ))
-                .child(action(
-                    "更多",
-                    false,
-                    || false,
-                    move || more.update(|open| *open = !*open),
-                )),
-        )
+                        .text_sm()
+                        .select_text()
+                        .role(AccessibilityRole::Alert),
+                    )
+            },
+        ))
         .child(when(
             move || pane.with(|pane| pane.gap),
             || {
                 view()
                     .px_4()
-                    .child(hint("输出存在缺口；当前画面可能不完整。"))
+                    .child(hint(move || tr("输出存在缺口；当前画面可能不完整。")))
             },
         ))
         .child(when(
-            move || more.get(),
+            move || mode.get() == interaction::Mode::Conversation,
+            move || interaction::submissions(ui, pane),
+        ))
+        .child(when(
+            move || mode.get() == interaction::Mode::Conversation,
             move || {
-                view().px_4().child(action(
-                    "关闭此窗格连接",
-                    false,
-                    || false,
-                    move || {
-                        ui.send(Command::Request(Operation::TerminalDetach {
-                            stream: pane.get_untracked().stream,
-                        }))
-                    },
-                ))
+                view()
+                    .px_3()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(icons::render(Icon::Terminal))
+                    .child(
+                        text(move || tr("真实终端输出"))
+                            .text_sm()
+                            .flex_1()
+                            .font_weight(FontWeight::SEMIBOLD),
+                    )
+                    .child(super::workspace_header::session_tabs::badges(ui, pane))
             },
         ))
         .child(
             view()
+                .test_id("terminal-output-card")
                 .flex_1()
                 .min_h(px(0.0))
                 .overflow_hidden()
-                .bg(move || {
-                    theme()
-                        .color("terminal-background")
-                        .unwrap_or(theme().background)
-                })
+                .style_when(
+                    move || mode.get() == interaction::Mode::Conversation,
+                    |style| {
+                        style
+                            .border_1()
+                            .border_color(move || nsh_base::theme().border)
+                            .rounded(move || nsh_base::theme().radius)
+                    },
+                )
+                .bg(move || appearance.background())
                 .child(
                     when(
-                        move || can_input.get(),
+                        move || can_input.get() && mode.get() == interaction::Mode::Terminal,
                         move || {
-                            terminal()
+                            appearance
+                                .terminal()
                                 .component_ref(&reference)
                                 .flex_1()
                                 .min_h(px(0.0))
-                                .accessibility_label("远程终端；取得控制权后可输入")
-                                .bg(move || {
-                                    theme()
-                                        .color("terminal-background")
-                                        .unwrap_or(theme().background)
-                                })
-                                .text_color(move || {
-                                    theme()
-                                        .color("terminal-foreground")
-                                        .unwrap_or(theme().foreground)
-                                })
+                                .accessibility_label(move || tr("远程终端；取得控制权后可输入"))
+                                .bg(move || appearance.background())
+                                .text_color(move || appearance.foreground())
                                 .on_data(move |data: &SharedString| {
-                                    if ui.model.with_untracked(|model| model.writable())
+                                    if mode.get_untracked() == interaction::Mode::Terminal
+                                        && ui.model.with_untracked(|model| model.writable())
                                         && pane.with_untracked(|pane| {
-                                            pane.controller
-                                                && !pane.read_only
-                                                && pane.exit.is_none()
+                                            pane.controller && !pane.read_only && pane.live()
                                         })
                                     {
                                         let herdr =
@@ -198,5 +175,12 @@ pub fn render(ui: Ui, pane: ReadSignal<Pane>) -> impl IntoElement {
                     .otherwise(move || terminal_observer::render(observer.clone(), size)),
                 ),
         )
-        .child(super::composer::render(ui, pane))
+        .child(
+            view()
+                .style_when(
+                    move || !pane.with(|pane| ui.navigation.composer_visible(&pane.stream)),
+                    |style| style.hidden(),
+                )
+                .child(super::composer::render(ui, pane)),
+        )
 }

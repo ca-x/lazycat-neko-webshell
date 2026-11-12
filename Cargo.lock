@@ -2028,6 +2028,7 @@ dependencies = [
  "libc",
  "lzc-sdk",
  "mime_guess",
+ "neko-hc-client",
  "neko-herdr-socket-bridge",
  "neko-plugin",
  "neko-program-status",
@@ -2256,6 +2257,15 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "neko-hc-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

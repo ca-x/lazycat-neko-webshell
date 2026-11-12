@@ -8,7 +8,7 @@ on:
       desktop_version:
         description: Independent desktop package version (does not change Android)
         required: true
-        default: '0.3.0'
+        default: '0.4.0'
         type: string
 
 permissions:
@@ -16,6 +16,7 @@ permissions:
 
 jobs:
   desktop:
+    if: github.repository == 'ca-x/lazycat-neko-webshell' && github.event.repository.private
     name: ${{ matrix.target }}
     strategy:
       fail-fast: false
@@ -36,6 +37,8 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: 1.97.1
@@ -43,6 +46,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Enable MSVC and Windows SDK headers for Ghostty C++ dependencies
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with:
+          arch: x64
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ghostty-archives
+          key: ghostty-archives-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('remoted/ghostty/toolchain.json') }}
+      - name: Install checksum-verified Ghostty source and Zig
+        shell: bash
+        run: python remoted/scripts/ghostty-toolchain.py setup --directory "$RUNNER_TEMP/ghostty-toolchain" --cache "$RUNNER_TEMP/ghostty-archives"
+      - name: Verify toolchain bootstrap contracts
+        run: python -m unittest discover -s remoted/scripts -p "test_*.py"
       - name: Validate immutable desktop release tag
         shell: bash
         env:
@@ -61,20 +78,21 @@ jobs:
           sudo apt-get install -y libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libdbus-1-dev pkg-config dpkg-dev gnome-keyring dbus-x11
       - uses: Swatinem/rust-cache@v2
         with:
+          prefix-key: ghostty-native-v1-${{ hashFiles('remoted/ghostty/toolchain.json', 'remoted/scripts/ghostty-toolchain.py', 'remoted/ghostty/tools/zig-android.sh') }}
           workspaces: remoted/client
           key: desktop-${{ matrix.target }}
       - name: Native client tests on runner CPU
-        run: cargo test --manifest-path remoted/client/Cargo.toml --locked --lib
+        run: python remoted/scripts/ghostty-toolchain.py run -- cargo test --manifest-path remoted/client/Cargo.toml --locked --lib
       - name: Build and package native desktop
         env:
           DESKTOP_TARGET: ${{ matrix.target }}
-        run: python remoted/client/scripts/build-desktop.py --version "$env:DESKTOP_VERSION" --target "$env:DESKTOP_TARGET" --out remoted/client/target/desktop-dist
+        run: python remoted/scripts/ghostty-toolchain.py run -- python remoted/client/scripts/build-desktop.py --version "$env:DESKTOP_VERSION" --target "$env:DESKTOP_TARGET" --out remoted/client/target/desktop-dist
         if: runner.os == 'Windows'
       - name: Build and package native desktop (Unix)
         if: runner.os != 'Windows'
         env:
           DESKTOP_TARGET: ${{ matrix.target }}
-        run: python3 remoted/client/scripts/build-desktop.py --version "$DESKTOP_VERSION" --target "$DESKTOP_TARGET" --out remoted/client/target/desktop-dist
+        run: python3 remoted/scripts/ghostty-toolchain.py run -- python3 remoted/client/scripts/build-desktop.py --version "$DESKTOP_VERSION" --target "$DESKTOP_TARGET" --out remoted/client/target/desktop-dist
       - name: Upload desktop package and provenance
         uses: actions/upload-artifact@v4
         with:

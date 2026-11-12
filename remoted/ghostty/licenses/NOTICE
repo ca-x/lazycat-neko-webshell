@@ -1,0 +1,24 @@
+neoko-terminal includes Ghostty VT and the libghostty-rs Rust binding.
+
+Ghostty source revision: 108cacb17ed8990840cd14abfce43d8ed8503ca1
+Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors.
+License: MIT; see GHOSTTY-LICENSE.
+
+libghostty-rs revision: cd4d497e8c698b27054a677ce19d1bd1a1a4d8bf
+Copyright (c) 2026 Uzair Aftab, Leah Amelia Chen.
+License: MIT; see LIBGHOSTTY-RS-LICENSE.
+
+third-party.json is the pinned Ghostty VT dependency inventory, including its
+linked dependencies and build-only aro entry. Their upstream license and
+attribution texts are preserved in the corresponding component directories:
+highway, simdutf, translate_c, uucode, wuffs, and aro. The uucode supplemental
+notices are included from the same pinned upstream revision because its Zig
+package omits the licenses directory referenced by LICENSE.md.
+
+The zig directory retains Zig 0.17.1 and LLVM runtime notices for native builds.
+The compiler distribution itself is not included in this application package.
+
+manifest.json records the source revision/origin and SHA-256 of each notice.
+All original license files are copied without text edits. This notice is
+additional attribution; it does not replace those license terms or relicense
+the upstream components.

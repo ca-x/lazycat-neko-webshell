@@ -12,6 +12,9 @@ pub use desktop::{initialize, start_services};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
+#[cfg(not(target_os = "android"))]
+pub(crate) const HOST_IDENTITY_KEY: &str = "neoko.host.identity-and-settings.v1";
+
 pub async fn scan_code() -> Result<String> {
     request(json!({"op":"scan"}))
         .await?

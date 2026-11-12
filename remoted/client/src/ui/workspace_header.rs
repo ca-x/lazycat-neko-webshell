@@ -1,77 +1,87 @@
 use super::{
-    controls::{action, hint},
+    controls::{hint, icon_action, icons::Icon},
+    navigation,
     state::Ui,
+    terminal_view::interaction,
 };
+use crate::preferences::tr;
 use nsh_base::theme;
 use nsh_core::prelude::*;
+#[path = "session_tabs.rs"]
+pub(super) mod session_tabs;
+
+/// One navigation/command row; normal connection status belongs to the sidebar.
 pub fn render(ui: Ui) -> impl IntoElement {
     view()
-        .px_4()
-        .py_2()
-        .gap_2()
         .border_b_1()
         .border_color(move || theme().border)
         .child(
             view()
+                .test_id("workspace-tab-bar")
                 .flex_row()
                 .items_center()
-                .gap_2()
-                .child(when(
-                    move || !super::navigation::wide(),
+                .gap_1()
+                .px_1()
+                .child(icon_action(
+                    Icon::Devices,
+                    "设备侧栏",
                     move || {
-                        action(
-                            "设备",
-                            false,
-                            || false,
-                            move || ui.navigation.drawer.set(true),
-                        )
+                        if navigation::wide() {
+                            ui.navigation.sidebar.get()
+                        } else {
+                            ui.navigation.drawer.get()
+                        }
                     },
-                ))
-                .child(when(
-                    move || !ui.active.get().is_empty() && !ui.navigation.settings.get(),
+                    || false,
                     move || {
-                        action(
-                            move || {
-                                if super::navigation::wide() {
-                                    "所有会话"
-                                } else {
-                                    "返回"
-                                }
-                            },
-                            false,
-                            || false,
-                            move || ui.active.set(String::new()),
-                        )
+                        if navigation::wide() {
+                            ui.navigation.sidebar.update(|open| *open = !*open);
+                        } else {
+                            ui.navigation.drawer.update(|open| *open = !*open);
+                        }
                     },
                 ))
                 .child(
                     view().flex_1().min_w(px(0.0)).child(
-                        text(move || {
-                            if ui.navigation.settings.get() {
-                                return "连接设置".to_owned();
-                            }
-                            ui.model.with(|m| {
-                                m.panes
-                                    .iter()
-                                    .find(|p| p.stream == ui.active.get())
-                                    .map(|p| p.name.clone())
-                                    .unwrap_or_else(|| "所有会话".into())
-                            })
-                        })
-                        .text_base()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .number_of_lines(1),
+                        when(
+                            move || ui.navigation.settings.get(),
+                            || text(move || tr("连接设置")).text_sm(),
+                        )
+                        .otherwise(move || session_tabs::render(ui)),
                     ),
                 )
                 .child(when(
+                    move || !ui.navigation.settings.get(),
                     move || {
-                        ui.model
-                            .with(|m| m.ready() && m.resources.iter().any(|r| r.files))
+                        each(
+                            move || {
+                                ui.model.with(|model| {
+                                    model
+                                        .panes
+                                        .iter()
+                                        .filter(|pane| pane.stream == ui.active.get())
+                                        .cloned()
+                                        .collect::<Vec<_>>()
+                                })
+                            },
+                            |pane| pane.stream.clone(),
+                            move |pane, _| interaction::toolbar(ui, pane),
+                        )
+                    },
+                ))
+                .child(when(
+                    move || {
+                        navigation::wide()
+                            && ui.model.with(|model| {
+                                model.ready()
+                                    && model.resources.iter().any(|resource| resource.files)
+                            })
                     },
                     move || {
-                        action(
+                        icon_action(
+                            Icon::Files,
                             "文件",
-                            false,
+                            move || ui.navigation.files.get(),
                             || false,
                             move || {
                                 ui.navigation.settings.set(false);
@@ -82,57 +92,49 @@ pub fn render(ui: Ui) -> impl IntoElement {
                 )),
         )
         .child(when(
-            move || {
-                !super::navigation::wide()
-                    && !ui.navigation.settings.get()
-                    && ui.active.get().is_empty()
-            },
+            move || ui.model.with(|model| !model.error.is_empty()),
             move || {
                 view()
+                    .px_2()
                     .flex_row()
+                    .items_center()
                     .gap_2()
-                    .child(super::controls::tab(
-                        "Herdr",
-                        move || ui.navigation.section.get() == super::navigation::Section::Herdr,
-                        move || {
-                            ui.navigation.section.set(super::navigation::Section::Herdr);
-                            ui.active.set(String::new());
-                        },
-                    ))
-                    .child(super::controls::tab(
-                        "终端",
-                        move || ui.navigation.section.get() == super::navigation::Section::Terminal,
-                        move || {
-                            ui.navigation
-                                .section
-                                .set(super::navigation::Section::Terminal);
-                            ui.active.set(String::new());
-                        },
-                    ))
-            },
-        ))
-        .child(hint(move || ui.model.with(|m| m.status().to_owned())))
-        .child(when(
-            move || ui.model.with(|m| !m.error.is_empty()),
-            move || {
-                view()
-                    .gap_1()
                     .child(
-                        text(move || ui.model.with(|m| m.error.clone()))
+                        text(move || ui.model.with(|model| tr(&model.error)))
+                            .flex_1()
                             .text_sm()
                             .text_color(move || theme().destructive)
                             .role(AccessibilityRole::Alert),
                     )
-                    .child(action(
+                    .child(icon_action(
+                        Icon::Close,
                         "关闭提示",
-                        false,
                         || false,
-                        move || ui.model.update(|m| m.error.clear()),
+                        || false,
+                        move || ui.model.update(|model| model.error.clear()),
                     ))
             },
         ))
         .child(when(
-            move || ui.model.with(|m| !m.notice.is_empty()),
-            move || hint(move || ui.model.with(|m| m.notice.clone())),
+            move || ui.model.with(|model| !model.notice.is_empty()),
+            move || {
+                view()
+                    .px_2()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        view()
+                            .flex_1()
+                            .child(hint(move || ui.model.with(|model| model.notice.clone()))),
+                    )
+                    .child(icon_action(
+                        Icon::Close,
+                        "关闭提示",
+                        || false,
+                        || false,
+                        move || ui.model.update(|model| model.notice.clear()),
+                    ))
+            },
         ))
 }

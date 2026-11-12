@@ -36,7 +36,9 @@ pub fn render(ui: Ui) -> impl IntoElement {
         view()
             .p_4()
             .gap_4()
-            .child(heading("连接中转"))
+            .child(appearance_settings())
+            .child(host_settings(ui))
+            .child(heading("连接远程主机"))
             .child(when(
                 move || ui.model.with(|model| model.phase == Phase::Offline) || expanded.get(),
                 move || {
@@ -274,5 +276,24 @@ async fn read_device_code() -> Result<Result<String, anyhow::Error>, String> {
         } else {
             Ok(value)
         })
+    }
+}
+
+fn host_settings(ui: Ui) -> impl IntoElement {
+    #[cfg(not(target_os = "android"))]
+    {
+        super::hosting::render(ui).into_element()
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = ui;
+        view().into_element()
+    }
+}
+
+fn appearance_settings() -> nsh_core::element::AnyElement {
+    match use_context::<crate::preferences::Ui>() {
+        Some(preferences) => super::preferences::render(preferences).into_element(),
+        None => view().into_element(),
     }
 }

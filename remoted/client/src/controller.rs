@@ -12,7 +12,7 @@ use neko_remoted_protocol::{
     utf8::Decoder,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -22,9 +22,17 @@ use std::{
 use tokio::sync::mpsc;
 
 mod connection_scope;
+pub mod interaction;
+#[cfg(not(target_os = "android"))]
+mod local_workspace;
+mod retirement;
 mod retry;
+#[cfg(test)]
+mod stream_unavailable_tests;
+mod workspace_channel;
 use connection_scope::ConnectionScope;
 use retry::Retry;
+use workspace_channel::WorkspaceChannel;
 
 const QUEUE: usize = 32;
 
@@ -50,17 +58,35 @@ pub enum PaneKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pane {
     pub kind: PaneKind,
+    pub herdr_pane_id: Option<String>,
+    pub herdr_grant: Option<String>,
+    pub programs: Vec<neko_remoted_protocol::messages::ProgramRecord>,
     pub stream: String,
     pub name: String,
     pub controller: bool,
     pub read_only: bool,
     pub exit: Option<i32>,
+    /// An attachment ended without claiming that its underlying process exited.
+    pub unavailable: Option<String>,
     pub gap: bool,
+}
+
+impl Pane {
+    pub fn live(&self) -> bool {
+        self.exit.is_none() && self.unavailable.is_none()
+    }
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct Model {
+    pub interaction: interaction::History,
     pub phase: Phase,
+    /// Local workspace selection is independent of the outbound host service.
+    pub local: bool,
+    #[cfg(not(target_os = "android"))]
+    pub host: Option<neoko_terminal_host::HostSnapshot>,
+    #[cfg(not(target_os = "android"))]
+    pub host_busy: bool,
     pub relay: Option<RelayAddress>,
     pub bindings: Vec<Binding>,
     /// Selected saved host, retained while offline so the UI can retry it.
@@ -77,6 +103,7 @@ pub struct Model {
     pub panes: Vec<Pane>,
     pub herdr_grant: String,
     pub herdr_panes: Vec<(String, String)>,
+    pub herdr_workspace: crate::ui::herdr::Snapshot,
     pub herdr_response: Option<HerdrResponse>,
     pub file_grant: String,
     pub path: String,
@@ -126,6 +153,7 @@ impl Model {
             Phase::AwaitingApproval => "等待主机用户明确批准，请在小橘核对设备指纹",
             Phase::Persisting => "主机已批准，正在安全保存绑定…",
             Phase::AwaitingReady => "绑定已保存，等待主机就绪…",
+            Phase::Ready if self.local => "本机 · 会话保留在当前应用中",
             Phase::Ready => {
                 if self.writable() {
                     "已连接 · 可操作授权"
@@ -144,6 +172,16 @@ pub enum Command {
         generation: u64,
         command: Box<Command>,
     },
+    #[cfg(not(target_os = "android"))]
+    SelectLocal,
+    #[cfg(not(target_os = "android"))]
+    CreateLocalSession {
+        backend: protocol::messages::SessionBackend,
+    },
+    #[cfg(not(target_os = "android"))]
+    CloseLocalTerminal(String),
+    #[cfg(not(target_os = "android"))]
+    Host(neoko_terminal_host::Action),
     Check(String),
     Pair {
         code: String,
@@ -155,6 +193,10 @@ pub enum Command {
     /// Lifecycle detach: stop this process without disabling saved auto-connect.
     Suspend,
     Request(Operation),
+    SubmitInput {
+        stream: String,
+        text: String,
+    },
     Upload {
         grant: String,
         directory: String,
@@ -170,6 +212,7 @@ pub enum Command {
 pub enum Update {
     Model(Box<Model>),
     Output {
+        generation: u64,
         stream: String,
         text: String,
         reset: bool,
@@ -195,6 +238,11 @@ impl Client {
             .sender
             .try_reserve()
             .map_err(|_| anyhow::anyhow!("操作队列繁忙或连接已关闭，请稍后重试"))?;
+        #[cfg(not(target_os = "android"))]
+        if matches!(command, Command::Host(_)) {
+            permit.send(command);
+            return Ok(());
+        }
         if let Some(scope) = &self.scope {
             let generation = if command.changes_connection()
                 || matches!(&command, Command::Forget(binding) if scope.is_selected(binding))
@@ -215,6 +263,10 @@ impl Client {
 
     /// Sends a workspace action only to the connection shown by the originating UI.
     pub fn send_for(&self, generation: u64, command: Command) -> Result<()> {
+        #[cfg(not(target_os = "android"))]
+        if matches!(command, Command::Host(_)) {
+            return self.send(command);
+        }
         if command.changes_connection() && !matches!(command, Command::Disconnect) {
             return self.send(command);
         }
@@ -249,6 +301,10 @@ impl Client {
 
 impl Command {
     fn changes_connection(&self) -> bool {
+        #[cfg(not(target_os = "android"))]
+        if matches!(self, Self::SelectLocal) {
+            return true;
+        }
         matches!(
             self,
             Self::Check(_)
@@ -316,6 +372,8 @@ enum ReconnectMode {
 }
 
 enum Pending {
+    Input(u64),
+    RetiredAttach,
     Ordinary,
     Attach(Attachment),
     Restore {
@@ -366,7 +424,14 @@ struct Actor {
     unknown_outcome: bool,
     attachments: HashMap<String, Attachment>,
     restoring: HashMap<String, Restoration>,
-    session: Option<Session>,
+    retired_streams: VecDeque<String>,
+    session: Option<WorkspaceChannel>,
+    #[cfg(not(target_os = "android"))]
+    host: Option<neoko_terminal_host::Host>,
+    #[cfg(not(target_os = "android"))]
+    host_updates: Option<tokio::sync::watch::Receiver<neoko_terminal_host::HostSnapshot>>,
+    #[cfg(target_os = "android")]
+    host_updates: Option<tokio::sync::watch::Receiver<()>>,
     binding: Option<Binding>,
     identity: Option<Identity>,
     output: HashMap<String, OutputState>,
@@ -400,7 +465,11 @@ impl Actor {
             unknown_outcome: false,
             attachments: HashMap::new(),
             restoring: HashMap::new(),
+            retired_streams: VecDeque::new(),
             session: None,
+            #[cfg(not(target_os = "android"))]
+            host: None,
+            host_updates: None,
             binding: None,
             identity: None,
             output: HashMap::new(),
@@ -449,6 +518,28 @@ impl Actor {
             Ok(preferences) => automatic = self.restore_preferences(preferences),
             Err(error) => self.model.error = format!("无法读取安全设备和自动连接偏好：{error:#}"),
         }
+        #[cfg(not(target_os = "android"))]
+        {
+            if let Err(error) = self.initialize_host().await {
+                self.model.error = format!("无法启动本机终端：{error:#}");
+            }
+            let local = match storage::local_workspace().await {
+                Ok(selected) => selected.unwrap_or(automatic.is_none()),
+                Err(error) => {
+                    self.model.error = format!("无法恢复工作区偏好：{error:#}");
+                    false
+                }
+            };
+            if local && self.host.is_some() {
+                automatic = None;
+                if let Some(generation) = self.scope.advance_if_current(0) {
+                    self.model.generation = generation;
+                    if let Err(error) = self.select_local(false).await {
+                        self.model.error = format!("无法打开本机工作区：{error:#}");
+                    }
+                }
+            }
+        }
         self.publish().await;
         if let Some(binding) = automatic
             && let Some(generation) = self.scope.advance_if_current(0)
@@ -467,12 +558,14 @@ impl Actor {
                 Command(Option<Command>),
                 Response(Result<Response>),
                 Prepared(PreparedResult),
+                HostChanged,
                 Tick,
             }
             let incoming = tokio::select! {
                 command = commands.recv() => Incoming::Command(command),
                 response = async { match self.session.as_mut() { Some(session) => session.receive().await, None => std::future::pending().await } } => Incoming::Response(response),
                 Some(prepared) = self.prepare_rx.recv() => Incoming::Prepared(prepared),
+                _ = workspace_channel::host_changed(&mut self.host_updates) => Incoming::HostChanged,
                 _ = deadline.tick() => Incoming::Tick,
                 _ = self.updates.closed() => break,
             };
@@ -492,6 +585,11 @@ impl Actor {
                     Err(error)
                 }
                 Incoming::Prepared(prepared) => self.preparation_result(prepared).await,
+                Incoming::HostChanged => {
+                    #[cfg(not(target_os = "android"))]
+                    self.refresh_host();
+                    Ok(())
+                }
                 Incoming::Tick => {
                     if let Some(at) = self.retry.at {
                         if at > Instant::now() {
@@ -518,6 +616,7 @@ impl Actor {
                             .handshake_deadline
                             .is_some_and(|deadline| deadline < Instant::now())
                         || (self.model.ready()
+                            && !self.model.local
                             && self.last_received.elapsed() > Duration::from_secs(35))
                     {
                         self.disconnected().await;
@@ -541,6 +640,7 @@ impl Actor {
     }
 
     async fn disconnected(&mut self) {
+        self.model.interaction.interrupted();
         if self.retry.enabled {
             self.capture_restoration();
         }
@@ -561,6 +661,7 @@ impl Actor {
             pane.read_only = true;
         }
         self.model.herdr_panes.clear();
+        self.model.herdr_workspace = crate::ui::herdr::Snapshot::default();
         self.model.herdr_response = None;
         self.model.herdr_grant.clear();
         self.model.entries.clear();
@@ -585,7 +686,7 @@ impl Actor {
     ) -> Result<()> {
         self.stop_retry();
         self.disconnected().await;
-        if matches!(command, Command::Disconnect) {
+        if matches!(command, Command::Disconnect) && !self.model.local {
             self.model.notice = format!(
                 "已断开，自动连接已停止；主机终端仍保留。{}",
                 self.outcome_notice()
@@ -598,7 +699,7 @@ impl Actor {
     }
 
     fn capture_restoration(&mut self) {
-        for pane in self.model.panes.iter().filter(|pane| pane.exit.is_none()) {
+        for pane in self.model.panes.iter().filter(|pane| pane.live()) {
             if let Some(attachment) = self.attachments.get(&pane.stream)
                 && let Some(resource) = self
                     .model
@@ -642,10 +743,12 @@ impl Actor {
     }
 
     fn clear_workspace(&mut self) {
+        self.model.interaction = interaction::History::default();
         self.output.clear();
         self.outstanding.clear();
         self.attachments.clear();
         self.restoring.clear();
+        self.retired_streams.clear();
         self.identity = None;
         self.model.panes.clear();
         self.model.permission = None;
@@ -653,6 +756,7 @@ impl Actor {
         self.model.fingerprint.clear();
         self.model.herdr_grant.clear();
         self.model.herdr_panes.clear();
+        self.model.herdr_workspace = crate::ui::herdr::Snapshot::default();
         self.model.herdr_response = None;
         self.model.file_grant.clear();
         self.model.path.clear();
@@ -748,8 +852,14 @@ impl Actor {
         } else {
             HashMap::new()
         };
+        let history = matches!(mode, ReconnectMode::Retry)
+            .then(|| std::mem::take(&mut self.model.interaction));
         self.clear_workspace();
+        if let Some(history) = history {
+            self.model.interaction = history;
+        }
         self.restoring = restoring;
+        self.model.local = false;
         self.model.active_binding = Some(binding.clone());
         self.model.relay = Some(binding.relay.clone());
         self.model.fingerprint = protocol::fingerprint(&protocol::decode32(&binding.host_key)?);
@@ -770,7 +880,7 @@ impl Actor {
                 .context("目标主机连接失败")?;
             self.identity = Some(identity);
             self.binding = Some(binding);
-            self.session = Some(session);
+            self.session = Some(session.into());
             self.model.phase = Phase::AwaitingReady;
             self.handshake_deadline = Some(Instant::now() + Duration::from_secs(30));
             self.last_received = Instant::now();
@@ -884,6 +994,24 @@ impl Actor {
     }
 
     async fn command(&mut self, command: Command) -> Result<()> {
+        #[cfg(not(target_os = "android"))]
+        let command = match command {
+            Command::Host(action) => {
+                let host = self.host.clone().context("本机主机服务不可用")?;
+                self.model.host_busy = true;
+                self.model.error.clear();
+                self.publish().await;
+                let result = host.manage(action).await;
+                self.model.host_busy = false;
+                self.refresh_host();
+                self.model.error = result
+                    .err()
+                    .map(|error| format!("主机设置未完成：{error:#}"))
+                    .unwrap_or_default();
+                return Ok(());
+            }
+            command => command,
+        };
         let (generation, command) = match command {
             Command::Scoped {
                 generation,
@@ -916,6 +1044,14 @@ impl Actor {
         self.model.error.clear();
         match command {
             Command::Scoped { .. } => bail!("不接受嵌套工作区命令"),
+            #[cfg(not(target_os = "android"))]
+            Command::Host(_) => bail!("主机设置不接受工作区命令封装"),
+            #[cfg(not(target_os = "android"))]
+            Command::SelectLocal => self.select_local(true).await?,
+            #[cfg(not(target_os = "android"))]
+            Command::CreateLocalSession { backend } => self.create_local_session(backend).await?,
+            #[cfg(not(target_os = "android"))]
+            Command::CloseLocalTerminal(id) => self.close_local_terminal(&id).await?,
             command @ (Command::Disconnect | Command::Suspend) => {
                 self.detach_with_preference(command, storage::stop_auto_connect())
                     .await?;
@@ -970,6 +1106,7 @@ impl Actor {
                 self.stop_retry();
                 self.clear_workspace();
                 self.model.active_binding = None;
+                self.model.local = false;
                 self.model.phase = Phase::Connecting;
                 self.publish().await;
                 let scope = self.scope.clone();
@@ -989,7 +1126,7 @@ impl Actor {
                             host_key: protocol::encode(session.host_key()),
                             device_id: String::new(),
                         });
-                        self.session = Some(session);
+                        self.session = Some(session.into());
                         self.model.panes.clear();
                         self.model.phase = Phase::AwaitingApproval;
                         self.handshake_deadline = Some(Instant::now() + Duration::from_secs(150));
@@ -1024,7 +1161,20 @@ impl Actor {
                 self.connect_binding(binding, ReconnectMode::Selected)
                     .await?;
             }
+            Command::SubmitInput { stream, text } => self.submit_input(stream, text).await?,
             Command::Request(operation) => {
+                if let Operation::TerminalDetach { stream } = &operation
+                    && self
+                        .model
+                        .panes
+                        .iter()
+                        .any(|pane| &pane.stream == stream && pane.unavailable.is_some())
+                {
+                    // The host already retired this attachment. Closing its retained
+                    // view is local and must not require a live channel or close core's PTY.
+                    self.retire_stream(stream);
+                    return Ok(());
+                }
                 self.validate(&operation)?;
                 let kind = match &operation {
                     Operation::TerminalAttach { grant, pane } => {
@@ -1146,7 +1296,7 @@ impl Actor {
                     self.model
                         .panes
                         .iter()
-                        .any(|pane| &pane.stream == stream && pane.exit.is_none()),
+                        .any(|pane| &pane.stream == stream && pane.live()),
                     "终端已退出"
                 );
                 Ok(())
@@ -1157,7 +1307,7 @@ impl Actor {
                         && self.model.panes.iter().any(|pane| &pane.stream == stream
                             && pane.controller
                             && !pane.read_only
-                            && pane.exit.is_none()),
+                            && pane.live()),
                     "终端为只读，请先取得控制权"
                 );
                 Ok(())
@@ -1276,6 +1426,16 @@ impl Actor {
             .outstanding
             .remove(&response.id)
             .map(|request| request.kind);
+        if matches!(pending, Some(Pending::RetiredAttach)) {
+            if let Event::TerminalAttached { stream, .. } = response.event {
+                self.retire_stream(&stream);
+            }
+            return Ok(false);
+        }
+        if self.is_retired_event(&response.event) {
+            return Ok(false);
+        }
+        let input_changed = self.input_response(&pending, &response.event);
         match response.event {
             Event::Pending { fingerprint } => {
                 ensure!(
@@ -1297,7 +1457,7 @@ impl Actor {
                 ensure!(
                     binding.host_key == host_key
                         && protocol::decode32(&host_key)?
-                            == *self.session.as_ref().context("连接已关闭")?.host_key(),
+                            == *self.session.as_ref().context("连接已关闭")?.host_key()?,
                     "主机公钥与加密握手不一致"
                 );
                 binding.device_id = device_id;
@@ -1310,6 +1470,7 @@ impl Actor {
                         return Err(error.context("安全保存失败，未发送配对确认"));
                     }
                 };
+                self.model.local = false;
                 self.model.active_binding = Some(binding.clone());
                 self.retry.arm();
                 self.binding = Some(binding);
@@ -1372,11 +1533,13 @@ impl Actor {
                 changed = false;
             }
             Event::Ok => {
-                changed = false;
+                changed = input_changed;
                 if let Some(Pending::Detach(stream)) = pending {
+                    self.model.interaction.remove_stream(&stream);
                     self.model.panes.retain(|pane| pane.stream != stream);
                     self.attachments.remove(&stream);
                     self.output.remove(&stream);
+                    self.remember_retired_stream(&stream);
                     changed = true;
                 }
             }
@@ -1392,6 +1555,7 @@ impl Actor {
                         attachment,
                     }) => {
                         self.restoring.remove(&previous);
+                        self.model.interaction.restore_stream(&previous, &stream);
                         attachment
                     }
                     _ => bail!("未请求的终端附着"),
@@ -1405,6 +1569,8 @@ impl Actor {
                 } else {
                     PaneKind::Terminal
                 };
+                let herdr_pane_id = attachment.pane.clone();
+                let herdr_grant = (kind == PaneKind::Herdr).then(|| attachment.grant.clone());
                 self.attachments.insert(stream.clone(), attachment);
                 self.output.insert(
                     stream.clone(),
@@ -1415,13 +1581,57 @@ impl Actor {
                 );
                 self.model.panes.push(Pane {
                     kind,
+                    herdr_pane_id,
+                    herdr_grant,
+                    programs: Vec::new(),
                     stream,
                     name,
                     controller: false,
                     read_only,
                     exit: None,
+                    unavailable: None,
                     gap: false,
                 });
+            }
+            Event::TerminalUnavailable { stream, message } => {
+                self.attachments.remove(&stream);
+                self.restoring.remove(&stream);
+                if let Some(mut output) = self.output.remove(&stream) {
+                    self.updates
+                        .send(Update::Output {
+                            generation: self.model.generation,
+                            stream: stream.clone(),
+                            text: output.decoder.finish(),
+                            reset: false,
+                        })
+                        .await
+                        .context("界面已关闭")?;
+                }
+                let pane = self
+                    .model
+                    .panes
+                    .iter_mut()
+                    .find(|pane| pane.stream == stream)
+                    .context("未知终端附着关闭事件")?;
+                pane.unavailable = Some(message);
+                pane.controller = false;
+                pane.programs.clear();
+                // Late output and control events cannot revive the retained view.
+                self.remember_retired_stream(&stream);
+            }
+            Event::TerminalProgramStatus { stream, records } => {
+                let pane = self
+                    .model
+                    .panes
+                    .iter_mut()
+                    .find(|pane| pane.stream == stream)
+                    .context("未知终端程序状态事件")?;
+                ensure!(
+                    pane.kind == PaneKind::Terminal,
+                    "Herdr 状态必须来自权威快照"
+                );
+                changed = pane.programs != records;
+                pane.programs = records;
             }
             Event::TerminalControl { stream, controller } => {
                 let pane = self
@@ -1465,6 +1675,7 @@ impl Actor {
                 }
                 self.updates
                     .send(Update::Output {
+                        generation: self.model.generation,
                         stream,
                         text,
                         reset,
@@ -1478,6 +1689,7 @@ impl Actor {
                 if let Some(output) = self.output.get_mut(&stream) {
                     self.updates
                         .send(Update::Output {
+                            generation: self.model.generation,
                             stream: stream.clone(),
                             text: output.decoder.finish(),
                             reset: false,
@@ -1502,6 +1714,7 @@ impl Actor {
                 if matches!(method.as_str(), "session.snapshot" | "pane.list") {
                     self.model.herdr_grant = grant.clone();
                     self.model.herdr_panes = crate::ui::herdr::panes(&data);
+                    self.model.herdr_workspace = crate::ui::herdr::snapshot(&data);
                 }
                 self.model.herdr_response = Some(HerdrResponse {
                     grant,
@@ -1775,11 +1988,15 @@ mod tests {
         actor.model.phase = Phase::Ready;
         actor.model.panes.push(Pane {
             kind: PaneKind::Terminal,
+            herdr_pane_id: None,
+            herdr_grant: None,
+            programs: Vec::new(),
             stream: "s".into(),
             name: "shell".into(),
             controller: false,
             read_only: false,
             exit: None,
+            unavailable: None,
             gap: false,
         });
         let input = Operation::TerminalInput {
@@ -1818,11 +2035,15 @@ mod tests {
         actor.model.phase = Phase::Ready;
         actor.model.panes.push(Pane {
             kind: PaneKind::Terminal,
+            herdr_pane_id: None,
+            herdr_grant: None,
+            programs: Vec::new(),
             stream: "stream".into(),
             name: "terminal".into(),
             controller: false,
             read_only: true,
             exit: None,
+            unavailable: None,
             gap: false,
         });
         actor.output.insert(
@@ -1952,11 +2173,15 @@ mod tests {
         actor.model.permission = Some(Permission::Operate);
         actor.model.panes.push(Pane {
             kind: PaneKind::Terminal,
+            herdr_pane_id: None,
+            herdr_grant: None,
+            programs: Vec::new(),
             stream: "stream".into(),
             name: "shell".into(),
             controller: true,
             read_only: false,
             exit: None,
+            unavailable: None,
             gap: false,
         });
         actor.output.insert(
@@ -2131,11 +2356,15 @@ mod tests {
             });
             actor.model.panes.push(Pane {
                 kind: PaneKind::Terminal,
+                herdr_pane_id: None,
+                herdr_grant: None,
+                programs: Vec::new(),
                 stream: "old-stream".into(),
                 name: "old".into(),
                 controller: true,
                 read_only: false,
                 exit: None,
+                unavailable: None,
                 gap: false,
             });
             actor
@@ -2471,11 +2700,15 @@ mod tests {
                 } else {
                     PaneKind::Terminal
                 },
+                herdr_grant: pane.map(|_| grant.to_owned()),
+                herdr_pane_id: pane.map(str::to_owned),
+                programs: Vec::new(),
                 stream: stream.into(),
                 name: stream.into(),
                 controller: true,
                 read_only: false,
                 exit,
+                unavailable: None,
                 gap: false,
             });
             actor.attachments.insert(
@@ -2514,7 +2747,7 @@ mod tests {
             let mut actor = opened_actor();
             let auto = AtomicBool::new(true);
             let (session, mut requests) = Session::observed();
-            actor.session = Some(session);
+            actor.session = Some(session.into());
             actor.capture_restoration();
             let cancel = Arc::new(AtomicBool::new(false));
             actor.preparation = Some(Preparation {
@@ -2604,7 +2837,7 @@ mod tests {
             );
         }
         let (session, mut requests) = Session::observed();
-        actor.session = Some(session);
+        actor.session = Some(session.into());
         actor.binding = Some(target.clone());
         actor.model.phase = Phase::AwaitingReady;
         actor
@@ -2640,13 +2873,7 @@ mod tests {
         assert!(requests.try_recv().is_err());
         assert!(actor.restoring.is_empty());
         assert_eq!(actor.model.panes.len(), 2);
-        assert!(
-            actor
-                .model
-                .panes
-                .iter()
-                .all(|p| !p.controller && p.exit.is_none())
-        );
+        assert!(actor.model.panes.iter().all(|p| !p.controller && p.live()));
         assert!(
             actor
                 .validate(&Operation::TerminalInput {

@@ -96,8 +96,13 @@ pub async fn check_relay(relay: &RelayAddress) -> Result<()> {
         body.extend_from_slice(&chunk);
     }
     let value: serde_json::Value = serde_json::from_slice(&body)?;
+    validate_relay_health(&value)
+}
+
+fn validate_relay_health(value: &serde_json::Value) -> Result<()> {
     ensure!(
-        value["protocol"] == "neko.remoted.v1" && value["version"] == 1,
+        value["protocol"] == protocol::RELAY_PROTOCOL
+            && value["version"] == protocol::RELAY_VERSION,
         "该地址不是兼容的小橘中转服务"
     );
     Ok(())
@@ -146,7 +151,7 @@ impl Session {
         let mut request = relay.socket("client", route)?.into_client_request()?;
         request
             .headers_mut()
-            .insert("sec-websocket-protocol", "neko.remoted.v1".parse()?);
+            .insert("sec-websocket-protocol", protocol::RELAY_PROTOCOL.parse()?);
         let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
             .max_message_size(Some(protocol::MAX_RELAY_MESSAGE))
             .max_frame_size(Some(protocol::MAX_RELAY_MESSAGE));
@@ -161,7 +166,7 @@ impl Session {
             response
                 .headers()
                 .get("sec-websocket-protocol")
-                .is_some_and(|v| v == "neko.remoted.v1"),
+                .is_some_and(|v| v == protocol::RELAY_PROTOCOL),
             "中转未接受协议版本"
         );
         let peer = match timeout(DEADLINE, next(&mut socket))
@@ -257,9 +262,15 @@ struct Write {
     data: Vec<u8>,
     completed: tokio::sync::oneshot::Sender<Result<()>>,
 }
+struct Received {
+    sequence: u64,
+    data: Vec<u8>,
+}
 struct Transport {
     outgoing: tokio::sync::mpsc::Sender<Write>,
-    incoming: tokio::sync::mpsc::Receiver<Result<Vec<u8>>>,
+    incoming: tokio::sync::mpsc::Receiver<Received>,
+    consumed: tokio::sync::mpsc::Sender<u64>,
+    failure: tokio::sync::oneshot::Receiver<anyhow::Error>,
     task: tokio::task::JoinHandle<()>,
     failed: bool,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
@@ -271,17 +282,33 @@ impl Drop for Transport {
 }
 impl Transport {
     fn start(socket: Socket, peer: String) -> Self {
-        let (outgoing, writes) = tokio::sync::mpsc::channel(8);
+        let (outgoing, mut writes) = tokio::sync::mpsc::channel(8);
         let (events, incoming) = tokio::sync::mpsc::channel(8);
         let (shutdown, stopping) = tokio::sync::oneshot::channel();
+        let (consumed, acknowledgements) = tokio::sync::mpsc::channel(8);
+        let (failed, failure) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
-            if let Err(error) = pump(socket, peer, writes, &events, stopping).await {
-                let _ = events.try_send(Err(error));
+            // Keep the terminal error outside the data queue: it must survive
+            // even when all eight receive slots are occupied. Hold the writes
+            // receiver until the error is saved, so failed sends see it too.
+            if let Err(error) = pump(
+                socket,
+                peer,
+                &mut writes,
+                &events,
+                acknowledgements,
+                stopping,
+            )
+            .await
+            {
+                let _ = failed.send(error);
             }
         });
         Self {
             outgoing,
             incoming,
+            consumed,
+            failure,
             task,
             failed: false,
             shutdown: Some(shutdown),
@@ -292,13 +319,19 @@ impl Transport {
         // Dropping this future also closes the socket and discards unsent writes.
         // A request which has already reached the socket still has unknown outcome.
         let mut guard = AbortOnDrop(Some(self.task.abort_handle()));
-        let result = self.send_inner(data).await;
-        if result.is_ok() {
-            guard.0 = None;
-        } else {
-            self.failed = true;
+        match self.send_inner(data).await {
+            Ok(()) => {
+                guard.0 = None;
+                Ok(())
+            }
+            Err(error) => {
+                self.failed = true;
+                Err(match self.failure.try_recv() {
+                    Ok(failure) => failure.context(error.to_string()),
+                    Err(_) => error,
+                })
+            }
         }
-        result
     }
     async fn send_inner(&self, data: Vec<u8>) -> Result<()> {
         ensure!(data.len() <= protocol::MAX_CIPHERTEXT, "消息过大");
@@ -314,10 +347,25 @@ impl Transport {
     }
     async fn receive(&mut self) -> Result<Vec<u8>> {
         ensure!(!self.failed, "连接已关闭");
-        self.incoming
-            .recv()
-            .await
-            .ok_or_else(|| anyhow::Error::new(LinkClosed))?
+        let Some(received) = self.incoming.recv().await else {
+            self.failed = true;
+            return Err(self
+                .failure
+                .try_recv()
+                .unwrap_or_else(|_| LinkClosed.into()));
+        };
+        // No await after dequeue: cancellation cannot lose a frame or its credit.
+        // At most eight frames can be unacknowledged, so every consumed frame
+        // fits in this bounded queue, even if the pump has not run yet. A closed
+        // pump still allows buffered bytes to drain before its saved error.
+        if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
+            self.consumed.try_send(received.sequence)
+        {
+            self.failed = true;
+            self.task.abort();
+            bail!("接收确认队列已满，连接已关闭");
+        }
+        Ok(received.data)
     }
 }
 struct AbortOnDrop(Option<tokio::task::AbortHandle>);
@@ -331,24 +379,33 @@ impl Drop for AbortOnDrop {
 async fn pump(
     mut socket: Socket,
     peer: String,
-    mut writes: tokio::sync::mpsc::Receiver<Write>,
-    events: &tokio::sync::mpsc::Sender<Result<Vec<u8>>>,
+    writes: &mut tokio::sync::mpsc::Receiver<Write>,
+    events: &tokio::sync::mpsc::Sender<Received>,
+    mut consumed: tokio::sync::mpsc::Receiver<u64>,
     mut stopping: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<()> {
     let mut outstanding = 0u8;
     let mut received_sequence = 0u64;
+    let mut acknowledged_sequence = 0u64;
     loop {
         tokio::select! {
             _ = &mut stopping => { socket.close(None).await?; return Ok(()); }
+            sequence = consumed.recv() => {
+                let sequence = sequence.context("接收端已关闭")?;
+                ensure!(Some(sequence) == acknowledged_sequence.checked_add(1) && sequence <= received_sequence, "接收确认序号错误");
+                send(&mut socket, &RelayFrame::Acknowledge {peer: peer.clone(), sequence}).await?;
+                acknowledged_sequence = sequence;
+            }
             frame = next(&mut socket) => match frame? {
                 RelayFrame::Data {peer: source, data, sequence: Some(sequence)} if source == peer => {
                     ensure!(sequence == received_sequence.checked_add(1).context("接收序号耗尽")?, "中转消息序号错误");
                     let bytes = protocol::decode(&data, protocol::MAX_CIPHERTEXT)?;
-                    // Never let a slow UI cause unbounded buffering or acknowledge
-                    // a frame which has not entered the bounded receive queue.
-                    events.try_send(Ok(bytes)).map_err(|_| anyhow::anyhow!("接收缓冲已满，连接已关闭"))?;
+                    ensure!(sequence.saturating_sub(acknowledged_sequence) <= 8, "中转超出接收额度");
+                    // Relay credits remain spent until the consumer takes these
+                    // bytes. Never await queue space here: outbound writes may
+                    // be waiting for Delivered frames on this same socket.
+                    events.try_send(Received { sequence, data: bytes }).map_err(|_| anyhow::anyhow!("接收缓冲已满，连接已关闭"))?;
                     received_sequence = sequence;
-                    send(&mut socket, &RelayFrame::Acknowledge {peer: peer.clone(), sequence}).await?;
                 }
                 RelayFrame::Delivered {peer: source, count} if source == peer => {
                     ensure!(count > 0 && count <= outstanding, "中转发送确认无效");
@@ -392,7 +449,16 @@ async fn next(socket: &mut Socket) -> Result<RelayFrame> {
                 timeout(DEADLINE, socket.send(Message::Pong(bytes))).await??;
             }
             Message::Pong(_) => {}
-            Message::Close(_) => return Err(LinkClosed.into()),
+            Message::Close(frame) => {
+                let error = anyhow::Error::new(LinkClosed);
+                return Err(match frame {
+                    Some(frame) => error.context(format!(
+                        "WebSocket 已关闭（{}）：{}",
+                        frame.code, frame.reason
+                    )),
+                    None => error,
+                });
+            }
             _ => bail!("中转协议格式错误"),
         }
     }
@@ -429,6 +495,8 @@ impl Session {
                 transport: Transport {
                     outgoing,
                     incoming,
+                    consumed: tokio::sync::mpsc::channel(8).0,
+                    failure: tokio::sync::oneshot::channel().1,
                     task,
                     failed: false,
                     shutdown: Some(shutdown),
@@ -486,6 +554,8 @@ mod tests {
         let mut transport = Transport {
             outgoing,
             incoming,
+            consumed: tokio::sync::mpsc::channel(8).0,
+            failure: tokio::sync::oneshot::channel().1,
             task,
             failed: false,
             shutdown: None,
@@ -518,6 +588,8 @@ mod tests {
         let mut transport = Transport {
             outgoing,
             incoming,
+            consumed: tokio::sync::mpsc::channel(8).0,
+            failure: tokio::sync::oneshot::channel().1,
             task,
             failed: false,
             shutdown: None,
@@ -676,3 +748,7 @@ mod tests {
             .unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "network/flow_control_tests.rs"]
+mod flow_control_tests;

@@ -1,6 +1,6 @@
 [package]
 name = "neko-remoted-client"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 publish = false
@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 neko-remoted-protocol = { path = "../protocol" }
+neko-ghostty = { path = "../ghostty" }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -28,6 +29,7 @@ nsh-core = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3
 nsh-base = { git = "https://github.com/longbridge/nsh", rev = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1", default-features = false, features = ["term"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
+neoko-terminal-host = { path = "../host" }
 directories = "6"
 fs2 = "0.4"
 tempfile = "3"

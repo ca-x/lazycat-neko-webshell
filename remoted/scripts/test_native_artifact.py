@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import os
@@ -43,6 +44,35 @@ class ArtifactContractTests(unittest.TestCase):
                 (self.root / 'client/nsh.json').write_text(json.dumps(contents))
                 with self.assertRaises(ValueError):
                     producer.version()
+
+    def test_packaged_provenance_uses_v2_and_preserves_artifact_contract(self):
+        output = self.root / 'client/target/android-app'
+        output.mkdir(parents=True)
+        payload = b'android packaging contract fixture'
+        digest = hashlib.sha256(payload).hexdigest()
+        (output / 'neko-remoted.apk').write_bytes(payload)
+        (output / 'build-info.json').write_text(json.dumps({
+            'apk_sha256': digest, 'zip_alignment_verified': True,
+            'elf_load_alignment_min': 16384, 'certificate_sha256': 'b' * 64,
+        }))
+        with patch.dict(os.environ, {
+            'SOURCE_REPOSITORY': 'ca-x/lazycat-neko-webshell', 'SOURCE_COMMIT': 'a' * 40,
+            'SOURCE_RUN_ID': '123', 'SOURCE_RUN_ATTEMPT': '2', 'SOURCE_EVENT': 'push',
+        }):
+            producer.package()
+        destination = self.root / 'dist/native'
+        name = 'neoko-terminal-v0.1.0-android-arm64.apk'
+        self.assertEqual({p.name for p in destination.iterdir()},
+                         {name, 'checksums.txt', 'provenance.json'})
+        record = json.loads((destination / 'provenance.json').read_text())
+        self.assertEqual(record['protocolVersion'], 2)
+        self.assertEqual(record['schemaVersion'], 1)
+        self.assertEqual(record['sourceCommit'], 'a' * 40)
+        self.assertEqual(record['sourceWorkflow'], 'neoko-terminal-android.yml')
+        self.assertEqual(record['sourceRef'], 'refs/tags/neoko-terminal-android-v0.1.0')
+        self.assertEqual(record['apkSha256'], digest)
+        self.assertEqual((destination / name).read_bytes(), payload)
+        self.assertEqual((destination / 'checksums.txt').read_text(), f'{digest}  {name}\n')
 
     def test_rejects_untrusted_repository_before_reading_payload(self):
         with patch.dict(os.environ, {

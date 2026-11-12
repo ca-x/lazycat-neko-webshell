@@ -5,7 +5,7 @@ use neko_remoted_protocol::messages::{FileEntry, Permission, Resource};
 use nsh_core::{
     Size,
     element::Root,
-    platform::{Environment, Os},
+    platform::{Environment, Locale, Os},
 };
 use nsh_engine::{ColorScheme, EngineConfig};
 use nsh_testing::Headless;
@@ -74,11 +74,15 @@ fn ready(permission: Permission) -> Model {
         }],
         panes: vec![Pane {
             kind: crate::controller::PaneKind::Terminal,
+            herdr_pane_id: None,
+            herdr_grant: None,
+            programs: Vec::new(),
             stream: "stream".into(),
             name: "终端一".into(),
             controller: false,
             read_only: permission == Permission::ReadOnly,
             exit: None,
+            unavailable: None,
             gap: false,
         }],
         ..Model::default()
@@ -134,6 +138,16 @@ fn TerminalModesFixture() -> impl IntoElement {
     view()
         .flex_1()
         .min_h(px(0.0))
+        .child(
+            nsh_base::button()
+                .on_press(|| set_locale(Some(Locale::EN_US)))
+                .child(text("English UI")),
+        )
+        .child(
+            nsh_base::button()
+                .on_press(|| set_locale(Locale::parse("zh-CN")))
+                .child(text("中文界面")),
+        )
         .child(text(move || format!("INPUTS={}", inputs.get())))
         .child(text(move || snapshot.get()).number_of_lines(1))
         .child(controls::action(
@@ -185,6 +199,7 @@ fn TerminalModesFixture() -> impl IntoElement {
             || false,
             move || ui.refs.with(|refs| refs.get("stream").unwrap().reset()),
         ))
+        .child(workspace_header::render(ui))
         .child(terminal_view::render(ui, pane.read_only()))
 }
 
@@ -223,6 +238,7 @@ fn start<C: Component<Props = ()>>(width: f32, scheme: ColorScheme) -> Headless 
         viewport: Size::new(px(width), px(844.0)),
         environment: Environment {
             os: Os::Android,
+            locale: Locale::parse("zh-CN").unwrap(),
             color_scheme: scheme,
             ..Environment::default()
         },
@@ -239,7 +255,8 @@ fn start<C: Component<Props = ()>>(width: f32, scheme: ColorScheme) -> Headless 
 fn actual_app_mounts_the_page_scoped_body_and_labelled_relay_field() {
     let mut app = start::<App>(390.0, ColorScheme::Light);
     app.wait_for("Relay 地址").unwrap();
-    app.wait_for("未连接").unwrap();
+    app.wait_for("连接设置").unwrap();
+    assert!(!app.shows("neoko-terminal"));
     assert_eq!(app.screen().input_text("Relay 地址").unwrap(), Some(""));
     assert!(!app.shows("请求主机批准"));
 }
@@ -299,8 +316,11 @@ fn pending_approval_has_cancel_and_host_fingerprint_without_resources() {
 #[test]
 fn readonly_workspace_can_browse_download_but_cannot_claim_control() {
     let mut app = start::<ReadOnlyFixture>(390.0, ColorScheme::Dark);
-    app.wait_for("已连接 · 只读授权").unwrap();
+    app.wait_for("此会话为只读授权。").unwrap();
     assert_eq!(app.screen().press_target("取得控制权").unwrap(), None);
+    if app.screen().press_target("文件").unwrap().is_none() {
+        app.press("更多").unwrap();
+    }
     app.press("文件").unwrap();
     app.wait_for("只读授权：可以浏览和下载，不能上传。")
         .unwrap();
@@ -321,12 +341,8 @@ fn readonly_workspace_can_browse_download_but_cannot_claim_control() {
 fn operate_workspace_requires_explicit_control_and_uses_real_herdr_and_file_requests() {
     let mut app = start::<OperateFixture>(1200.0, ColorScheme::Light);
     app.wait_for("取得控制权").unwrap();
-    assert!(
-        app.screen()
-            .texts()
-            .iter()
-            .any(|text| text.contains("只读浏览"))
-    );
+    assert!(app.screen().press_target("取得控制权").unwrap().is_some());
+    assert!(!app.shows("终端一 · 只读浏览"));
     app.press("取得控制权").unwrap();
     app.wait_until(
         "explicit control command",
@@ -349,6 +365,9 @@ fn operate_workspace_requires_explicit_control_and_uses_real_herdr_and_file_requ
             .any(|text| text.contains("session.snapshot"))
     })
     .unwrap();
+    if app.screen().press_target("文件").unwrap().is_none() {
+        app.press("更多").unwrap();
+    }
     app.press("文件").unwrap();
     app.press("选择文件上传").unwrap();
     app.wait_until("upload command", Duration::from_secs(3), |screen| {
@@ -407,6 +426,15 @@ fn terminal_control_switch_preserves_ansi_state_without_duplicate_feed_or_query_
     assert_eq!(before.matches("唯一猫").count(), 1);
     assert!(app.shows("INPUTS=0"));
     app.press("测试授予控制").unwrap();
+    // Android starts in Conversation mode; control alone must not switch the user's mode.
+    app.wait_for("真实终端输出").unwrap();
+    assert_eq!(
+        app.screen()
+            .input_text("远程终端；取得控制权后可输入")
+            .unwrap(),
+        None
+    );
+    app.press("终端模式").unwrap();
     app.wait_until(
         "native input after control",
         Duration::from_secs(3),
@@ -435,8 +463,50 @@ fn terminal_control_switch_preserves_ansi_state_without_duplicate_feed_or_query_
     )
     .unwrap();
     assert!(app.shows("INPUTS=0"));
-    app.type_text("远程终端；取得控制权后可输入", "x").unwrap();
+    app.press("English UI").unwrap();
+    app.wait_until(
+        "translated mounted native input",
+        Duration::from_secs(3),
+        |screen| {
+            screen
+                .input_text("Remote terminal; take control to type")
+                .ok()
+                .flatten()
+                .is_some()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        app.screen()
+            .input_text("远程终端；取得控制权后可输入")
+            .unwrap(),
+        None
+    );
+    app.press("测试读取缓冲").unwrap();
+    assert!(
+        app.screen()
+            .texts()
+            .iter()
+            .any(|text| text.starts_with("COLORED=true;BRACKETED=true;")
+                && text.matches("唯一猫").count() == 2)
+    );
+    assert!(app.shows("INPUTS=0"));
+    app.type_text("Remote terminal; take control to type", "x")
+        .unwrap();
     app.wait_for("INPUTS=1").unwrap();
+    app.press("中文界面").unwrap();
+    app.wait_until(
+        "native input language restored",
+        Duration::from_secs(3),
+        |screen| {
+            screen
+                .input_text("远程终端；取得控制权后可输入")
+                .ok()
+                .flatten()
+                .is_some()
+        },
+    )
+    .unwrap();
     app.press("测试释放控制").unwrap();
     app.wait_for("terminal-observer").unwrap();
     assert_eq!(
@@ -514,7 +584,7 @@ fn readonly_observer_has_real_scrollback_and_selectable_rows_without_an_input() 
 fn public_relay_shortcut_only_edits_draft_and_survives_delayed_preference() {
     let mut app = start::<ConnectionFixture>(480.0, ColorScheme::Light);
     assert_eq!(app.screen().input_text("Relay 地址").unwrap(), Some(""));
-    app.press("Use public relay").unwrap();
+    app.press("使用公共中转").unwrap();
     assert_eq!(
         app.screen().input_text("Relay 地址").unwrap(),
         Some("https://neko-relay.czyt.eu.org")
@@ -573,7 +643,13 @@ fn SeparateKindsFixture() -> impl IntoElement {
     let mut model = ready(Permission::Operate);
     model.panes.clear();
     model.herdr_grant = "grant".into();
-    model.herdr_panes = vec![("w1:p1".into(), "项目 / 开发 Agent".into())];
+    model.herdr_workspace = herdr::snapshot(&serde_json::json!({
+        "result": {"snapshot": {
+            "workspaces": [{"workspace_id": "w1", "label": "项目", "focused": true}],
+            "tabs": [{"tab_id": "t1", "workspace_id": "w1", "label": "开发", "focused": true}],
+            "panes": [{"pane_id": "w1:p1", "tab_id": "t1", "title": "开发 Agent", "focused": true}]
+        }}
+    }));
     model.resources.push(Resource {
         id: "terminal-grant".into(),
         name: "构建终端".into(),
@@ -586,10 +662,13 @@ fn SeparateKindsFixture() -> impl IntoElement {
 }
 
 #[test]
-fn composer_preserves_draft_across_files_and_sends_real_terminal_input() {
+fn composer_preserves_draft_across_files_and_submits_exact_input() {
     let mut app = start::<ControlledFixture>(390.0, ColorScheme::Light);
     app.wait_for("会话输入").unwrap();
     app.type_text("会话输入", "你好 Neko").unwrap();
+    if app.screen().press_target("文件").unwrap().is_none() {
+        app.press("更多").unwrap();
+    }
     app.press("文件").unwrap();
     app.wait_for("授权目录 /project").unwrap();
     app.press("返回会话").unwrap();
@@ -598,14 +677,10 @@ fn composer_preserves_draft_across_files_and_sends_real_terminal_input() {
         Some("你好 Neko")
     );
     app.press("发送").unwrap();
-    let encoded = neko_remoted_protocol::encode("你好 Neko\r".as_bytes());
-    app.wait_until("real input operation", Duration::from_secs(3), |screen| {
-        screen
-            .texts()
-            .iter()
-            .any(|text| text.contains("TerminalInput") && text.contains(&encoded))
-    })
-    .unwrap();
+    app.wait_for("COMMAND SubmitInput { stream: \"stream\", text: \"你好 Neko\" }")
+        .unwrap();
+    // Dispatch is not a host acknowledgment or an execution result.
+    assert!(!app.shows("主机已接受输入"));
     assert_eq!(app.screen().input_text("会话输入").unwrap(), Some(""));
 }
 
@@ -613,21 +688,25 @@ fn composer_preserves_draft_across_files_and_sends_real_terminal_input() {
 fn herdr_and_ordinary_terminals_are_distinct_navigation_with_distinct_attach_requests() {
     for width in [375.0, 1200.0] {
         let mut app = start::<SeparateKindsFixture>(width, ColorScheme::Dark);
-        app.wait_for("开发主机").unwrap();
+        app.wait_for("项目").unwrap();
+        assert!(!app.shows("开发主机"));
         assert!(!app.shows("构建终端"));
-        app.press("项目 / 开发 Agent").unwrap();
+        app.wait_for("开发").unwrap();
+        app.press("开发").unwrap();
         app.wait_until("Herdr pane attach", Duration::from_secs(3), |screen| {
-            screen
-                .texts()
-                .iter()
-                .any(|text| text.contains("pane: Some(\"w1:p1\")"))
+            screen.texts().iter().any(|text| {
+                text.contains("TerminalAttach { grant: \"grant\", pane: Some(\"w1:p1\") }")
+            })
         })
         .unwrap();
+        if width < 760.0 {
+            app.press("设备侧栏").unwrap();
+        }
         app.press("终端").unwrap();
         app.wait_for("构建终端").unwrap();
         assert!(!app.shows("开发主机"));
-        assert!(!app.shows("项目 / 开发 Agent"));
-        app.press("构建终端").unwrap();
+        assert!(!app.shows("开发 Agent"));
+        app.press("id:workspace-sidebar >> 构建终端").unwrap();
         app.wait_until(
             "ordinary terminal attach",
             Duration::from_secs(3),
@@ -640,4 +719,91 @@ fn herdr_and_ordinary_terminals_are_distinct_navigation_with_distinct_attach_req
         )
         .unwrap();
     }
+}
+
+#[component]
+fn ObserverShortFixture() -> impl IntoElement {
+    let surface = terminal_surface::Surface::new();
+    surface.write("PLAIN screen output".into());
+    terminal_observer::render(surface.buffer, signal((80, 24)))
+}
+
+#[test]
+fn short_observer_screen_starts_at_the_top_of_a_tall_viewport() -> Result<(), String> {
+    let mut app = start::<ObserverShortFixture>(600.0, ColorScheme::Light);
+    for height in [1000.0, 1200.0] {
+        app.set_viewport(Size::new(px(600.0), px(height)))?;
+        app.wait_for("PLAIN screen output")?;
+        let nodes = app.screen().layout_nodes();
+        let viewport = nodes
+            .iter()
+            .find(|node| node.test_id.as_deref() == Some("terminal-observer-horizontal"))
+            .ok_or("observer has no viewport")?;
+        let first = nodes
+            .iter()
+            .find(|node| {
+                !node.hidden
+                    && node
+                        .text
+                        .as_ref()
+                        .is_some_and(|text| text.text.text.starts_with("PLAIN"))
+            })
+            .ok_or("first terminal row is not rendered")?;
+        assert!(
+            (first.bounds.origin.y.0 - viewport.bounds.origin.y.0).abs() < 24.0,
+            "short terminal must start at the viewport top: first={:?}, viewport={:?}",
+            first.bounds,
+            viewport.bounds
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn observer_keeps_source_columns_and_horizontal_scroll_after_zero_size_mount() -> Result<(), String>
+{
+    let mut app = Headless::start(EngineConfig {
+        viewport: Size::new(px(0.0), px(0.0)),
+        environment: Environment {
+            os: Os::Linux,
+            locale: Locale::parse("zh-CN").unwrap(),
+            color_scheme: ColorScheme::Dark,
+            ..Environment::default()
+        },
+        ..EngineConfig::new(
+            Root::of::<ObserverShortFixture>()
+                .tokens(nsh_base::tokens_of(Some(include_str!("theme.json"))).unwrap()),
+        )
+    })
+    .map_err(|error| error.to_string())?;
+    app.first_render()?;
+    app.set_viewport(Size::new(px(390.0), px(1000.0)))?;
+    app.wait_for("PLAIN screen output")?;
+    let nodes = app.screen().layout_nodes();
+    let viewport = nodes
+        .iter()
+        .find(|node| node.test_id.as_deref() == Some("terminal-observer-horizontal"))
+        .ok_or("observer has no horizontal viewport")?;
+    let list = nodes
+        .iter()
+        .find(|node| node.test_id.as_deref() == Some("terminal-observer"))
+        .ok_or("observer list is missing")?;
+    assert!(
+        list.bounds.size.width > viewport.bounds.size.width,
+        "80 source columns must remain wider than a narrow window: list={:?}, viewport={:?}",
+        list.bounds,
+        viewport.bounds,
+    );
+    assert!(app.screen().in_selectable_view("PLAIN screen output")?);
+    app.scroll("terminal-observer-horizontal", px(120.0))?;
+    let scrolled = app.screen().layout_nodes();
+    let moved = scrolled
+        .iter()
+        .find(|node| node.test_id.as_deref() == Some("terminal-observer"))
+        .ok_or("horizontal scrolling removed the terminal")?;
+    assert!(moved.bounds.origin.x < list.bounds.origin.x);
+    app.set_viewport(Size::new(px(1200.0), px(1000.0)))?;
+    app.wait_for("PLAIN screen output")?;
+    assert!(app.screen().in_selectable_view("PLAIN screen output")?);
+    Ok(())
 }

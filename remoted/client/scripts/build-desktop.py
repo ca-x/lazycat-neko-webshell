@@ -10,11 +10,14 @@ import plistlib
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import tomllib
 import zipfile
 
 CLIENT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(CLIENT.parent / 'scripts'))
+import native_build_inputs
 NSH_REV = "f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1"
 APP_ID = "community.lazycat.neko.remoted"
 BINARY = "neoko-terminal"
@@ -42,12 +45,11 @@ def main():
     cargo_target = Path(os.environ.get("CARGO_TARGET_DIR", CLIENT / "target")).resolve()
     args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=True)
-    source_sha = output("git", "-C", CLIENT, "rev-parse", "HEAD")
-    source_dirty = bool(output("git", "-C", CLIENT, "status", "--porcelain", "--", ".", "../protocol"))
+    build_inputs = native_build_inputs.metadata()
     run("cargo", "build", "--manifest-path", CLIENT / "Cargo.toml", "--locked", "--release", "--target", args.target, "--bin", BINARY)
     binary = cargo_target / args.target / "release" / (BINARY + (".exe" if system == "windows" else ""))
     info = {"desktop_version": args.version, "crate_version": tomllib.loads((CLIENT / "Cargo.toml").read_text())["package"]["version"], "target": args.target,
-            "source_sha": source_sha, "source_dirty": source_dirty, "nsh_revision": NSH_REV,
+            **build_inputs, "nsh_revision": NSH_REV,
             "signing": "ad-hoc; not notarized" if system == "macos" else "unsigned",
             "cargo_binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}
     # Check the locked dependency, rather than trusting a toolchain checkout.
@@ -61,9 +63,13 @@ def main():
         shutil.copy2(CLIENT.parent / "LICENSE", licenses / "NEKO-LICENSE")
         shutil.copy2(CLIENT / "android/licenses/NSH-LICENSE-APACHE", licenses / "NSH-LICENSE-APACHE")
         shutil.copy2(CLIENT / "android/licenses/NOTICE", licenses / "NOTICE")
+        native_build_inputs.stage_licenses(licenses)
         (stage / "INSTALL.txt").write_text(
-            "neoko-terminal desktop " + args.version + "\nEnter the same HTTPS/WSS Relay as the host, then paste/type its device code.\n"
-            "The host must explicitly approve the device. No camera is required.\n"
+            "neoko-terminal desktop " + args.version + "\nThe default local terminal works without a Relay.\n"
+            "For remote connections, configure the same HTTPS/WSS Relay as the remote host, then paste/type its device code.\n"
+            "The remote host must explicitly approve the device. No camera is required.\n"
+            "Hosting on this computer is off by default; enable it explicitly in Settings to allow remote connections.\n"
+            "Use local and remote terminal modes in the same app; theme and language options are available in Settings.\n"
             "Credentials stay in the OS credential store. Never delete them to repair a temporary store failure.\n"
             "Windows: extract ZIP, run neoko-terminal.exe; unsigned, SmartScreen may warn.\n"
             "macOS: extract ZIP, copy neoko-terminal.app to Applications; ad-hoc signed, NOT notarized.\n"
@@ -122,6 +128,7 @@ def main():
             run("lipo", "-archs", macos / BINARY)
             package = args.out / f"{stem}.zip"
             run("ditto", "-c", "-k", "--keepParent", app, package)
+            native_build_inputs.verify_zip(package, f"{app.name}/Contents/Resources")
         else:
             shutil.copy2(binary, stage / binary.name)
             (stage / "build-info.json").write_text(json.dumps(info, indent=2) + "\n")
@@ -130,6 +137,7 @@ def main():
                 for path in stage.rglob("*"):
                     if path.is_file():
                         archive.write(path, path.relative_to(stage))
+            native_build_inputs.verify_zip(package, '.')
         (args.out / f"{stem}.build-info.json").write_text(json.dumps(info, indent=2) + "\n")
         checksum = hashlib.sha256(package.read_bytes()).hexdigest()
         (args.out / f"{package.name}.sha256").write_text(f"{checksum}  {package.name}\n")

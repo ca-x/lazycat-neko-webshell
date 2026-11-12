@@ -26,7 +26,7 @@ def version():
     if int(manifest.attrib[ANDROID + 'versionCode']) != config['build']:
         raise ValueError('Native build numbers differ')
     if os.environ.get('RELEASE_REF') != 'refs/tags/neoko-terminal-android-v' + result:
-        raise ValueError('Build must use the matching remoted-client release tag')
+        raise ValueError('Build must use the matching neoko-terminal-android release tag')
     return result, config['build']
 
 
@@ -62,7 +62,7 @@ def package():
     shutil.copyfile(apk, destination / name)
     provenance = {
         'schemaVersion': 1, 'component': 'neoko-terminal',
-        'version': release, 'protocolVersion': 1,
+        'version': release, 'protocolVersion': 2,
         'sourceRepository': source['repository'], 'sourceCommit': source['commit'],
         'sourceRunId': source['runId'], 'sourceRunAttempt': source['runAttempt'],
         'sourceWorkflow': source['workflow'], 'sourceEvent': source['event'],

@@ -10,6 +10,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   verify:
+    if: github.repository == 'ca-x/lazycat-neko-webshell' && github.event.repository.private
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -25,6 +26,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: 1.97.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ghostty-archives
+          key: ghostty-archives-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('remoted/ghostty/toolchain.json') }}
+      - name: Install checksum-verified Ghostty source and Zig
+        run: python3 remoted/scripts/ghostty-toolchain.py setup --directory "$RUNNER_TEMP/ghostty-toolchain" --cache "$RUNNER_TEMP/ghostty-archives"
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -34,19 +44,21 @@ jobs:
           sudo apt-get install -y clang libclang-dev cmake ninja-build pkg-config libdbus-1-dev libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libpango1.0-dev libcairo2-dev libfontconfig1-dev
       - uses: Swatinem/rust-cache@v2
         with:
+          prefix-key: ghostty-native-v1-${{ hashFiles('remoted/ghostty/toolchain.json', 'remoted/scripts/ghostty-toolchain.py', 'remoted/ghostty/tools/zig-android.sh') }}
           workspaces: |
             remoted -> target
             remoted/client -> target
       - name: Verify protocol, Linux native client and Relay
         run: |
           python3 -m unittest discover -s remoted/scripts -p 'test_*.py'
-          cargo test --locked --manifest-path remoted/Cargo.toml
-          cargo test --locked --manifest-path remoted/client/Cargo.toml --lib
+          python3 remoted/scripts/ghostty-toolchain.py run -- cargo test --locked --manifest-path remoted/Cargo.toml
+          python3 remoted/scripts/ghostty-toolchain.py run -- cargo test --locked --manifest-path remoted/client/Cargo.toml --lib
           npm ci --prefix remoted/relay
           npm test --prefix remoted/relay
           npm run test:integration --prefix remoted/relay
           npm run check --prefix remoted/relay
   android:
+    if: github.repository == 'ca-x/lazycat-neko-webshell' && github.event.repository.private
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -70,6 +82,15 @@ jobs:
         with:
           toolchain: 1.97.1
           targets: aarch64-linux-android
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ghostty-archives
+          key: ghostty-archives-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('remoted/ghostty/toolchain.json') }}
+      - name: Install checksum-verified Ghostty source and Zig
+        run: python3 remoted/scripts/ghostty-toolchain.py setup --directory "$RUNNER_TEMP/ghostty-toolchain" --cache "$RUNNER_TEMP/ghostty-archives"
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -135,7 +156,7 @@ jobs:
           trap 'rm -f "$NEKO_ANDROID_KEYSTORE"' EXIT
           umask 077
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$NEKO_ANDROID_KEYSTORE"
-          bash remoted/client/scripts/build-android.sh
+          python3 remoted/scripts/ghostty-toolchain.py run --android -- bash remoted/client/scripts/build-android.sh
           bash remoted/client/scripts/test-android.sh
       - name: Create bounded native artifact and provenance
         env:

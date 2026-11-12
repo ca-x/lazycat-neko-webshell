@@ -44,6 +44,16 @@ pub enum RelayFrame {
     },
 }
 
+/// Backend chosen when creating a session. Existing resources keep their own backend.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionBackend {
+    #[default]
+    Native,
+    Hc,
+    Herdr,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Permission {
@@ -224,6 +234,12 @@ pub enum Event {
     TerminalExit {
         stream: String,
         code: i32,
+    },
+    /// This attachment stopped without a confirmed numeric process exit.
+    /// The underlying persistent terminal may still be running.
+    TerminalUnavailable {
+        stream: String,
+        message: String,
     },
     TerminalProgramStatus {
         stream: String,

@@ -1,0 +1,90 @@
+{
+  "ghostty_source_revision": "108cacb17ed8990840cd14abfce43d8ed8503ca1",
+  "ghostty_wrapper_revision": "cd4d497e8c698b27054a677ce19d1bd1a1a4d8bf",
+  "files": {
+    "GHOSTTY-LICENSE": {
+      "sha256": "386211873e5b7a02f663ae4d7adf96285999f91608f8f9f31fecfd0f4095e6f1",
+      "source": "ghostty-org/ghostty@108cacb17ed8990840cd14abfce43d8ed8503ca1/LICENSE"
+    },
+    "LIBGHOSTTY-RS-LICENSE": {
+      "sha256": "64afe9aa17b5a1bf58375ea0e1bcfef3503b2ef85c1cfae7e00c3f7555f29137",
+      "source": "uzaaft/libghostty-rs@cd4d497e8c698b27054a677ce19d1bd1a1a4d8bf/LICENSE"
+    },
+    "third-party.json": {
+      "sha256": "906597cbab60aa3bd433a203018e38dffbe8c665fff79cddaaaf447c78651970",
+      "source": "ghostty-org/ghostty@108cacb17ed8990840cd14abfce43d8ed8503ca1/deps/libghostty-vt-third-party.json"
+    },
+    "aro/LICENSE": {
+      "sha256": "0dd70fe17c4cffeba2c47f45af831acf5b83a063d2f561e4495740c162b663ac",
+      "source": "https://deps.files.ghostty.org/aro-d0c8c4d9c55daa7ef6e40cf0f630a5b5e900989b.tar.gz@d0c8c4d9c55daa7ef6e40cf0f630a5b5e900989b/LICENSE"
+    },
+    "aro/LICENSE-UNICODE": {
+      "sha256": "361d7912957842f2ce61c774b14afba41ae91df84882982e6f7e749e01c07c91",
+      "source": "https://deps.files.ghostty.org/aro-d0c8c4d9c55daa7ef6e40cf0f630a5b5e900989b.tar.gz@d0c8c4d9c55daa7ef6e40cf0f630a5b5e900989b/LICENSE-UNICODE"
+    },
+    "highway/LICENSE": {
+      "sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
+      "source": "https://deps.files.ghostty.org/highway-66486a10623fa0d72fe91260f96c892e41aceb06.tar.gz@66486a10623fa0d72fe91260f96c892e41aceb06/LICENSE"
+    },
+    "highway/LICENSE-BSD3": {
+      "sha256": "d25e82e26acd42ca3ccc9993622631163425b869b9e16284226d534cff6470f2",
+      "source": "https://deps.files.ghostty.org/highway-66486a10623fa0d72fe91260f96c892e41aceb06.tar.gz@66486a10623fa0d72fe91260f96c892e41aceb06/LICENSE-BSD3"
+    },
+    "simdutf/LICENSE-APACHE": {
+      "sha256": "3d34610fc6b5e1b0bfe4e2f36171c2d62c28ef05cb8d704f5a0073be41a43b3d",
+      "source": "https://github.com/simdutf/simdutf@9.0.0/LICENSE-APACHE"
+    },
+    "simdutf/LICENSE-MIT": {
+      "sha256": "fc8dbc04e03ad4efc08a647ffe7f995b811a95bc04c0e85a56d5277c6593fa5f",
+      "source": "https://github.com/simdutf/simdutf@9.0.0/LICENSE-MIT"
+    },
+    "translate_c/LICENSE": {
+      "sha256": "5c537d6853e005298a285d508cff9ac7192cea23576c840d485b2b586a7ff177",
+      "source": "https://deps.files.ghostty.org/translate_c-02ff0c523fb92a38939b04d0145c4a9602a74d56.tar.gz@02ff0c523fb92a38939b04d0145c4a9602a74d56/LICENSE"
+    },
+    "uucode/LICENSE.md": {
+      "sha256": "312e901e142be2477b4ca859e9311f9e3f80d33372991759b7921c1893605f33",
+      "source": "https://deps.files.ghostty.org/uucode-1fb73433bba5d93366c57f23ff2e9d7939746500.tar.gz@1fb73433bba5d93366c57f23ff2e9d7939746500/LICENSE.md"
+    },
+    "wuffs/LICENSE": {
+      "sha256": "f8ac2c75e7f629a87565c80d61ff9fe5aa15cdea0bda997d52a4dc13fdbd19cb",
+      "source": "https://deps.files.ghostty.org/wuffs-7411f488fe2e2c205c3d3b3d28638b7356522930.tar.gz@7411f488fe2e2c205c3d3b3d28638b7356522930/LICENSE"
+    },
+    "wuffs/LICENSE-APACHE": {
+      "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+      "source": "https://deps.files.ghostty.org/wuffs-7411f488fe2e2c205c3d3b3d28638b7356522930.tar.gz@7411f488fe2e2c205c3d3b3d28638b7356522930/LICENSE-APACHE"
+    },
+    "wuffs/LICENSE-MIT": {
+      "sha256": "bb811a4b485eac3caeb8bdc58bbafb355fbcb6116010a7ea9179e5c70b0bc878",
+      "source": "https://deps.files.ghostty.org/wuffs-7411f488fe2e2c205c3d3b3d28638b7356522930.tar.gz@7411f488fe2e2c205c3d3b3d28638b7356522930/LICENSE-MIT"
+    },
+    "uucode/licenses/LICENSE_Bjoern_Hoehrmann": {
+      "sha256": "de219cece932aad5a817bf763393d8d149d378a15d2ad5320e3331eac07626dd",
+      "source": "jacobsandlund/uucode@1fb73433bba5d93366c57f23ff2e9d7939746500/licenses/LICENSE_Bjoern_Hoehrmann"
+    },
+    "uucode/licenses/LICENSE_unicode": {
+      "sha256": "1eda5a3b026870c737b22e8bcd4954338612c790db688242e003f41a4fa95175",
+      "source": "jacobsandlund/uucode@1fb73433bba5d93366c57f23ff2e9d7939746500/licenses/LICENSE_unicode"
+    },
+    "zig/LICENSE": {
+      "sha256": "5c537d6853e005298a285d508cff9ac7192cea23576c840d485b2b586a7ff177",
+      "source": "ziglang/zig@0.17.1/LICENSE"
+    },
+    "zig/lib/libcxx/LICENSE.TXT": {
+      "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b",
+      "source": "ziglang/zig@0.17.1/lib/libcxx/LICENSE.TXT"
+    },
+    "zig/lib/libcxxabi/LICENSE.TXT": {
+      "sha256": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c",
+      "source": "ziglang/zig@0.17.1/lib/libcxxabi/LICENSE.TXT"
+    },
+    "zig/lib/libunwind/LICENSE.TXT": {
+      "sha256": "b5efebcaca80879234098e52d1725e6d9eb8fb96a19fce625d39184b705f7b6d",
+      "source": "ziglang/zig@0.17.1/lib/libunwind/LICENSE.TXT"
+    },
+    "NOTICE": {
+      "sha256": "aef9a010ad819e97f7222b35528ee4d18d87e50422da83cf971529d70a12c5c8",
+      "source": "neoko-terminal additional attribution"
+    }
+  }
+}

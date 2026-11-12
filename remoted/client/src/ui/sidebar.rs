@@ -1,28 +1,41 @@
 use super::{
-    controls::{action, heading, hint, navigation_row},
+    controls::{hint, icon_action, icons::Icon, session_row, tooltip},
     navigation::Section,
     resources,
     state::Ui,
 };
-use crate::controller::Command;
+use crate::{
+    controller::Command,
+    preferences::{tr, tr_format},
+};
 use nsh_base::theme;
 use nsh_core::prelude::*;
+#[path = "agent_sidebar.rs"]
+mod agent_sidebar;
 
 pub fn render(ui: Ui) -> impl IntoElement {
     view()
+        .test_id("workspace-sidebar")
         .flex_1()
         .min_h(px(0.0))
         .bg(move || theme().card)
         .child(
             view()
-                .p_4()
+                .px_2()
                 .flex_row()
                 .items_center()
-                .justify_between()
-                .child(heading("设备与会话"))
-                .child(action(
+                .gap_1()
+                .child(
+                    view().flex_1().child(
+                        text(move || tr("设备与工作区"))
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD),
+                    ),
+                )
+                .child(icon_action(
+                    Icon::Add,
                     "添加主机",
-                    false,
+                    || false,
                     || false,
                     move || {
                         if ui.disconnect() {
@@ -33,143 +46,124 @@ pub fn render(ui: Ui) -> impl IntoElement {
                 )),
         )
         .child(
-            view()
-                .px_3()
-                .pb_3()
-                .flex_row()
-                .gap_2()
-                .child(super::controls::tab(
-                    "Herdr",
-                    move || ui.navigation.section.get() == Section::Herdr,
-                    move || {
-                        ui.navigation.section.set(Section::Herdr);
-                        ui.active.set(String::new());
-                        ui.navigation.settings.set(false);
-                    },
-                ))
-                .child(super::controls::tab(
-                    "终端",
-                    move || ui.navigation.section.get() == Section::Terminal,
-                    move || {
-                        ui.navigation.section.set(Section::Terminal);
-                        ui.active.set(String::new());
-                        ui.navigation.settings.set(false);
-                    },
-                )),
-        )
-        .child(
             scroll().flex_1().min_h(px(0.0)).child(
                 view()
-                    .px_3()
-                    .gap_4()
+                    .px_2()
+                    .gap_2()
+                    .child(local_device(ui))
+                    .child(each(
+                        move || ui.model.with(|model| model.bindings.clone()),
+                        |binding| (binding.relay.origin().to_owned(), binding.route.clone()),
+                        move |binding, index| {
+                            view()
+                                .tooltip(tooltip(move || {
+                                    binding.with(|binding| {
+                                        format!(
+                                            "{} · {}",
+                                            binding.relay.origin(),
+                                            &binding.host_key[..8.min(binding.host_key.len())]
+                                        )
+                                    })
+                                }))
+                                .child(session_row(
+                                    Icon::Monitor,
+                                    move || tr_format("主机 {}", &[&(index.get() + 1)]),
+                                    move || {
+                                        binding.with(|binding| {
+                                            ui.model.with(|model| {
+                                                model.active_binding.as_ref() == Some(binding)
+                                            })
+                                        })
+                                    },
+                                    || false,
+                                    move || {
+                                        ui.navigation.settings.set(false);
+                                        ui.navigation.files.set(false);
+                                        let binding = binding.get_untracked();
+                                        if !ui.model.with_untracked(|model| {
+                                            model.ready()
+                                                && model.active_binding.as_ref() == Some(&binding)
+                                        }) {
+                                            ui.send(Command::Reconnect(binding));
+                                        }
+                                        ui.navigation.drawer.set(false);
+                                    },
+                                ))
+                        },
+                    ))
+                    .child(when(
+                        move || {
+                            ui.model
+                                .with(|model| model.bindings.is_empty() && !model.local)
+                        },
+                        || hint(move || tr("添加一台主机，扫码或输入设备码配对。")),
+                    ))
                     .child(
                         view()
+                            .flex_row()
+                            .items_center()
                             .gap_1()
-                            .child(hint("已配对主机"))
-                            .child(when(
-                                move || ui.model.with(|m| m.bindings.is_empty()),
-                                || hint("添加一台主机，扫码或输入设备码配对。"),
+                            .child(icon_action(
+                                Icon::Herdr,
+                                "Herdr",
+                                move || ui.navigation.section.get() == Section::Herdr,
+                                || false,
+                                move || {
+                                    ui.navigation.section.set(Section::Herdr);
+                                    ui.active.set(String::new());
+                                    ui.navigation.settings.set(false);
+                                },
                             ))
-                            .child(each(
-                                move || ui.model.with(|m| m.bindings.clone()),
-                                |b| (b.relay.origin().to_owned(), b.route.clone()),
-                                move |b, index| {
-                                    navigation_row(
-                                        move || format!("主机 {}", index.get() + 1),
-                                        move || {
-                                            b.with(|b| {
-                                                format!(
-                                                    "{} · {}",
-                                                    b.relay.origin(),
-                                                    &b.host_key[..8.min(b.host_key.len())]
-                                                )
-                                            })
-                                        },
-                                        move || {
-                                            b.with(|b| {
-                                                ui.model
-                                                    .with(|m| m.active_binding.as_ref() == Some(b))
-                                            })
-                                        },
-                                        move || {
-                                            ui.navigation.settings.set(false);
-                                            ui.navigation.files.set(false);
-                                            let binding = b.get_untracked();
-                                            if !ui.model.with_untracked(|m| {
-                                                m.ready()
-                                                    && m.active_binding.as_ref() == Some(&binding)
-                                            }) {
-                                                ui.send(Command::Reconnect(binding));
-                                            }
-                                            ui.navigation.drawer.set(false);
-                                        },
-                                    )
+                            .child(icon_action(
+                                Icon::Terminal,
+                                "终端",
+                                move || ui.navigation.section.get() == Section::Terminal,
+                                || false,
+                                move || {
+                                    ui.navigation.section.set(Section::Terminal);
+                                    ui.active.set(String::new());
+                                    ui.navigation.settings.set(false);
                                 },
                             )),
                     )
                     .child(when(
-                        move || ui.model.with(|m| m.ready()),
+                        move || ui.model.with(|model| model.ready()),
                         move || resources::render(ui),
-                    ))
-                    .child(when(
-                        move || ui.model.with(|m| !m.panes.is_empty()),
-                        move || {
-                            view().gap_1().child(hint("已打开")).child(each(
-                                move || {
-                                    ui.model.with(|m| {
-                                        m.panes
-                                            .iter()
-                                            .filter(|p| {
-                                                matches!(
-                                                    (p.kind, ui.navigation.section.get()),
-                                                    (
-                                                        crate::controller::PaneKind::Herdr,
-                                                        Section::Herdr
-                                                    ) | (
-                                                        crate::controller::PaneKind::Terminal,
-                                                        Section::Terminal
-                                                    )
-                                                )
-                                            })
-                                            .cloned()
-                                            .collect::<Vec<_>>()
-                                    })
-                                },
-                                |p| p.stream.clone(),
-                                move |p, _| {
-                                    navigation_row(
-                                        move || p.with(|p| p.name.clone()),
-                                        move || {
-                                            p.with(|p| {
-                                                if p.read_only {
-                                                    "只读"
-                                                } else if p.controller {
-                                                    "可输入"
-                                                } else {
-                                                    "点击进入"
-                                                }
-                                            })
-                                        },
-                                        move || p.with(|p| p.stream == ui.active.get()),
-                                        move || {
-                                            ui.active.set(p.get_untracked().stream);
-                                            ui.navigation.show_session();
-                                        },
-                                    )
-                                },
-                            ))
-                        },
                     )),
             ),
         )
+        .child(agent_sidebar::render(ui))
         .child(
             view()
-                .p_3()
+                .px_2()
+                .flex_row()
+                .items_center()
+                .gap_1()
                 .border_t_1()
                 .border_color(move || theme().border)
-                .child(action(
+                .child(
+                    view()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .tooltip(tooltip(move || ui.model.with(|model| tr(model.status()))))
+                        .child(
+                            text(move || {
+                                ui.model.with(|model| {
+                                    tr(if model.ready() {
+                                        "已连接"
+                                    } else {
+                                        model.status()
+                                    })
+                                })
+                            })
+                            .text_xs()
+                            .text_color(move || theme().muted_foreground),
+                        ),
+                )
+                .child(icon_action(
+                    Icon::Settings,
                     "连接设置",
-                    false,
+                    move || ui.navigation.settings.get(),
                     || false,
                     move || {
                         ui.navigation.settings.set(true);
@@ -177,4 +171,37 @@ pub fn render(ui: Ui) -> impl IntoElement {
                     },
                 )),
         )
+}
+fn local_device(ui: Ui) -> impl IntoElement {
+    #[cfg(not(target_os = "android"))]
+    {
+        when(
+            move || ui.model.with(|model| model.host.is_some()),
+            move || {
+                session_row(
+                    Icon::Monitor,
+                    move || tr("本机"),
+                    move || ui.model.with(|model| model.local),
+                    || false,
+                    move || {
+                        ui.navigation.settings.set(false);
+                        ui.navigation.files.set(false);
+                        if !ui
+                            .model
+                            .with_untracked(|model| model.local && model.ready())
+                        {
+                            ui.send(Command::SelectLocal);
+                        }
+                        ui.navigation.drawer.set(false);
+                    },
+                )
+            },
+        )
+        .into_element()
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = ui;
+        view().into_element()
+    }
 }

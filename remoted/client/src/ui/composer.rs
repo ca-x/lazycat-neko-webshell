@@ -1,10 +1,13 @@
 //! A reliable IME path for phones, also available beside the desktop terminal.
 //! Text is sent to the real attached PTY; it is never rendered as a fabricated reply.
 use super::{
-    controls::{action, hint},
+    controls::{action, control_size, hint},
     state::Ui,
 };
-use crate::controller::{Command, Pane};
+use crate::{
+    controller::{Command, Pane, interaction::MAX_INPUT_BYTES},
+    preferences::tr,
+};
 use neko_remoted_protocol::{self as protocol, messages::Operation};
 use nsh_base::{input, theme};
 use nsh_core::prelude::*;
@@ -12,23 +15,21 @@ use nsh_core::prelude::*;
 pub fn render(ui: Ui, pane: ReadSignal<Pane>) -> impl IntoElement {
     let draft = signal(String::new());
     let allowed = move || {
-        ui.model.with(|m| m.writable())
-            && pane.with(|p| p.controller && !p.read_only && p.exit.is_none())
+        ui.model.with(|m| m.writable()) && pane.with(|p| p.controller && !p.read_only && p.live())
     };
     let submit = move || {
         if !allowed() || draft.get_untracked().is_empty() {
             return;
         }
         let text = draft.get_untracked();
-        if text.len() > 16 * 1024 - 1 {
-            ui.error("一次输入最多 16 KiB，请缩短后发送。".into());
+        if text.len() > MAX_INPUT_BYTES {
+            ui.error(tr("一次输入最多 16 KiB，请缩短后发送。").to_string());
             return;
         }
-        let data = format!("{text}\r");
-        if ui.submit(Command::Request(Operation::TerminalInput {
+        if ui.submit(Command::SubmitInput {
             stream: pane.get_untracked().stream,
-            data: protocol::encode(data.as_bytes()),
-        })) {
+            text,
+        }) {
             draft.set(String::new());
         }
     };
@@ -42,15 +43,17 @@ pub fn render(ui: Ui, pane: ReadSignal<Pane>) -> impl IntoElement {
             move || !allowed(),
             move || {
                 hint(move || {
-                    if !ui.model.with(|m| m.ready()) {
+                    tr(if !ui.model.with(|m| m.ready()) {
                         "连接已断开，输入不会发送。"
                     } else if ui.model.with(|m| !m.writable()) || pane.with(|p| p.read_only) {
                         "此会话为只读授权。"
+                    } else if pane.with(|p| p.unavailable.is_some()) {
+                        "会话连接已中断。"
                     } else if pane.with(|p| p.exit.is_some()) {
                         "会话已退出。"
                     } else {
                         "取得控制权后即可输入。"
-                    }
+                    })
                 })
             },
         ))
@@ -61,15 +64,15 @@ pub fn render(ui: Ui, pane: ReadSignal<Pane>) -> impl IntoElement {
                 .items_end()
                 .child(
                     input()
-                        .label("会话输入")
-                        .placeholder("输入内容，发送到当前会话…")
+                        .label(move || tr("会话输入"))
+                        .placeholder(move || tr("输入内容，发送到当前会话…").to_string())
                         .value(move || draft.get())
                         .on_change(move |value: &str| draft.set(value.into()))
                         .on_submit(move |_: &str| submit())
                         .readonly(move || !allowed())
                         .flex_1()
                         .min_w(px(0.0))
-                        .min_h(px(44.0))
+                        .min_h(control_size)
                         .px_3()
                         .py_2()
                         .bg(move || theme().card)

@@ -1,13 +1,13 @@
 use nsh_base::{
     Terminal, TerminalApi, TerminalCursor, TerminalEmulator, TerminalEmulatorEvent,
-    TerminalEmulatorFactory, TerminalLine, TerminalModes, TerminalSize, VtEmulator,
+    TerminalEmulatorFactory, TerminalLine, TerminalModes, TerminalSize,
 };
 use nsh_core::prelude::*;
 use std::{cell::RefCell, rc::Rc};
 
 #[derive(Clone)]
 pub struct Buffer {
-    emulator: Rc<RefCell<VtEmulator>>,
+    emulator: Rc<RefCell<crate::terminal::GhosttyEmulator>>,
     pub revision: Signal<u64>,
     pub size: Signal<TerminalSize>,
 }
@@ -15,7 +15,12 @@ pub struct Buffer {
 impl Buffer {
     fn new() -> Self {
         Self {
-            emulator: Rc::new(RefCell::new(VtEmulator::new(TerminalSize::default(), 1000))),
+            emulator: Rc::new(RefCell::new(
+                crate::terminal::GhosttyEmulator::new(TerminalSize::default(), 1000)
+                    .unwrap_or_else(|error| {
+                        crate::terminal::GhosttyEmulator::failed(TerminalSize::default(), error)
+                    }),
+            )),
             revision: signal(0),
             size: signal(TerminalSize::default()),
         }
@@ -28,7 +33,9 @@ impl Buffer {
     pub fn resize(&self, size: TerminalSize) {
         if self.size.get_untracked() != size {
             self.emulator.borrow_mut().resize(size);
-            self.size.set(size);
+            if self.emulator.borrow().failure().is_none() {
+                self.size.set(size);
+            }
             self.revision
                 .update(|revision| *revision = revision.wrapping_add(1));
         }
@@ -90,7 +97,9 @@ impl TerminalEmulator for SharedEmulator {
         untracked(|| self.buffer.line_count()).max(self.viewport.rows as usize)
     }
     fn line(&self, index: usize) -> TerminalLine {
-        untracked(|| self.buffer.line(index))
+        let line = untracked(|| self.buffer.line(index));
+        // Theme reads must stay tracked so existing rows redraw without new PTY output.
+        crate::preferences::current_context().terminal_line(line)
     }
     fn cursor(&self) -> Option<TerminalCursor> {
         (self.viewport == self.buffer.size.get_untracked())
@@ -176,5 +185,37 @@ mod tests {
         app.first_render()
             .expect("render resize regression fixture");
         assert!(app.shows("placeholder=true;visible=true"));
+    }
+
+    #[component]
+    fn SharedBufferFixture() -> impl IntoElement {
+        let buffer = Buffer::new();
+        let mut first = SharedEmulator {
+            buffer: buffer.clone(),
+            viewport: TerminalSize::default(),
+        };
+        let mut second = SharedEmulator {
+            buffer: buffer.clone(),
+            viewport: TerminalSize::default(),
+        };
+        first.feed("共享 buffer".as_bytes());
+        let shared = second.line(0).text().starts_with("共享 buffer");
+        first.resize(TerminalSize::new(100, 30));
+        let stale_cursor_hidden = second.cursor().is_none() && first.cursor().is_some();
+        second.resize(TerminalSize::new(1, 1));
+        let placeholder_preserved = buffer.size.get_untracked() == TerminalSize::new(100, 30);
+        second.resize(TerminalSize::new(100, 30));
+        text(format!(
+            "shared={shared};stale={stale_cursor_hidden};placeholder={placeholder_preserved};cursor={}",
+            second.cursor().is_some()
+        ))
+    }
+
+    #[test]
+    fn views_share_output_and_only_show_the_current_viewport_cursor() {
+        let mut app = Headless::start(EngineConfig::new(Root::of::<SharedBufferFixture>()))
+            .expect("start shared buffer fixture");
+        app.first_render().expect("render shared buffer fixture");
+        assert!(app.shows("shared=true;stale=true;placeholder=true;cursor=true"));
     }
 }

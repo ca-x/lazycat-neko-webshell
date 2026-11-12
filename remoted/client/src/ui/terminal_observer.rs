@@ -1,9 +1,15 @@
+//! Selectable read-only terminal output that preserves the source terminal geometry.
+
 use super::{terminal_colors::colors, terminal_surface::Buffer};
-use nsh_base::{TerminalRun, TerminalSize, theme};
+use crate::preferences::{current_context, tr};
+use nsh_base::{TerminalRun, theme};
 use nsh_core::prelude::*;
 use unicode_width::UnicodeWidthChar;
 
-pub fn render(buffer: Buffer, size: Signal<(u16, u16)>) -> impl IntoElement {
+/// Render and scroll output without resizing the local buffer or requesting a remote resize.
+pub fn render(buffer: Buffer, _size: Signal<(u16, u16)>) -> impl IntoElement {
+    let appearance = current_context();
+    let viewport_width = signal(px(0.0));
     let family = move || {
         theme()
             .font_mono
@@ -12,44 +18,68 @@ pub fn render(buffer: Buffer, size: Signal<(u16, u16)>) -> impl IntoElement {
     };
     let cell_width = computed(move || {
         let family = family();
+        let font_size = appearance.font_size();
         let css = if matches!(family.as_ref(), "monospace" | "ui-monospace") {
-            format!("13px {family}")
+            format!("{font_size}px {family}")
         } else {
-            format!("13px \"{}\"", family.replace('"', ""))
+            format!("{font_size}px \"{}\"", family.replace('"', ""))
         };
         measure_text(&css, "0000000000") / 10.0
     });
     let count = buffer.clone();
     let rows = buffer.clone();
-    virtual_list(
+    let geometry = buffer.clone();
+    let height = buffer.clone();
+    let content_width = computed(move || {
+        px((geometry.size.get().cols as f32 * cell_width.get().0).max(viewport_width.get().0))
+    });
+    let list = virtual_list(
         move || count.line_count(),
         move |position| row(rows.clone(), position, cell_width),
     )
     .test_id("terminal-observer")
-    .label("远程终端输出（只读，可选择和复制）")
+    .label(move || tr("远程终端输出（只读，可选择和复制）"))
     .alignment(ListAlignment::Bottom)
-    .estimated_item_size(px(18.0))
+    .follow_end(move || px(appearance.line_height()))
+    .estimated_item_size(move || px(appearance.line_height()))
     .selectable(true)
-    .flex_1()
+    // This is the horizontal scroll's child: a zero flex basis collapses the
+    // initial width and leaves GTK list cells without layout. Keep source columns.
+    .w(move || Length::from(content_width.get()))
+    .flex_shrink(0.0)
+    // Bottom alignment follows real scrollback; capping the viewport at the
+    // content height keeps a short fixed screen at the top of a taller window.
+    .max_h(move || px(height.line_count() as f32 * appearance.line_height()))
     .min_h(px(0.0))
     .overflow_hidden()
     .font_family(family)
-    .text_size(px(13.0))
-    .text_color(move || theme().foreground)
-    .on_layout(move |bounds: &Bounds<Points>| {
-        let width = cell_width.get_untracked().0;
-        if width > 0.0 && bounds.size.width.0 > 0.0 && bounds.size.height.0 > 0.0 {
-            let cols = (bounds.size.width.0 / width).floor().clamp(1.0, 1000.0) as u16;
-            let rows = (bounds.size.height.0 / 18.0).floor().clamp(1.0, 1000.0) as u16;
-            buffer.resize(TerminalSize::new(cols, rows));
-            size.set((cols, rows));
-        }
-    })
+    .text_size(move || px(appearance.font_size() as f32))
+    .text_color(move || appearance.foreground())
+    .bg(move || appearance.background());
+    view()
+        .flex_1()
+        .min_h(px(0.0))
+        .overflow_hidden()
+        .bg(move || appearance.background())
+        .on_layout(move |bounds: &Bounds<Points>| {
+            if bounds.size.width.0 > 0.0 {
+                viewport_width.set(bounds.size.width);
+            }
+        })
+        .child(
+            scroll()
+                .horizontal()
+                .test_id("terminal-observer-horizontal")
+                .flex_1()
+                .min_h(px(0.0))
+                .child(list),
+        )
 }
 
 fn row(buffer: Buffer, position: Position, width: Memo<Points>) -> impl IntoElement {
+    let appearance = current_context();
     let lines = buffer.clone();
-    let line = computed(move || lines.line(position.index()));
+    let line = computed(move || appearance.terminal_line(lines.line(position.index())));
     let backgrounds = line;
     let cursor = computed(move || {
         let cursor = buffer.cursor()?;
@@ -59,7 +89,7 @@ fn row(buffer: Buffer, position: Position, width: Memo<Points>) -> impl IntoElem
         (position.index() == first + cursor.row as usize).then_some(cursor.col)
     });
     view()
-        .h(px(18.0))
+        .h(move || px(appearance.line_height()))
         .justify_center()
         .child(dynamic(move || {
             let mut column = 0;
@@ -94,13 +124,16 @@ fn row(buffer: Buffer, position: Position, width: Memo<Points>) -> impl IntoElem
                 .children(fills)
         }))
         .child(dynamic(move || {
-            text("").select_text().children(
-                line.get()
-                    .runs
-                    .into_iter()
-                    .map(run_view)
-                    .collect::<Vec<_>>(),
-            )
+            text("")
+                .select_text()
+                .selection_color(move || appearance.selection())
+                .children(
+                    line.get()
+                        .runs
+                        .into_iter()
+                        .map(run_view)
+                        .collect::<Vec<_>>(),
+                )
         }))
         .child(when(
             move || cursor.get().is_some(),
@@ -111,7 +144,8 @@ fn row(buffer: Buffer, position: Position, width: Memo<Points>) -> impl IntoElem
                     .bottom_0()
                     .left(move || Length::from(width.get() * cursor.get().unwrap_or(0) as f32))
                     .w(move || Length::from(width.get()))
-                    .bg(move || theme().foreground)
+                    .test_id("terminal-observer-cursor")
+                    .bg(move || appearance.cursor())
                     .opacity(0.25)
                     .pointer_events(PointerEvents::None)
             },

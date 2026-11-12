@@ -2,22 +2,26 @@
 
 neoko-terminal 是 Rust + NSH 原生客户端，支持 Windows、macOS、Linux 和 Android。Remoted 是它与小橘终端共用的远程协议，将明确授权的已有会话通过 Relay 提供给客户端。主机和客户端均主动连接 Relay，不需要把终端服务端口直接暴露到公网。
 
-Android 首发包名为 `community.lazycat.neko.remoted`，支持 Android 9 / API 28 及以上的 arm64 设备。客户端、协议及 Relay 独立版本；主机能力由小橘终端新版提供。两端均需显式配置同一个 Relay 并由主机用户批准设备；可以填写自建地址，或点击“使用公共中转”填入 `https://neko-relay.czyt.eu.org`，不会自动连接或配对。
+Android 首发包名为 `community.lazycat.neko.remoted`，支持 Android 9 / API 28 及以上的 arm64 设备。客户端、协议及 Relay 独立版本。Windows、macOS、Linux 可在没有 Relay 和懒猫客户端时创建本机终端，并可选择开启远程控制、批准其他原生设备；Android 仅连接远端。两端均需显式配置同一个 Relay 并由主机用户批准设备；可以填写自建地址，或点击“使用公共中转”填入 `https://neko-relay.czyt.eu.org`，不会自动连接或配对。
 
-配对后从设备侧栏切换主机。Herdr 与普通终端分别导航，两端与 WebShell 使用同一会话及控制权；文件入口只展示获授权目录。启动时恢复上次主机，临时断网有限重试，手动断开则停止自动连接。重连只恢复已确认的运行中会话，不重发输入、传输或取得控制权。会话交互与设计约定见 [原生界面说明](docs/native-ui.md)。
+桌面设备栏提供“本机”入口；配对后也能从设备侧栏切换远端主机。终端和对话视图复用同一个会话，输入记录区分待确认、主机已接受、拒绝与结果未知；真实终端输出不会被伪装成 Agent 回复。主题、字体、界面明暗和中英语言在设置中保存。桌面设置可选择原生终端、hc（herdr-core）或 Herdr 作为本机新建会话的默认后端；已有会话和重连保持原后端，未安装或连接失败时提供明确提示。
+
+Herdr 与普通终端分别导航，两端与 WebShell 使用同一会话及控制权；文件入口只展示获授权目录。启动时恢复上次主机，临时断网有限重试，手动断开则停止自动连接。重连只恢复已确认的运行中会话，不重发输入、传输或取得控制权。会话交互与设计约定见 [原生界面说明](docs/native-ui.md)。
 
 | 目录 | 职责 |
 | --- | --- |
 | `protocol/` | 地址与设备码、Noise 握手、加密消息及协议边界 |
 | `relay/` | Cloudflare Worker + SQLite Durable Objects，转发连接控制帧和密文 |
-| `client/` | 独立 NSH 原生客户端及平台适配；拥有自己的 Cargo workspace |
+| `client/` | NSH 原生应用及平台适配；拥有自己的 Cargo workspace |
+| `host/` | 原生桌面本机 PTY、hc、Herdr、授权与 Relay 主机运行时 |
+| `ghostty/`、`themes/` | 固定版本的 Ghostty VT 适配与 WebShell 共享主题目录 |
 | `../src/remoted/` | WebShell 主机的配对、审批、授权、会话与文件适配 |
 
 部署从 [Cloudflare 部署指南](docs/deploy-cloudflare.md) 开始；Relay 的入口和测试见 [Relay README](relay/README.md)。原生客户端的构建、签名和 Android 平台验证见 [Android 指南](docs/android.md)，Windows、macOS 和 Linux deb 的构建与安装见 [桌面指南](docs/native-desktop.md)，线协议见 [协议说明](docs/protocol.md)。
 
 ## 支持范围与授权
 
-当前主机实现要求 LightOS 提供当前应用的部署身份、认证用户和权威归属查询。只有部署所有者可以管理远程设备；普通 Docker 或无平台身份的开发环境不能通过伪造请求头获得相同能力。
+WebShell 主机实现要求 LightOS 提供当前应用的部署身份、认证用户和权威归属查询。只有部署所有者可以管理远程设备；普通 Docker 或无平台身份的开发环境不能通过伪造请求头获得相同能力。
 
 授权对象是已存在的会话，绑定完整 selector、目标登录用户、后端及目标身份。当前后端允许列表为 `webshell`、`ssh`、`herdr`、`hc`、`zellij`，仍须通过每次操作的身份与归属检查。SSH 必须是当前应用中启用的配置，配置变化会使旧授权失效；其他目标要求完整 `name@owner_deploy_id` 及可验证归属。依赖短期平台票据的物理客户端目标不能持久委托；MicroVM 也不在当前允许列表内。
 

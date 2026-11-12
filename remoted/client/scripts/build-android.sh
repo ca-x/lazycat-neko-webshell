@@ -53,6 +53,7 @@ fi
 work=$(mktemp -d "$output/build.XXXXXXXX")
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/classes" "$work/dex" "$work/package/lib/arm64-v8a" "$work/package/assets/licenses"
+python3 "$client_dir/../scripts/native_build_inputs.py" metadata "$work/build-inputs.json"
 mapfile -t java_sources < <(find "$client_dir/android/src" -name '*.java' -print | sort)
 javac --release 8 -encoding UTF-8 -classpath "$android_jar:$runtime/classes.jar:$zxing" -d "$work/classes" "${java_sources[@]}"
 jar cf "$work/host.jar" -C "$work/classes" .
@@ -90,6 +91,8 @@ cp "$client_dir/android/licenses/ZXing-LICENSE" "$work/package/assets/licenses/Z
 cp "$client_dir/android/licenses/NSH-LICENSE-APACHE" "$work/package/assets/licenses/NSH-LICENSE-APACHE"
 cp "$client_dir/android/licenses/NOTICE" "$work/package/assets/licenses/NOTICE"
 cp "$client_dir/../LICENSE" "$work/package/assets/licenses/NEKO-LICENSE"
+python3 "$client_dir/../scripts/native_build_inputs.py" stage-licenses "$work/package/assets/licenses"
+cp "$work/build-inputs.json" "$work/package/assets/build-inputs.json"
 cp "$work/dex/"*.dex "$work/package/"
 "$tools/aapt2" compile --dir "$client_dir/android/res" -o "$work/resources.zip"
 "$tools/aapt2" link -I "$android_jar" --manifest "$client_dir/android/AndroidManifest.xml" "$work/resources.zip" -o "$work/unsigned.apk"
@@ -119,11 +122,13 @@ for license in ZXing-LICENSE NSH-LICENSE-APACHE NOTICE; do
     unzip -p "$output/neko-remoted.apk" "assets/licenses/$license" | cmp "$client_dir/android/licenses/$license" -
 done
 unzip -p "$output/neko-remoted.apk" assets/licenses/NEKO-LICENSE | cmp "$client_dir/../LICENSE" -
+python3 "$client_dir/../scripts/native_build_inputs.py" verify-apk "$output/neko-remoted.apk" "$work/build-inputs.json"
 certificate=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$output/signature.txt")
 [[ "$certificate" =~ ^[0-9a-fA-F]{64}$ ]] || { echo 'Could not read signing certificate fingerprint' >&2; exit 1; }
 apk_sha=$(sha256sum "$output/neko-remoted.apk" | awk '{print $1}')
 native_sha=$(sha256sum "$native_lib" | awk '{print $1}')
 runtime_sha=$(sha256sum "$runtime/classes.jar" | awk '{print $1}')
 printf '{"package":"community.lazycat.neko.remoted","minSdk":28,"targetSdk":35,"abi":"arm64-v8a","apk_sha256":"%s","native_sha256":"%s","runtime_classes_sha256":"%s","zxing_sha256":"%s","certificate_sha256":"%s","elf_load_alignment_min":16384,"zip_alignment_verified":true}\n' "$apk_sha" "$native_sha" "$runtime_sha" "$zxing_sha" "$certificate" > "$output/build-info.json"
+python3 "$client_dir/../scripts/native_build_inputs.py" merge-metadata "$output/build-info.json" "$work/build-inputs.json"
 "$tools/aapt2" dump badging "$output/neko-remoted.apk" | sed -n '1,8p'
 printf 'APK: %s\n' "$output/neko-remoted.apk"

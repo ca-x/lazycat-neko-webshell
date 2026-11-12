@@ -113,23 +113,28 @@ pub(super) fn request(value: &Value) -> Result<Value> {
     let _guard = CREDENTIALS
         .lock()
         .map_err(|_| anyhow::anyhow!("Credential lock poisoned"))?;
+    request_with_store(&SystemStore, value)
+}
+fn request_with_store(store: &impl Store, value: &Value) -> Result<Value> {
     let key = value["key"].as_str().context("Missing credential key")?;
     ensure!(
         [
             "remoted.identity.v1",
             "remoted.bindings.v1",
-            "remoted.last-relay.v1"
+            "remoted.last-relay.v1",
+            crate::preferences::STORAGE_KEY,
+            crate::platform::HOST_IDENTITY_KEY,
         ]
         .contains(&key),
         "Unknown credential key"
     );
     if value["op"] == "secureGet" {
-        Ok(load(&SystemStore, key)
+        Ok(load(store, key)
             .context("Cannot read system credential store; no plaintext fallback")?
             .map_or(Value::Null, Value::String))
     } else {
         save(
-            &SystemStore,
+            store,
             key,
             value["value"]
                 .as_str()
@@ -169,6 +174,43 @@ mod tests {
             self.values.borrow_mut().remove(key);
             Ok(())
         }
+    }
+    #[test]
+    fn platform_requests_persist_host_and_display_preferences_and_reject_unknown_keys() {
+        let store = Memory::default();
+        for key in [
+            crate::preferences::STORAGE_KEY,
+            crate::platform::HOST_IDENTITY_KEY,
+        ] {
+            assert!(
+                request_with_store(&store, &json!({"op":"secureGet","key":key}))
+                    .unwrap()
+                    .is_null()
+            );
+            request_with_store(
+                &store,
+                &json!({"op":"secureSet","key":key,"value":"{\"saved\":true}"}),
+            )
+            .unwrap();
+            assert_eq!(
+                request_with_store(&store, &json!({"op":"secureGet","key":key})).unwrap(),
+                "{\"saved\":true}"
+            );
+        }
+        assert!(
+            request_with_store(
+                &store,
+                &json!({"op":"secureSet","key":"unregistered","value":"forbidden"})
+            )
+            .is_err()
+        );
+        assert!(
+            store
+                .values
+                .borrow()
+                .keys()
+                .all(|key| !key.starts_with("unregistered"))
+        );
     }
     #[test]
     fn large_unicode_bindings_persist_and_update_under_windows_blob_limit() {
