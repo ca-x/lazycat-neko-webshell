@@ -12,6 +12,15 @@ producer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(producer)
 
 
+class RepositoryVersionTests(unittest.TestCase):
+    def test_repository_android_manifests_match_the_release_version(self):
+        config = json.loads((producer.ROOT / 'client/nsh.json').read_text())
+        with patch.dict(os.environ, {
+            'RELEASE_REF': 'refs/tags/neoko-terminal-android-v' + config['version'],
+        }):
+            self.assertEqual(producer.version(), (config['version'], config['build']))
+
+
 class ArtifactContractTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
