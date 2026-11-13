@@ -132,39 +132,6 @@ impl ReplyOnlyInputFilter {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fragmented_queries_survive_but_large_image_transmissions_never_reach_the_reply_vt() {
-        let query = b"\x1b_Ga=q,i=31,f=24,s=1,v=1;AAAA\x1b\\";
-        for split in 0..=query.len() {
-            let mut filter = ReplyOnlyInputFilter::default();
-            let mut output = filter.filter(&query[..split]).into_owned();
-            output.extend_from_slice(&filter.filter(&query[split..]));
-            assert_eq!(output, query);
-        }
-        let mut filter = ReplyOnlyInputFilter::default();
-        assert_eq!(&*filter.filter(b"before\x1b_Ga=T,f=100,m=1;"), b"before");
-        let payload = [b'A'; 4096];
-        for _ in 0..1024 {
-            assert!(filter.filter(&payload).is_empty());
-            assert!(filter.kitty_graphics.len() <= MAX_KITTY_QUERY_BYTES);
-        }
-        assert_eq!(&*filter.filter(b"\x1b\\after"), b"after");
-        assert_eq!(&*filter.filter(query), query);
-    }
-
-    #[test]
-    fn ambiguous_actions_are_not_queries_and_standard_vt_bytes_are_preserved() {
-        let mut filter = ReplyOnlyInputFilter::default();
-        assert!(filter.filter(b"\x1b_Ga=q,a=T,i=31;AAAA\x1b\\").is_empty());
-        let text = "猫\x1b[31mRED\x1b[0m\r\n".as_bytes();
-        assert_eq!(&*filter.filter(text), text);
-    }
-}
-
 fn kitty_graphics_is_query(sequence: &[u8]) -> bool {
     const ESC: u8 = 0x1b;
     const APC: u8 = 0x9f;
@@ -199,4 +166,37 @@ fn kitty_graphics_is_query(sequence: &[u8]) -> bool {
         query_action = true;
     }
     query_action
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fragmented_queries_survive_but_large_image_transmissions_never_reach_the_reply_vt() {
+        let query = b"\x1b_Ga=q,i=31,f=24,s=1,v=1;AAAA\x1b\\";
+        for split in 0..=query.len() {
+            let mut filter = ReplyOnlyInputFilter::default();
+            let mut output = filter.filter(&query[..split]).into_owned();
+            output.extend_from_slice(&filter.filter(&query[split..]));
+            assert_eq!(output, query);
+        }
+        let mut filter = ReplyOnlyInputFilter::default();
+        assert_eq!(&*filter.filter(b"before\x1b_Ga=T,f=100,m=1;"), b"before");
+        let payload = [b'A'; 4096];
+        for _ in 0..1024 {
+            assert!(filter.filter(&payload).is_empty());
+            assert!(filter.kitty_graphics.len() <= MAX_KITTY_QUERY_BYTES);
+        }
+        assert_eq!(&*filter.filter(b"\x1b\\after"), b"after");
+        assert_eq!(&*filter.filter(query), query);
+    }
+
+    #[test]
+    fn ambiguous_actions_are_not_queries_and_standard_vt_bytes_are_preserved() {
+        let mut filter = ReplyOnlyInputFilter::default();
+        assert!(filter.filter(b"\x1b_Ga=q,a=T,i=31;AAAA\x1b\\").is_empty());
+        let text = "猫\x1b[31mRED\x1b[0m\r\n".as_bytes();
+        assert_eq!(&*filter.filter(text), text);
+    }
 }

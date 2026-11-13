@@ -300,6 +300,7 @@ fn restoration_invalidates_an_inflight_close() -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn losing_the_linux_tray_host_restores_the_hidden_window() -> Result<(), String> {
     let mut app = app();
