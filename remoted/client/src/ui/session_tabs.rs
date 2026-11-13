@@ -12,8 +12,11 @@ use crate::{
         state::Ui,
     },
 };
-use nsh_base::{button, theme};
+use nsh_base::{button, context_menu, theme};
 use nsh_core::prelude::*;
+
+#[path = "tab_actions.rs"]
+mod actions;
 
 #[derive(Clone, PartialEq, Eq)]
 enum Target {
@@ -27,6 +30,7 @@ struct Entry {
     target: Target,
     active: bool,
     agent: Option<Agent>,
+    streams: Vec<String>,
 }
 
 fn entries(model: &Model, section: Section, workspace: &str, active: &str) -> Vec<Entry> {
@@ -67,6 +71,17 @@ fn entries(model: &Model, section: Section, workspace: &str, active: &str) -> Ve
                         .iter()
                         .find(|agent| agent.pane_id == pane.pane_id)
                         .cloned(),
+                    streams: model
+                        .panes
+                        .iter()
+                        .filter(|open| {
+                            open.herdr_grant.as_deref() == Some(model.herdr_grant.as_str())
+                                && panes.iter().any(|pane| {
+                                    open.herdr_pane_id.as_deref() == Some(pane.pane_id.as_str())
+                                })
+                        })
+                        .map(|open| open.stream.clone())
+                        .collect(),
                 });
             }
         }
@@ -93,6 +108,15 @@ fn entries(model: &Model, section: Section, workspace: &str, active: &str) -> Ve
                     .iter()
                     .find(|agent| agent.pane_id == pane.pane_id)
                     .cloned(),
+                streams: model
+                    .panes
+                    .iter()
+                    .filter(|open| {
+                        open.herdr_grant.as_deref() == Some(model.herdr_grant.as_str())
+                            && open.herdr_pane_id.as_deref() == Some(pane.pane_id.as_str())
+                    })
+                    .map(|open| open.stream.clone())
+                    .collect(),
             });
         }
     }
@@ -126,6 +150,7 @@ fn entries(model: &Model, section: Section, workspace: &str, active: &str) -> Ve
                 status: Some(icons::program_status(record.state).into()),
                 ..Agent::default()
             }),
+            streams: vec![pane.stream.clone()],
         });
     }
     entries
@@ -133,11 +158,15 @@ fn entries(model: &Model, section: Section, workspace: &str, active: &str) -> Ve
 
 pub fn render(ui: Ui) -> impl IntoElement {
     view()
+        .flex_row()
+        .items_center()
+        .gap_1()
         .min_w(px(0.0))
         .child(
             scroll()
                 .horizontal()
                 .test_id("session-tabs")
+                .flex_1()
                 .min_w(px(0.0))
                 .child(view().flex_row().items_center().gap_1().child(each(
                     move || {
@@ -152,87 +181,144 @@ pub fn render(ui: Ui) -> impl IntoElement {
                     },
                     |entry| entry.key.clone(),
                     move |entry, _| {
-                        button()
-                            .selected(move || entry.with(|entry| entry.active))
-                            .on_press(move || match entry.get_untracked().target {
-                                Target::Herdr(id) => resources::open_pane(ui, &id),
-                                Target::Stream(stream) => {
-                                    ui.navigation.section.set(ui.model.with_untracked(|model| {
-                                        model
-                                            .panes
-                                            .iter()
-                                            .find(|pane| pane.stream == stream)
-                                            .map(|pane| {
-                                                if pane.kind == PaneKind::Herdr {
-                                                    Section::Herdr
-                                                } else {
-                                                    Section::Terminal
+                        context_menu()
+                            .popup_style(super::super::terminal_view::interaction::menu_surface)
+                            .trigger(
+                                view()
+                                    .test_id("session-tab")
+                                    .flex_row()
+                                    .items_center()
+                                    .flex_shrink(0.0)
+                                    .rounded(move || theme().radius)
+                                    .style_when(
+                                        move || entry.with(|entry| entry.active),
+                                        |style| style.bg(move || theme().accent),
+                                    )
+                                    .child(
+                                        button()
+                                            .selected(move || entry.with(|entry| entry.active))
+                                            .on_press(move || match entry.get_untracked().target {
+                                                Target::Herdr(id) => resources::open_pane(ui, &id),
+                                                Target::Stream(stream) => {
+                                                    ui.navigation.section.set(
+                                                        ui.model.with_untracked(|model| {
+                                                            model
+                                                                .panes
+                                                                .iter()
+                                                                .find(|pane| pane.stream == stream)
+                                                                .map(|pane| {
+                                                                    if pane.kind == PaneKind::Herdr
+                                                                    {
+                                                                        Section::Herdr
+                                                                    } else {
+                                                                        Section::Terminal
+                                                                    }
+                                                                })
+                                                                .unwrap_or(Section::Terminal)
+                                                        }),
+                                                    );
+                                                    ui.active.set(stream);
+                                                    ui.navigation.show_session();
                                                 }
                                             })
-                                            .unwrap_or(Section::Terminal)
-                                    }));
-                                    ui.active.set(stream);
-                                    ui.navigation.show_session();
-                                }
-                            })
-                            .min_h(control_size)
-                            .flex_shrink(0.0)
-                            .flex_row()
-                            .items_center()
-                            .gap_2()
-                            .px_2()
-                            .rounded(move || theme().radius)
-                            .bg(move || theme().background.opacity(0.0))
-                            .selected_style(|style| style.bg(move || theme().accent))
-                            .hover(|style| style.bg(move || theme().secondary))
-                            .focus(|style| {
-                                style.outline(px(2.0)).outline_color(move || theme().ring)
-                            })
-                            .active(|style| style.opacity(0.75))
-                            .child(
-                                when(
-                                    move || entry.with(|entry| entry.agent.is_some()),
-                                    move || {
-                                        view().child(each(
-                                            move || {
-                                                entry.with(|entry| {
-                                                    entry
-                                                        .agent
-                                                        .clone()
-                                                        .into_iter()
-                                                        .collect::<Vec<_>>()
+                                            .min_h(control_size)
+                                            .flex_shrink(0.0)
+                                            .flex_row()
+                                            .items_center()
+                                            .gap_2()
+                                            .px_2()
+                                            .rounded(move || theme().radius)
+                                            .bg(move || theme().background.opacity(0.0))
+                                            .selected_style(|style| {
+                                                style.bg(move || theme().accent)
+                                            })
+                                            .hover(|style| style.bg(move || theme().secondary))
+                                            .focus(|style| {
+                                                style
+                                                    .outline(px(2.0))
+                                                    .outline_color(move || theme().ring)
+                                            })
+                                            .active(|style| style.opacity(0.75))
+                                            .child(
+                                                when(
+                                                    move || {
+                                                        entry.with(|entry| entry.agent.is_some())
+                                                    },
+                                                    move || {
+                                                        view().child(each(
+                                                            move || {
+                                                                entry.with(|entry| {
+                                                                    entry
+                                                                        .agent
+                                                                        .clone()
+                                                                        .into_iter()
+                                                                        .collect::<Vec<_>>()
+                                                                })
+                                                            },
+                                                            |agent| {
+                                                                (
+                                                                    agent.kind.clone(),
+                                                                    agent.status.clone(),
+                                                                )
+                                                            },
+                                                            move |agent, _| {
+                                                                let agent = agent.get_untracked();
+                                                                view()
+                                                                    .flex_row()
+                                                                    .gap_1()
+                                                                    .child(
+                                                                        icons::agent_with_status(
+                                                                            &agent.kind,
+                                                                            agent.status.as_deref(),
+                                                                        ),
+                                                                    )
+                                                                    .child(icons::activity(
+                                                                        agent.status.as_deref(),
+                                                                    ))
+                                                            },
+                                                        ))
+                                                    },
+                                                )
+                                                .otherwise(move || {
+                                                    icons::render(
+                                                        if ui.navigation.section.get_untracked()
+                                                            == Section::Herdr
+                                                        {
+                                                            Icon::Herdr
+                                                        } else {
+                                                            Icon::Terminal
+                                                        },
+                                                    )
+                                                }),
+                                            )
+                                            .child(
+                                                text(move || {
+                                                    entry.with(|entry| entry.title.clone())
                                                 })
-                                            },
-                                            |agent| (agent.kind.clone(), agent.status.clone()),
-                                            move |agent, _| {
-                                                let agent = agent.get_untracked();
-                                                view()
-                                                    .flex_row()
-                                                    .gap_1()
-                                                    .child(icons::agent_with_status(
-                                                        &agent.kind,
-                                                        agent.status.as_deref(),
-                                                    ))
-                                                    .child(icons::activity(agent.status.as_deref()))
-                                            },
-                                        ))
-                                    },
-                                )
-                                .otherwise(move || {
-                                    icons::render(
-                                        if ui.navigation.section.get_untracked() == Section::Herdr {
-                                            Icon::Herdr
-                                        } else {
-                                            Icon::Terminal
-                                        },
+                                                .text_sm()
+                                                .number_of_lines(1)
+                                                .max_w(px(160.0)),
+                                            ),
                                     )
-                                }),
+                                    .child(crate::ui::controls::icon_action(
+                                        Icon::Close,
+                                        move || {
+                                            format!(
+                                                "{} · {}",
+                                                tr("关闭此窗格连接"),
+                                                entry.with(|entry| entry.title.clone())
+                                            )
+                                        },
+                                        || false,
+                                        move || entry.with(|entry| entry.streams.is_empty()),
+                                        move || actions::detach(ui, &entry.get_untracked().streams),
+                                    )),
                             )
-                            .child(
-                                text(move || entry.with(|entry| entry.title.clone()))
-                                    .text_sm()
-                                    .number_of_lines(1),
-                            )
+                            .child(super::super::terminal_view::interaction::menu_action(
+                                "关闭此窗格连接",
+                                move || entry.with(|entry| entry.streams.is_empty()),
+                                move || actions::detach(ui, &entry.get_untracked().streams),
+                            ))
                     },
                 ))),
         )
@@ -259,4 +345,9 @@ pub fn render(ui: Ui) -> impl IntoElement {
                 .text_sm()
             },
         ))
+        .child(actions::add_button(ui))
 }
+
+#[cfg(all(test, not(target_os = "android")))]
+#[path = "session_tabs_tests.rs"]
+mod tests;

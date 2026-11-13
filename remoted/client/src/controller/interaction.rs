@@ -88,6 +88,10 @@ impl History {
         }
     }
 
+    pub(super) fn reject(&mut self, id: u64) {
+        self.settle(id, SubmissionState::Rejected);
+    }
+
     pub(super) fn remove_stream(&mut self, stream: &str) {
         self.entries.retain(|entry| entry.stream != stream);
     }

@@ -66,11 +66,11 @@ impl Ui {
         self.values.get()
     }
 
-    /// Backend for a new local session, from the last acknowledged document.
+    /// Initial local terminal type, from the last acknowledged document.
     ///
-    /// Creation is unavailable until loading succeeds. A pending or failed save
+    /// Initial selection is unavailable until loading succeeds. A pending or failed save
     /// retains the previous backend, just like the other active preferences.
-    pub fn new_session_backend(self) -> Option<SessionBackend> {
+    pub fn startup_backend(self) -> Option<SessionBackend> {
         match self.state.get() {
             SaveState::Loading | SaveState::LoadFailed(_) => None,
             SaveState::Ready | SaveState::Saving | SaveState::SaveFailed(_) => {

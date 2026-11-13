@@ -606,6 +606,7 @@ fn admit_request(
         .remoted
         .admit(device, &link.peer, request.id, interrupt)?;
     admission.describe(match &request.operation {
+        Operation::TerminalCreate { .. } => "terminal_create",
         Operation::TerminalAttach { .. } => "terminal_attach",
         Operation::TerminalDetach { .. } => "terminal_detach",
         Operation::TerminalControl { .. } => "terminal_control",
@@ -633,7 +634,8 @@ fn spawn_audit(
         tokio::select! {
             () = cancel.cancelled() => Ok(()),
             checked = timeout(Duration::from_secs(30), async {
-                for resource in &device.grants { grant(&state, &device, &resource.id).await?; }
+                let current = state.remoted.current_device(&device.id, device.generation)?;
+                for resource in &current.grants { grant(&state, &device, &resource.id).await?; }
                 Ok::<_, anyhow::Error>(())
             }) => checked.context("authorization audit timed out")?,
         }
@@ -672,9 +674,12 @@ async fn send(link: &Link, channel: &mut Channel, id: u64, event: Event) -> Resu
         .await
         .context("remote output stalled")?
 }
-async fn grant(state: &Arc<AppState>, device: &Device, id: &str) -> Result<Grant> {
+pub(super) async fn grant(state: &Arc<AppState>, device: &Device, id: &str) -> Result<Grant> {
     let result = async {
-        let grant = device
+        let current = state
+            .remoted
+            .current_device(&device.id, device.generation)?;
+        let grant = current
             .grants
             .iter()
             .find(|g| g.id == id)
@@ -718,9 +723,28 @@ async fn operation(
     outcome_unknown: &mut bool,
 ) -> Result<Event> {
     match operation {
-        Operation::Resources {} => Ok(Event::Resources {
-            resources: context.device.grants.iter().map(resource).collect(),
-        }),
+        Operation::Resources {} => {
+            let current = context
+                .state
+                .remoted
+                .current_device(&context.device.id, context.device.generation)?;
+            Ok(Event::Resources {
+                resources: current.grants.iter().map(resource).collect(),
+            })
+        }
+        Operation::TerminalCreate { grant: id } => {
+            require_write(context.device)?;
+            let parent = grant(context.state, context.device, &id).await?;
+            let resource = Box::pin(super::terminal_creation::create(
+                context.state,
+                context.device,
+                &parent,
+                context.admission,
+                outcome_unknown,
+            ))
+            .await?;
+            Ok(Event::TerminalCreated { resource })
+        }
         operation @ (Operation::TerminalAttach { .. }
         | Operation::TerminalDetach { .. }
         | Operation::TerminalControl { .. }

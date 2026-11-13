@@ -1,5 +1,5 @@
 use crate::database::AppDatabase;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use neko_remoted_protocol::{RelayAddress, crypto::Identity, messages::Permission};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -31,6 +31,14 @@ pub struct Grant {
     pub root_identity: Option<RootIdentity>,
 }
 impl Grant {
+    pub(super) fn same_authority(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.session == other.session
+            && self.selector == other.selector
+            && self.login == other.login
+            && self.backend == other.backend
+            && self.target_signature == other.target_signature
+    }
     pub fn resource(&self) -> neko_remoted_protocol::messages::Resource {
         neko_remoted_protocol::messages::Resource {
             id: self.id.clone(),
@@ -189,5 +197,58 @@ impl Remoted {
             .into_iter()
             .find(|d| d.id == id && d.generation == generation)
             .context("设备授权已撤销或变化")
+    }
+    /// The parent was freshly target-authorized by the caller. Publish only under
+    /// the same saved device/generation, without replacing concurrent device state.
+    pub(super) fn persist_created_grant(
+        &self,
+        device: &Device,
+        parent: &Grant,
+        child: Grant,
+    ) -> Result<()> {
+        let mut current = self
+            .saved
+            .lock()
+            .map_err(|_| anyhow::anyhow!("remote settings unavailable"))?;
+        ensure!(current.enabled, "remote control disabled");
+        let mut next = current.clone();
+        let target = next
+            .devices
+            .iter_mut()
+            .find(|item| item.id == device.id && item.generation == device.generation)
+            .context("device revoked or authorization changed")?;
+        ensure!(
+            target.permission.can_write(),
+            "read-only device cannot create terminals"
+        );
+        ensure!(
+            target
+                .grants
+                .iter()
+                .any(|grant| grant.same_authority(parent)),
+            "parent grant changed"
+        );
+        ensure!(target.grants.len() < 32, "device resource limit reached");
+        ensure!(
+            child.selector == parent.selector
+                && child.login == parent.login
+                && child.target_signature == parent.target_signature
+                && matches!(child.backend.as_str(), "webshell" | "ssh")
+                && (child.backend == "ssh") == (parent.backend == "ssh")
+                && child.session != parent.session
+                && child.id != parent.id
+                && child.root.is_none()
+                && child.root_identity.is_none()
+                && !target
+                    .grants
+                    .iter()
+                    .any(|grant| grant.id == child.id || grant.session == child.session),
+            "created terminal exceeds parent authority"
+        );
+        target.grants.push(child);
+        self.database
+            .store_kv("remoted-v1", "configuration", &serde_json::to_vec(&next)?)?;
+        *current = next;
+        Ok(())
     }
 }

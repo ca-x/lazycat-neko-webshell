@@ -1,7 +1,13 @@
+//! Native terminal snapshots without a PTY reply callback.
+
+pub mod kitty;
+
+pub use kitty::initialize_graphics;
+
 use libghostty_vt::{
     Terminal,
     mode::Mode,
-    render::{CellIterator, RenderState, RowIterator},
+    render::{CellIterator, Overscan, RenderState, RowIterator},
     screen::{CellContentTag, CellWide},
     terminal::ScrollViewport,
 };
@@ -48,14 +54,18 @@ pub struct Emulator {
     render: RenderState<'static>,
     cache: (usize, Vec<Row>),
     events: Rc<RefCell<Vec<Event>>>,
+    images: kitty::Images,
+    cell_pixels: (u32, u32),
 }
 
 impl Emulator {
     pub fn new(cols: u16, rows: u16, scrollback: usize) -> Result<Self, Error> {
+        initialize_graphics()?;
         if cols == 0 || rows == 0 {
             return Err(Error::InvalidValue);
         }
         let mut terminal = Terminal::new(cols, rows)?;
+        kitty::configure(&mut terminal)?;
         terminal.set_scrollback_max_bytes(Some(usize::MAX))?;
         terminal.set_scrollback_max_lines(Some(scrollback))?;
         let events = Rc::new(RefCell::new(Vec::new()));
@@ -74,6 +84,8 @@ impl Emulator {
             render: RenderState::new()?,
             cache: (0, Vec::new()),
             events,
+            images: kitty::Images::new()?,
+            cell_pixels: (0, 0),
         })
     }
 
@@ -86,7 +98,8 @@ impl Emulator {
         if cols == 0 || rows == 0 {
             return Err(Error::InvalidValue);
         }
-        self.terminal.resize(cols, rows, 0, 0)?;
+        self.terminal
+            .resize(cols, rows, self.cell_pixels.0, self.cell_pixels.1)?;
         self.cache.1.clear();
         Ok(())
     }
@@ -135,6 +148,70 @@ impl Emulator {
             .row(index)?
             .map(|row| row.cells.clone())
             .unwrap_or_default())
+    }
+
+    /// Read Kitty placements in global scrollback pixels without emitting VT replies.
+    ///
+    /// `visible_rows` uses global scrollback rows; pixel metrics must be positive.
+    /// Native overscan includes the full range when the client is taller than the PTY.
+    /// The viewport and overscan request are restored after reading the snapshot.
+    ///
+    /// # Errors
+    /// Returns a native snapshot error or invalid geometry. Image data stays bounded.
+    pub fn images(
+        &mut self,
+        visible_rows: std::ops::Range<usize>,
+        cell_width: u32,
+        cell_height: u32,
+    ) -> Result<Vec<kitty::Placement>, Error> {
+        if cell_width == 0 || cell_height == 0 || cell_width > 4096 || cell_height > 4096 {
+            return Err(Error::InvalidValue);
+        }
+        if self.cell_pixels != (cell_width, cell_height) {
+            let synchronized = self.terminal.mode(Mode::SYNC_OUTPUT)?;
+            self.terminal.resize(
+                self.terminal.cols()?,
+                self.terminal.rows()?,
+                cell_width,
+                cell_height,
+            )?;
+            if synchronized {
+                self.terminal.set_mode(Mode::SYNC_OUTPUT, true)?;
+            }
+            self.cell_pixels = (cell_width, cell_height);
+        }
+        let end = visible_rows.end.min(self.line_count()?);
+        if visible_rows.start >= end {
+            return Ok(Vec::new());
+        }
+        let first_row = visible_rows.start.min(self.terminal.scrollback_rows()?);
+        let below = end.saturating_sub(first_row + usize::from(self.terminal.rows()?));
+        self.render.set_overscan(Overscan {
+            above: 0,
+            below: u16::try_from(below).map_err(|_| Error::InvalidValue)?,
+        })?;
+        self.terminal
+            .scroll_viewport(ScrollViewport::Row(first_row));
+        // Native updates consume terminal dirty flags. Text and images must
+        // share this one retained state so either read preserves the other.
+        let result = (|| {
+            let snapshot = self.render.update(&self.terminal)?;
+            self.images.snapshot(
+                &self.terminal,
+                &snapshot,
+                first_row,
+                cell_width,
+                cell_height,
+            )
+        })();
+        self.terminal.scroll_viewport(ScrollViewport::Bottom);
+        // Row text caches expect exactly one source viewport, including after
+        // an image iterator error. Changing overscan forces its next full update.
+        let reset = self
+            .render
+            .set_overscan(Overscan { above: 0, below: 0 })
+            .map(|_| ());
+        result.and_then(|images| reset.map(|()| images))
     }
 
     fn row(&mut self, index: usize) -> Result<Option<&Row>, Error> {

@@ -69,9 +69,10 @@ impl Status {
     }
 }
 
-fn latency_label(model: &Model) -> SharedString {
+pub(crate) fn latency_label(model: &Model) -> SharedString {
     if model.ready()
         && !model.local
+        && model.connection_kind != ConnectionKind::Local
         && let Some(millis) = model.latency_ms
     {
         tr("端到端延迟：{} 毫秒")
@@ -80,6 +81,11 @@ fn latency_label(model: &Model) -> SharedString {
     } else {
         tr("端到端延迟：不可用")
     }
+}
+
+/// Current authenticated transport label, independent of terminal tab presentation.
+pub(crate) fn connection_label(model: &Model) -> SharedString {
+    tr(Status::of(model).label())
 }
 
 pub(crate) fn render(ui: Ui) -> impl IntoElement {
@@ -91,9 +97,10 @@ pub(crate) fn render(ui: Ui) -> impl IntoElement {
         .flex_shrink(0.0)
         .tooltip(crate::ui::controls::tooltip(move || {
             format!(
-                "{} · {}",
+                "{} · {} · {}",
                 ui.model.with(host_names::active_name),
-                label.get()
+                label.get(),
+                ui.model.with(latency_label),
             )
         }))
         .child(

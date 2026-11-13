@@ -1,14 +1,14 @@
 # neoko-terminal 原生桌面发行
 
-neoko-terminal 是独立原生终端，桌面端可直接创建本机终端、hc 持久化终端、接入本机 Herdr，也可与 WebShell 或另一台原生桌面配对。远程 WebShell 连接保留普通终端、Herdr 和文件传输；本机桌面暂不提供文件共享。设置中的“默认会话后端”只影响本机新建会话；切换默认值不会改变已有会话。hc 与 Herdr 缺失时显示安装指南和连接/启动入口，不能静默回退到另一后端。
+neoko-terminal 是独立原生终端，桌面端可直接创建本机终端、hc 持久化终端、接入本机 Herdr，也可与 WebShell 或另一台原生桌面配对。远程 WebShell 连接保留普通终端、Herdr 和文件传输；本机桌面暂不提供文件共享。设置中的“启动终端类型”只决定进入应用或本机工作区时的初始选择；新建遵循当前选中的类型，已有会话保持原后端。hc 与 Herdr 缺失时显示安装指南和连接/启动入口，不能静默回退到另一后端。
 产品更名保留 `community.lazycat.neko.remoted` APP_ID 和系统凭据标识，不迁移或清除已有配对。
 可执行文件与 deb 包改名为 `neoko-terminal`；deb 声明替换旧 `neko-remoted-desktop` 包。
 macOS 目录为 `neoko-terminal.app`；中文系统显示“小橘终端”，英文显示 `neoko-terminal`。Linux 应用菜单也提供中英文名称。
 
-桌面采用独立版本 **0.5.0**，发行源码 tag 为 `neoko-terminal-desktop-v0.5.0`。
-本桌面构件使用共享 crate `0.4.0`，Android 按独立版本更新，既有发布 tag 不变。
+桌面采用独立版本 **0.5.1**，发行源码 tag 为 `neoko-terminal-desktop-v0.5.1`。
+本桌面构件使用共享 crate `0.4.1`，Android 按独立版本更新，既有发布 tag 不变。
 桌面版本进入包名、deb/APP 元数据与 `build-info.json`；`crate_version` 记录共享源码的
-0.4.0。`cargo_binary_sha256` 标识打包前的 Cargo binary（Mac ad-hoc 签名会改变 APP 内的 binary）。
+0.4.1。`cargo_binary_sha256` 标识打包前的 Cargo binary（Mac ad-hoc 签名会改变 APP 内的 binary）。
 桌面包通过独立发行流程发布，不使用 Android 的三资产 publisher。
 
 ## 支持范围
@@ -38,7 +38,7 @@ Android IME 的验收边界见 [Android 文档](android.md#nsh-050-terminalinput
 | 扫码 | 桌面不请求摄像头；直接手输/粘贴独立可用；Android 扫码桥保持原样 |
 | 上传 | NSH 原生单文件选择，opaque handle，64 KiB 分块读/seek，沿用 4 GiB 限制与哈希验证 |
 | 下载 | NSH 原生保存对话框，同目录临时文件，全部写入并校验后 sync/原子替换；取消删除临时文件，不改旧目标 |
-| 生命周期 | 关闭窗口结束桌面进程；不是 Android lifecycle 模拟。进程崩溃可能遗留非目标文件的临时下载，不会提交成完整目标 |
+| 生命周期 | 首次关闭窗口询问退出或最小化到托盘，并记住所选行为；可在设置中修改。Linux 无可用托盘时最小化到任务栏。进程崩溃可能遗留非目标文件的临时下载，不会提交成完整目标 |
 | 未启用的 NSH 功能 | 不开启 WebView/JS/shader 等默认可选功能；已有 Rust 终端、Herdr 和文件 UI 继续使用应用自身实现 |
 
 Linux 需要运行且已解锁的 Secret Service，例如 GNOME Keyring。只安装 deb 不保证桌面会话
@@ -55,7 +55,7 @@ Linux 构建依赖（CI 为 Ubuntu 24.04）：
 sudo apt-get install libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   libdbus-1-dev pkg-config dpkg-dev gnome-keyring dbus-x11
 rustup target add x86_64-unknown-linux-gnu
-python3 remoted/client/scripts/build-desktop.py --version 0.5.0 \
+python3 remoted/client/scripts/build-desktop.py --version 0.5.1 \
   --target x86_64-unknown-linux-gnu
 ```
 
@@ -63,7 +63,7 @@ Windows x64 使用 MSVC 和 Windows SDK（GitHub windows-2022 已有）：
 
 ```powershell
 rustup target add x86_64-pc-windows-msvc
-python remoted/client/scripts/build-desktop.py --version 0.5.0 --target x86_64-pc-windows-msvc
+python remoted/client/scripts/build-desktop.py --version 0.5.1 --target x86_64-pc-windows-msvc
 ```
 
 Mac 两个 CPU 分别打独立包；NSH 使用 macOS 14 API，最低系统版本 **14.0**，不是 12/13：
@@ -71,16 +71,16 @@ Mac 两个 CPU 分别打独立包；NSH 使用 macOS 14 API，最低系统版本
 ```sh
 export MACOSX_DEPLOYMENT_TARGET=14.0
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
-python3 remoted/client/scripts/build-desktop.py --version 0.5.0 --target aarch64-apple-darwin
-python3 remoted/client/scripts/build-desktop.py --version 0.5.0 --target x86_64-apple-darwin
+python3 remoted/client/scripts/build-desktop.py --version 0.5.1 --target aarch64-apple-darwin
+python3 remoted/client/scripts/build-desktop.py --version 0.5.1 --target x86_64-apple-darwin
 ```
 
 默认输出 `remoted/client/target/desktop-dist/`，每个目标生成包、独立 build-info 和 SHA-256：
 
-- `neoko-terminal-0.5.0-x86_64-pc-windows-msvc.zip`，内含 EXE、安装说明和许可证。
-- `neoko-terminal-0.5.0-aarch64-apple-darwin.zip`，内含 `neoko-terminal.app`。
-- `neoko-terminal-0.5.0-x86_64-apple-darwin.zip`，独立 Intel APP。
-- `neoko-terminal-0.5.0-x86_64-unknown-linux-gnu.deb`，含 desktop entry、图标、许可证。
+- `neoko-terminal-0.5.1-x86_64-pc-windows-msvc.zip`，内含 EXE、安装说明和许可证。
+- `neoko-terminal-0.5.1-aarch64-apple-darwin.zip`，内含 `neoko-terminal.app`。
+- `neoko-terminal-0.5.1-x86_64-apple-darwin.zip`，独立 Intel APP。
+- `neoko-terminal-0.5.1-x86_64-unknown-linux-gnu.deb`，含 desktop entry、图标、许可证。
 
 Windows 运行前需安装 [Microsoft Visual C++ Redistributable x64](https://aka.ms/vs/17/release/vc_redist.x64.exe)；当前 EXE 导入 `VCRUNTIME140.dll` 和 `VCRUNTIME140_1.dll`，ZIP 未附带这两个运行库。Windows 未签名，可能触发 SmartScreen。Mac **仅 ad-hoc 签名，没有 Developer ID、没有公证**；
 Gatekeeper 可能要求系统设置中的“仍要打开”。不能把 codesign verify 通过称为官方签名或公证。
@@ -100,7 +100,7 @@ Android 使用独立 `neoko-terminal-android-vX.Y.Z` tag，不触发桌面或 We
 ```sh
 # 完成 commit/tag/push 后
 # workflow 必须已存在于默认分支，才能从该 tag 手动 dispatch。
-gh workflow run neoko-terminal-desktop.yml --ref neoko-terminal-desktop-v0.5.0 -f desktop_version=0.5.0
+gh workflow run neoko-terminal-desktop.yml --ref neoko-terminal-desktop-v0.5.1 -f desktop_version=0.5.1
 gh run list --workflow neoko-terminal-desktop.yml --limit 5
 gh run watch RUN_ID --exit-status
 gh run download RUN_ID --dir /tmp/remoted-desktop-ci

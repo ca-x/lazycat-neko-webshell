@@ -16,11 +16,13 @@ pub fn render(ui: Ui, pane: ReadSignal<Pane>) -> impl IntoElement {
     let reference = element_ref();
     let size = signal(None::<(u16, u16)>);
     let writable = computed(move || ui.model.with(|model| model.writable()));
-    let controlling =
-        computed(move || pane.with(|pane| pane.controller && !pane.read_only && pane.live()));
+    let controlling = computed(move || {
+        ui.model
+            .with(|model| pane.with(|pane| interaction::input_allowed(model, pane)))
+    });
     effect(move || {
         let visible = pane.with(|p| p.stream == ui.active.get())
-            && !ui.navigation.settings.get()
+            && !ui.navigation.inline_settings()
             && !ui.navigation.files.get();
         // Herdr owns pane geometry through its layout. Only an active ordinary
         // terminal may change the remote PTY size; hidden layouts can be 1x1.
@@ -47,9 +49,35 @@ pub fn render(ui: Ui, pane: ReadSignal<Pane>) -> impl IntoElement {
     let input_enabled = computed(move || {
         can_input.get()
             && pane.with(|p| p.stream == ui.active.get())
-            && !ui.navigation.settings.get()
+            && !ui.navigation.inline_settings()
             && !ui.navigation.files.get()
     });
+    let local_focus = computed(move || {
+        input_enabled.get()
+            && ui.model.with(|model| model.local)
+            && !ui.navigation.drawer.get()
+            && !pane.with(|pane| ui.navigation.composer_visible(&pane.stream))
+    });
+    let input_mounted = signal(false);
+    effect(move || {
+        if local_focus.get() && input_mounted.get() {
+            reference.focus();
+        }
+    });
+    let send_input = move |data: &str| {
+        if input_enabled.get_untracked() {
+            let herdr = pane.with_untracked(|pane| pane.kind == PaneKind::Herdr);
+            for data in super::terminal_input::frames(data, herdr) {
+                if !ui.submit(Command::Request(Operation::TerminalInput {
+                    stream: pane.get_untracked().stream,
+                    data,
+                })) {
+                    break;
+                }
+            }
+        }
+    };
+    let paste_buffer = surface.buffer.clone();
     let observer = surface.buffer.clone();
     let clipped = observer.clipped;
     view()
@@ -100,46 +128,61 @@ pub fn render(ui: Ui, pane: ReadSignal<Pane>) -> impl IntoElement {
                 .flex_1()
                 .min_h(px(0.0))
                 .overflow_hidden()
-                .on_press(move |_: &PressEvent| {
-                    if input_enabled.get_untracked() {
-                        reference.focus();
-                    }
-                })
-                // Android selectable children consume native presses. The root
-                // still reports their touches to this observer; do not claim
-                // them, so long-press selection and scrolling remain native.
-                .on_touch(input_adapter::focus_on_tap(reference, input_enabled))
                 .bg(move || appearance.background())
-                .child(input_adapter::render(
-                    reference,
-                    input_enabled,
-                    input_buffer,
-                    move |data| {
-                        if input_enabled.get_untracked() {
-                            let herdr = pane.with_untracked(|p| p.kind == PaneKind::Herdr);
-                            for frame in super::terminal_input::frames(data, herdr) {
-                                if !ui.submit(Command::Request(Operation::TerminalInput {
-                                    stream: pane.get_untracked().stream,
-                                    data: frame,
-                                })) {
-                                    break;
-                                }
+                .child(
+                    view()
+                        .test_id("terminal-pane-viewport")
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .on_layout(move |_: &Bounds<Points>| input_mounted.set(true))
+                        // Leave room for the floating controls before measuring terminal rows.
+                        .mt(controls_inset)
+                        .on_press(move |_: &PressEvent| {
+                            if input_enabled.get_untracked() {
+                                reference.focus();
                             }
-                        }
-                    },
-                ))
-                .child(terminal_observer::render(
-                    observer.clone(),
-                    size,
-                    move || {
-                        can_input.get()
-                            && pane.with(|p| {
-                                p.kind == PaneKind::Terminal && p.stream == ui.active.get()
-                            })
-                            && !ui.navigation.settings.get()
-                            && !ui.navigation.files.get()
-                    },
-                )),
+                        })
+                        // Android selectable children consume native presses. The root
+                        // still reports their touches to this observer; do not claim
+                        // them, so long-press selection and scrolling remain native.
+                        .on_touch(input_adapter::focus_on_tap(reference, input_enabled))
+                        .child(input_adapter::render(
+                            reference,
+                            input_enabled,
+                            input_buffer,
+                            send_input,
+                        ))
+                        .child(terminal_observer::render_interactive(
+                            observer.clone(),
+                            size,
+                            move || {
+                                can_input.get()
+                                    && pane.with(|p| {
+                                        p.kind == PaneKind::Terminal && p.stream == ui.active.get()
+                                    })
+                                    && !ui.navigation.inline_settings()
+                                    && !ui.navigation.files.get()
+                            },
+                            input_enabled,
+                            move |text| {
+                                if input_enabled.get_untracked() {
+                                    let text = text.replace("\r\n", "\r").replace('\n', "\r");
+                                    if paste_buffer.modes().bracketed_paste {
+                                        send_input(&format!("\x1b[200~{text}\x1b[201~"));
+                                    } else {
+                                        send_input(&text);
+                                    }
+                                }
+                            },
+                        )),
+                )
+                .child(
+                    view()
+                        .absolute()
+                        .top_1()
+                        .right_1()
+                        .child(interaction::toolbar(ui, pane)),
+                ),
         )
         .child(
             view()
@@ -149,4 +192,9 @@ pub fn render(ui: Ui, pane: ReadSignal<Pane>) -> impl IntoElement {
                 )
                 .child(super::composer::render(ui, pane)),
         )
+}
+
+fn controls_inset() -> Points {
+    // Control height, popup padding, border and the top/bottom clearance.
+    super::controls::control_size() + px(16.0)
 }

@@ -187,6 +187,19 @@ fn SessionPreview() -> impl IntoElement {
             pending.insert("preview-herdr".into(), [Chunk { text, reset: true }].into());
         });
     }
+    // A bounded task-owned VT fixture, through the ordinary Surface output path.
+    if let Some(path) = std::env::var_os("NEKO_PREVIEW_OUTPUT") {
+        let path = std::path::PathBuf::from(path);
+        assert!(path.is_absolute() && path.starts_with(std::env::temp_dir()));
+        let text = std::fs::read_to_string(path).expect("native VT preview output");
+        assert!(text.len() <= 256 * 1024, "bounded VT fixture");
+        ui.pending.with(|pending| {
+            pending
+                .entry("preview-terminal".into())
+                .or_default()
+                .push_back(Chunk { text, reset: false });
+        });
+    }
     spawn(async move {
         while let Some(command) = receiver.recv().await {
             if enabled("NEKO_PREVIEW_DIAGNOSTICS") {

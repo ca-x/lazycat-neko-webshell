@@ -28,6 +28,7 @@ const RPC_LIMIT: usize = 512 * 1024;
 const RPC_TIMEOUT: Duration = Duration::from_secs(3);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(8);
 const MIN_PROTOCOL: u64 = 14;
+const SCREEN_LIMIT: usize = 256 * 1024;
 /// Local Herdr availability. Detection failures never become an empty ready session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum HerdrStatus {
@@ -478,17 +479,24 @@ impl Herdr {
         let mut previous = None;
         let mut sequence = 0_u64;
         loop {
-            let response = tokio::select! { biased; () = cancel.cancelled() => return Ok(()), result = self.request_at(endpoint, "pane.read", json!({"pane_id":pane,"source":"recent"})) => result? };
+            let response = tokio::select! { biased; () = cancel.cancelled() => return Ok(()), result = self.request_at(endpoint, "pane.read", json!({"pane_id":pane,"source":"visible","format":"ansi","strip_ansi":false})) => result? };
             let result = response.get("result").unwrap_or(&response);
             let read = result.get("read").unwrap_or(result);
             let text = read
                 .get("text")
                 .and_then(Value::as_str)
                 .context("Herdr read missing text")?;
+            ensure!(
+                text.len() <= SCREEN_LIMIT && read["truncated"].as_bool() != Some(true),
+                "Herdr visible screen is incomplete or exceeds the snapshot size limit"
+            );
+            ensure!(
+                read.get("format").is_none_or(|format| format == "ansi")
+                    && read.get("source").is_none_or(|source| source == "visible"),
+                "Herdr did not return the requested visible ANSI screen"
+            );
             if previous.as_deref() != Some(text) {
                 let bytes = text.as_bytes();
-                let trimmed = bytes.len() > 256 * 1024;
-                let bytes = &bytes[bytes.len().saturating_sub(256 * 1024)..];
                 // Wire chunks are a byte stream; clients decode after assembling terminal bytes.
                 for (i, chunk) in bytes.chunks(16 * 1024).enumerate() {
                     sequence = sequence
@@ -500,12 +508,14 @@ impl Herdr {
                         data: protocol::encode(chunk),
                         replay: false,
                         reset: i == 0,
-                        gap: trimmed || read["truncated"].as_bool() == Some(true),
+                        gap: false,
                     };
                     tokio::select! { () = cancel.cancelled() => return Ok(()), result = events.send(event) => result? };
                 }
                 if bytes.is_empty() {
-                    sequence += 1;
+                    sequence = sequence
+                        .checked_add(1)
+                        .context("Herdr screen sequence exhausted")?;
                     let event = Event::TerminalOutput {
                         stream: stream.into(),
                         sequence,

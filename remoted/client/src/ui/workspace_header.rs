@@ -2,7 +2,6 @@ use super::{
     controls::{hint, icon_action, icons::Icon},
     navigation,
     state::Ui,
-    terminal_view::interaction,
 };
 use crate::preferences::tr;
 use nsh_base::theme;
@@ -41,7 +40,6 @@ pub fn render(ui: Ui) -> impl IntoElement {
                         }
                     },
                 ))
-                .child(super::connection::status::render(ui))
                 .child(when(
                     move || navigation::wide() && !ui.navigation.sidebar.get(),
                     move || {
@@ -54,31 +52,12 @@ pub fn render(ui: Ui) -> impl IntoElement {
                 .child(
                     view().flex_1().min_w(px(0.0)).child(
                         when(
-                            move || ui.navigation.settings.get(),
+                            move || ui.navigation.inline_settings(),
                             || text(move || tr("连接设置")).text_sm(),
                         )
                         .otherwise(move || session_tabs::render(ui)),
                     ),
                 )
-                .child(when(
-                    move || !ui.navigation.settings.get(),
-                    move || {
-                        each(
-                            move || {
-                                ui.model.with(|model| {
-                                    model
-                                        .panes
-                                        .iter()
-                                        .filter(|pane| pane.stream == ui.active.get())
-                                        .cloned()
-                                        .collect::<Vec<_>>()
-                                })
-                            },
-                            |pane| pane.stream.clone(),
-                            move |pane, _| interaction::toolbar(ui, pane),
-                        )
-                    },
-                ))
                 .child(when(
                     move || {
                         navigation::wide()

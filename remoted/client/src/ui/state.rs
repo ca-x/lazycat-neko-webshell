@@ -46,7 +46,19 @@ impl Ui {
                                 .iter()
                                 .any(|pane| pane.stream == ui.active.get_untracked())
                         {
-                            ui.active.set(String::new());
+                            let next = ui.model.with_untracked(|previous| {
+                                let index = previous
+                                    .panes
+                                    .iter()
+                                    .position(|pane| pane.stream == ui.active.get_untracked())
+                                    .unwrap_or(0);
+                                model
+                                    .panes
+                                    .get(index.min(model.panes.len().saturating_sub(1)))
+                                    .map(|pane| pane.stream.clone())
+                                    .unwrap_or_default()
+                            });
+                            ui.active.set(next);
                         }
                         ui.refs.with(|refs| {
                             refs.retain(|stream, _| {

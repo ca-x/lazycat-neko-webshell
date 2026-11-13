@@ -1,13 +1,13 @@
 [package]
 name = "lazycat-neko-webshell"
-version = "0.15.0"
+version = "0.15.1"
 edition = "2024"
 rust-version = "1.97.1"
 default-run = "lazycat-neko-webshell"
 
 [workspace]
 exclude = ["remoted"]
-members = ["crates/hc-client", "crates/herdr-socket-bridge", "crates/program-status", "crates/plugin"]
+members = ["crates/hc-client", "crates/herdr-socket-bridge", "crates/program-status", "crates/plugin", "crates/terminal-reply-filter"]
 resolver = "3"
 
 [dependencies]
@@ -32,6 +32,7 @@ neko-hc-client = { path = "crates/hc-client" }
 neko-herdr-socket-bridge = { path = "crates/herdr-socket-bridge" }
 neko-plugin = { path = "crates/plugin" }
 neko-program-status = { path = "crates/program-status" }
+neko-terminal-reply-filter = { path = "crates/terminal-reply-filter" }
 neko-remoted-protocol = { path = "remoted/protocol" }
 neko-remoted-transport = { path = "remoted/transport" }
 ngrok = "0.19.0"

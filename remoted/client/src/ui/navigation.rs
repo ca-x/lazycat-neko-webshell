@@ -1,4 +1,5 @@
 //! Presentation state only; transport and control ownership stay in the controller.
+use neko_remoted_protocol::messages::SessionBackend;
 use nsh_core::{platform::Os, prelude::*};
 use std::collections::HashMap;
 
@@ -23,6 +24,8 @@ impl Default for Presentation {
 #[derive(Clone, Copy)]
 pub struct Navigation {
     pub section: Signal<Section>,
+    /// Explicit ordinary-terminal choice, independent of the saved startup type.
+    pub ordinary_backend: Signal<SessionBackend>,
     pub drawer: Signal<bool>,
     pub sidebar: Signal<bool>,
     pub settings: Signal<bool>,
@@ -32,6 +35,10 @@ pub struct Navigation {
     presentations: Signal<HashMap<String, Presentation>>,
 }
 impl Navigation {
+    /// Desktop settings have their own native window and never replace the terminal.
+    pub fn inline_settings(self) -> bool {
+        os() == Os::Android && self.settings.get()
+    }
     pub fn new(setup: bool) -> Self {
         Self {
             section: signal(if os() == Os::Android {
@@ -39,12 +46,22 @@ impl Navigation {
             } else {
                 Section::Terminal
             }),
+            ordinary_backend: signal(SessionBackend::Native),
             drawer: signal(false),
             sidebar: signal(true),
             settings: signal(setup),
             files: signal(false),
             workspace: signal((String::new(), String::new())),
             presentations: signal(HashMap::new()),
+        }
+    }
+    pub fn select_initial_backend(self, backend: SessionBackend) {
+        match backend {
+            SessionBackend::Herdr => self.section.set(Section::Herdr),
+            SessionBackend::Native | SessionBackend::Hc => {
+                self.ordinary_backend.set(backend);
+                self.section.set(Section::Terminal);
+            }
         }
     }
     pub fn composer_visible(self, stream: &str) -> bool {
@@ -75,3 +92,27 @@ impl Navigation {
 pub fn wide() -> bool {
     window().width.0 >= 760.0
 }
+
+/// Apply the acknowledged default at entry, never in a creation handler or on save.
+#[cfg(not(target_os = "android"))]
+pub(super) fn install_startup_selection(ui: super::state::Ui, preferences: crate::preferences::Ui) {
+    let local = computed(move || ui.model.with(|model| model.local));
+    let previous = stored(None::<bool>);
+    effect(move || {
+        let local = local.get();
+        if let Some(backend) = preferences.startup_backend() {
+            let enter = previous.with(|previous| {
+                let enter = previous.is_none() || (local && *previous == Some(false));
+                *previous = Some(local);
+                enter
+            });
+            if enter {
+                ui.navigation.select_initial_backend(backend);
+            }
+        }
+    });
+}
+
+#[cfg(all(test, not(target_os = "android")))]
+#[path = "navigation_tests.rs"]
+mod tests;

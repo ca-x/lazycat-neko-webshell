@@ -1,4 +1,119 @@
 use super::*;
+
+#[cfg(unix)]
+async fn mock_visible_screen(
+    read: Arc<Mutex<Value>>,
+) -> (Scratch, Arc<Herdr>, tokio::task::JoinHandle<()>) {
+    let scratch = Scratch::new();
+    let socket = scratch.0.join("screen.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let herdr = Arc::new(Herdr::with_program(
+        scratch.script(&json!({"running":true,"socket":socket})),
+    ));
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut line = String::new();
+            BufReader::new(&mut stream)
+                .read_line(&mut line)
+                .await
+                .unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            let result = if request["method"] == "ping" {
+                json!({"protocol":22,"version":"test"})
+            } else {
+                assert_eq!(request["method"], "pane.read");
+                assert_eq!(
+                    request["params"],
+                    json!({"pane_id":"w1:p1","source":"visible","format":"ansi","strip_ansi":false})
+                );
+                json!({"read":read.lock().unwrap().clone()})
+            };
+            stream
+                .write_all(format!("{}\n", json!({"id":request["id"],"result":result})).as_bytes())
+                .await
+                .unwrap();
+        }
+    });
+    herdr.refresh().await.unwrap();
+    (scratch, herdr, server)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn visible_ansi_screens_preserve_color_only_changes_and_empty_resets_without_history_gaps() {
+    let read = Arc::new(Mutex::new(
+        json!({"text":"\x1b[31mRED\x1b[0m","source":"visible","format":"ansi","truncated":false}),
+    ));
+    let (_scratch, herdr, server) = mock_visible_screen(read.clone()).await;
+    let endpoint = herdr.endpoint().unwrap();
+    let (events, mut incoming) = mpsc::channel(8);
+    let cancel = CancellationToken::new();
+    let token = cancel.clone();
+    let polling = tokio::spawn(async move {
+        herdr
+            .screen(&endpoint, "w1:p1", "screen", &events, &token)
+            .await
+    });
+    let initial = tokio::time::timeout(Duration::from_secs(2), incoming.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(initial, Event::TerminalOutput {data,reset:true,gap:false,..} if data == protocol::encode(b"\x1b[31mRED\x1b[0m"))
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), incoming.recv())
+            .await
+            .is_err()
+    );
+    read.lock().unwrap()["text"] = json!("\x1b[32mRED\x1b[0m");
+    let changed = tokio::time::timeout(Duration::from_secs(2), incoming.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(changed, Event::TerminalOutput {data,reset:true,gap:false,..} if data == protocol::encode(b"\x1b[32mRED\x1b[0m"))
+    );
+    read.lock().unwrap()["text"] = json!("");
+    let empty = tokio::time::timeout(Duration::from_secs(2), incoming.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(empty, Event::TerminalOutput {data,reset:true,gap:false,..} if data.is_empty())
+    );
+    cancel.cancel();
+    polling.await.unwrap().unwrap();
+    server.abort();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn incomplete_visible_screens_fail_without_publishing_a_sliced_replacement() {
+    let read = Arc::new(Mutex::new(json!({"text":"partial","truncated":true})));
+    let (_scratch, herdr, server) = mock_visible_screen(read.clone()).await;
+    let (events, mut incoming) = mpsc::channel(8);
+    for value in [
+        json!({"text":"partial","truncated":true}),
+        json!({"text":"x".repeat(SCREEN_LIMIT+1),"truncated":false}),
+    ] {
+        *read.lock().unwrap() = value;
+        let error = herdr
+            .screen(
+                &herdr.endpoint().unwrap(),
+                "w1:p1",
+                "screen",
+                &events,
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("incomplete or exceeds"));
+        assert!(incoming.try_recv().is_err());
+    }
+    server.abort();
+}
 #[test]
 fn contract_denies_handoff_streaming_unknown_and_preserves_future_protocol_compatibility() {
     assert!(allowed("session.snapshot"));

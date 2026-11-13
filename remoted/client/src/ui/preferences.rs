@@ -1,12 +1,21 @@
 //! Mountable native preference view; connection and navigation state stay with the host.
 
 use super::controls::{action, hint};
-use crate::preferences::{Appearance, Language, MAX_FONT_SIZE, MIN_FONT_SIZE, SaveState, Ui};
+use crate::preferences::{Appearance, Language, SaveState, Ui};
 use neko_remoted_protocol::messages::SessionBackend;
 use nsh_base::{SelectEntry, SelectItem, select, theme};
 use nsh_core::{platform::Os, prelude::*};
 
-/// Render the app-lifetime preference handle; mount inside the host's scrolling settings page.
+#[path = "preferences/cursor.rs"]
+mod cursor;
+#[path = "preferences/font.rs"]
+mod font;
+#[path = "preferences/remote_control.rs"]
+mod remote_control;
+#[path = "preferences/window.rs"]
+mod window;
+
+/// Render all preferences for the inline mobile settings page.
 pub fn render(ui: Ui) -> impl IntoElement {
     view()
         .gap_4()
@@ -18,6 +27,35 @@ pub fn render(ui: Ui) -> impl IntoElement {
                 .font_weight(FontWeight::SEMIBOLD)
                 .role(AccessibilityRole::Header),
         )
+        .child(terminal_controls(ui))
+        .child(appearance_controls(ui))
+        .child(save_feedback(ui))
+        .child(preview(ui))
+}
+
+/// Terminal fonts, colors, cursor, session defaults and window-close behavior.
+pub(super) fn render_terminal(ui: Ui) -> impl IntoElement {
+    view()
+        .gap_4()
+        .w_full()
+        .child(terminal_controls(ui))
+        .child(save_feedback(ui))
+        .child(preview(ui))
+}
+
+/// Interface appearance and language, using the existing acknowledged preference owner.
+pub(super) fn render_appearance(ui: Ui) -> impl IntoElement {
+    view()
+        .gap_4()
+        .w_full()
+        .child(appearance_controls(ui))
+        .child(save_feedback(ui))
+}
+
+fn terminal_controls(ui: Ui) -> impl IntoElement {
+    view()
+        .gap_4()
+        .w_full()
         .child(choice(
             ui,
             "preferences.theme",
@@ -41,43 +79,17 @@ pub fn render(ui: Ui) -> impl IntoElement {
                 format!("Inkstone · {name}")
             }
         }))
-        .child(
-            view()
-                .gap_2()
-                .child(text(move || ui.tr("preferences.font_size")).text_sm())
-                .child(
-                    view()
-                        .flex_row()
-                        .flex_wrap()
-                        .gap_2()
-                        .items_center()
-                        .child(action(
-                            move || ui.tr("preferences.smaller"),
-                            false,
-                            move || !ui.editable() || ui.preferences().font_size <= MIN_FONT_SIZE,
-                            move || {
-                                ui.update(|preferences| {
-                                    preferences.font_size = preferences.font_size.saturating_sub(1)
-                                })
-                            },
-                        ))
-                        .child(
-                            text(move || ui.preferences().font_size.to_string())
-                                .text_base()
-                                .tabular_nums(),
-                        )
-                        .child(action(
-                            move || ui.tr("preferences.larger"),
-                            false,
-                            move || !ui.editable() || ui.preferences().font_size >= MAX_FONT_SIZE,
-                            move || {
-                                ui.update(|preferences| {
-                                    preferences.font_size = preferences.font_size.saturating_add(1)
-                                })
-                            },
-                        )),
-                ),
-        )
+        .child(font::render(ui))
+        .child(cursor::render(ui))
+        .child(when(|| os() != Os::Android, move || backend_choice(ui)))
+        .child(remote_control::render(ui))
+        .child(when(|| os().is_desktop(), move || window::render(ui)))
+}
+
+fn appearance_controls(ui: Ui) -> impl IntoElement {
+    view()
+        .gap_4()
+        .w_full()
         .child(choice(
             ui,
             "preferences.appearance",
@@ -153,7 +165,11 @@ pub fn render(ui: Ui) -> impl IntoElement {
                 })
             },
         ))
-        .child(when(|| os() != Os::Android, move || backend_choice(ui)))
+}
+
+fn save_feedback(ui: Ui) -> impl IntoElement {
+    view()
+        .gap_2()
         .child(hint(move || match ui.state() {
             SaveState::Loading => ui.tr("preferences.loading").to_owned(),
             SaveState::Ready => ui.tr("preferences.saved").to_owned(),
@@ -176,7 +192,6 @@ pub fn render(ui: Ui) -> impl IntoElement {
                 )
             },
         ))
-        .child(preview(ui))
 }
 
 fn backend_choice(ui: Ui) -> impl IntoElement {
@@ -299,6 +314,7 @@ fn choice(
 }
 
 fn preview(ui: Ui) -> impl IntoElement {
+    let context = crate::preferences::current_context();
     view()
         .gap_2()
         .child(text(move || ui.tr("preferences.preview")).text_sm())
@@ -311,16 +327,18 @@ fn preview(ui: Ui) -> impl IntoElement {
                 .text_color(move || crate::preferences::terminal::color(ui.theme().foreground))
                 .child(
                     text("neko@host:~$ printf 'Hello, 世界'")
-                        .font_family("monospace")
-                        .text_size(move || px(ui.preferences().font_size as f32)),
+                        .font_family(move || context.font_family())
+                        .text_size(move || px(context.font_size() as f32))
+                        .line_height(move || px(context.line_height())),
                 )
                 .child(
                     view().flex_row().flex_wrap().gap_2().children(
                         (0..16)
                             .map(move |index| {
                                 text(format!("{index:02}"))
-                                    .font_family("monospace")
-                                    .text_size(move || px(ui.preferences().font_size as f32))
+                                    .font_family(move || context.font_family())
+                                    .text_size(move || px(context.font_size() as f32))
+                                    .line_height(move || px(context.line_height()))
                                     .text_color(move || {
                                         crate::preferences::terminal::color(
                                             ui.theme().palette[index],

@@ -1,8 +1,8 @@
 {
   "name": "neoko-terminal",
   "id": "community.lazycat.neko.remoted",
-  "version": "0.4.0",
-  "build": 9,
+  "version": "0.4.1",
+  "build": 10,
   "appearance": "system",
   "rust": ".",
   "root": "App",

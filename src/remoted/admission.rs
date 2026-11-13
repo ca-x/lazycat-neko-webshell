@@ -1,4 +1,4 @@
-use super::store::{Device, Remoted, Saved};
+use super::store::{Device, Grant, Remoted, Saved};
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use std::{
@@ -174,6 +174,14 @@ impl Admission {
         Ok(())
     }
     pub fn submit(&self, mutating: bool) -> Result<()> {
+        self.submit_checked(mutating, None)
+    }
+
+    pub(super) fn submit_creation(&self, parent: &Grant) -> Result<()> {
+        self.submit_checked(true, Some(parent))
+    }
+
+    fn submit_checked(&self, mutating: bool, parent: Option<&Grant>) -> Result<()> {
         let saved = self
             .manager
             .saved
@@ -197,6 +205,16 @@ impl Admission {
             !mutating || device.permission.can_write(),
             "只读设备不能执行写操作"
         );
+        if let Some(parent) = parent {
+            ensure!(
+                device
+                    .grants
+                    .iter()
+                    .any(|grant| grant.same_authority(parent)),
+                "parent grant changed before creation"
+            );
+            ensure!(device.grants.len() < 32, "device resource limit reached");
+        }
         record.submitted = true;
         record.mutating |= mutating;
         self.submitted.store(true, Ordering::Release);

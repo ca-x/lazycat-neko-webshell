@@ -5,6 +5,8 @@
 
 #[path = "preferences/catalog.rs"]
 pub mod catalog;
+#[path = "preferences/font.rs"]
+pub(crate) mod font;
 #[path = "preferences/io.rs"]
 mod io;
 #[path = "preferences/locale.rs"]
@@ -22,7 +24,7 @@ pub fn current_context() -> terminal::Context {
     terminal::Context::new(use_context::<Ui>())
 }
 
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 use neko_remoted_protocol::messages::SessionBackend;
 use nsh_core::prelude::{SharedString, locale, use_context};
 use serde::{Deserialize, Serialize};
@@ -74,6 +76,70 @@ pub const MIN_FONT_SIZE: u8 = 8;
 /// The largest supported terminal font size, in platform points.
 pub const MAX_FONT_SIZE: u8 = 40;
 
+/// Saved terminal cursor shape, independent of the UI platform.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CursorStyle {
+    /// Fill the terminal cell, preserving the previous native default.
+    #[default]
+    Block,
+    /// A vertical insertion bar.
+    Beam,
+    /// A horizontal line at the bottom of the cell.
+    Underline,
+}
+
+impl CursorStyle {
+    /// Stable setting value for selection controls and renderer integrations.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Block => "block",
+            Self::Beam => "beam",
+            Self::Underline => "underline",
+        }
+    }
+
+    pub(crate) fn translation_key(self) -> &'static str {
+        match self {
+            Self::Block => "preferences.cursor_block",
+            Self::Beam => "preferences.cursor_beam",
+            Self::Underline => "preferences.cursor_underline",
+        }
+    }
+}
+
+/// Desktop window-close policy; actual quit and tray actions belong to the host.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CloseBehavior {
+    /// Ask whether to quit or minimize to the tray.
+    #[default]
+    Ask,
+    /// Quit the application.
+    Quit,
+    /// Keep the application running in the system tray.
+    Tray,
+}
+
+impl CloseBehavior {
+    /// Stable setting value for desktop window lifecycle integration.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::Quit => "quit",
+            Self::Tray => "tray",
+        }
+    }
+
+    pub(crate) fn translation_key(self) -> &'static str {
+        match self {
+            Self::Ask => "preferences.close_ask",
+            Self::Quit => "preferences.close_quit",
+            Self::Tray => "preferences.close_tray",
+        }
+    }
+}
+
 /// An interface appearance override; terminal colors remain independently selected.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -105,8 +171,17 @@ pub struct Preferences {
     pub version: u8,
     /// The exact WebShell theme ID, including `ghostty:` for Restty's catalog.
     pub theme_id: String,
+    /// Primary terminal family; older documents retain the bundled Hack default.
+    #[serde(default = "font::default_family")]
+    pub font_family: String,
     /// Terminal font size in platform points.
     pub font_size: u8,
+    /// Native cursor shape; missing fields retain the previous block cursor.
+    #[serde(default)]
+    pub cursor_style: CursorStyle,
+    /// Whether the cursor blinks; older documents retain a steady cursor.
+    #[serde(default)]
+    pub cursor_blink: bool,
     /// Interface appearance, independently of terminal theme.
     pub appearance: Appearance,
     /// Interface language; `system` keeps following the platform locale.
@@ -114,6 +189,12 @@ pub struct Preferences {
     /// Backend for new local sessions; existing sessions retain their own backend.
     #[serde(default)]
     pub default_backend: SessionBackend,
+    /// Request control of each remote terminal when opened; authorization still applies.
+    #[serde(default)]
+    pub remote_auto_control: bool,
+    /// Desktop window-close policy; older documents ask before choosing an action.
+    #[serde(default)]
+    pub close_behavior: CloseBehavior,
 }
 
 impl Preferences {
@@ -122,14 +203,19 @@ impl Preferences {
         Self {
             version: 1,
             theme_id: catalog.defaults.theme_id.clone(),
+            font_family: font::default_family(),
             font_size: catalog.defaults.font_size,
+            cursor_style: CursorStyle::Block,
+            cursor_blink: false,
             appearance: Appearance::System,
             language: Language::System,
             default_backend: SessionBackend::Native,
+            remote_auto_control: false,
+            close_behavior: CloseBehavior::Ask,
         }
     }
 
-    /// Validate version, theme membership, and font bounds before applying or saving.
+    /// Validate version, theme membership, and font names and bounds before applying or saving.
     pub fn validate(&self, catalog: &catalog::Catalog) -> Result<()> {
         ensure!(self.version == 1, "Unsupported display preferences version");
         ensure!(
@@ -141,6 +227,9 @@ impl Preferences {
             (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&self.font_size),
             "Terminal font size must be {MIN_FONT_SIZE}–{MAX_FONT_SIZE}"
         );
+        if let Some(key) = font::validation_error(&self.font_family) {
+            bail!("{}", locale::tr(Language::EnUs, "en-US", key));
+        }
         Ok(())
     }
 

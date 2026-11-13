@@ -251,7 +251,7 @@ async fn attach_herdr(
         let mut output = OutputStream::new(stream.clone(), events.clone(), token.clone());
         loop {
             tokio::select! {()=token.cancelled()=>return,()=tokio::time::sleep(std::time::Duration::from_millis(100))=>{}}
-            let result = tokio::select! {()=token.cancelled()=>return,r=reader.read(&session,&id,sequence,1000,usize::MAX)=>r};
+            let result = tokio::select! {()=token.cancelled()=>return,r=reader.read_ansi(&session,&id,sequence,REPLAY_BYTES)=>r};
             match result {
                 Ok(read) => {
                     for frame in read.frames {
@@ -259,26 +259,15 @@ async fn attach_herdr(
                         if let Ok(bytes) =
                             base64::engine::general_purpose::STANDARD.decode(frame.data_base64)
                         {
-                            let trimmed = bytes.len() > REPLAY_BYTES;
-                            let bytes = &bytes[bytes.len().saturating_sub(REPLAY_BYTES)..];
                             // Herdr pane.read is a replacement screen and may omit a sequence.
                             // Repeated unchanged screens must not saturate the Relay business lane.
-                            if previous_snapshot.as_deref() == Some(bytes) {
+                            if previous_snapshot.as_deref() == Some(bytes.as_slice()) {
                                 continue;
                             }
-                            if output
-                                .write(
-                                    bytes,
-                                    true,
-                                    true,
-                                    trimmed || read.truncated || read.replay_gap,
-                                )
-                                .await
-                                .is_err()
-                            {
+                            if output.write(&bytes, false, true, false).await.is_err() {
                                 return;
                             }
-                            previous_snapshot = Some(bytes.to_vec());
+                            previous_snapshot = Some(bytes);
                         }
                     }
                     if read.exited {
@@ -575,7 +564,7 @@ mod tests {
     #[tokio::test]
     async fn herdr_replacement_screens_emit_only_when_the_screen_changes() {
         let state = Arc::new(AppState::new_for_test(":memory:".into()));
-        let screen = Arc::new(std::sync::Mutex::new("initial screen".to_owned()));
+        let screen = Arc::new(std::sync::Mutex::new("\x1b[31mscreen\x1b[0m".to_owned()));
         let source = screen.clone();
         let adapter = HerdrTerminalAdapter::with_test_rpc(state, move |_, operation| {
             let screen = source.clone();
@@ -584,7 +573,7 @@ mod tests {
                     crate::herdr::HerdrTerminalOperation::Snapshot => Ok(
                         serde_json::json!({"result":{"snapshot":{"panes":[{"pane_id":"w1:p1"}]}}}),
                     ),
-                    crate::herdr::HerdrTerminalOperation::Read { .. } => Ok(
+                    crate::herdr::HerdrTerminalOperation::ReadAnsi { .. } => Ok(
                         serde_json::json!({"result":{"type":"pane_read","read":{"text":screen.lock().unwrap().clone()}}}),
                     ),
                     _ => Err("unexpected operation".into()),
@@ -619,7 +608,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(
-            matches!(initial, Event::TerminalOutput { data, .. } if data == neko_remoted_protocol::encode(b"initial screen"))
+            matches!(initial, Event::TerminalOutput { data, reset:true, gap:false, .. } if data == neko_remoted_protocol::encode(b"\x1b[31mscreen\x1b[0m"))
         );
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(350), incoming.recv())
@@ -627,13 +616,21 @@ mod tests {
                 .is_err(),
             "unchanged sequence-less Herdr screens must not flood the Relay"
         );
-        *screen.lock().unwrap() = "changed screen".into();
+        *screen.lock().unwrap() = "\x1b[32mscreen\x1b[0m".into();
         let changed = tokio::time::timeout(std::time::Duration::from_secs(2), incoming.recv())
             .await
             .unwrap()
             .unwrap();
         assert!(
-            matches!(changed, Event::TerminalOutput { data, reset: true, .. } if data == neko_remoted_protocol::encode(b"changed screen"))
+            matches!(changed, Event::TerminalOutput { data, reset: true, gap:false, .. } if data == neko_remoted_protocol::encode(b"\x1b[32mscreen\x1b[0m"))
+        );
+        screen.lock().unwrap().clear();
+        let empty = tokio::time::timeout(std::time::Duration::from_secs(2), incoming.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(empty, Event::TerminalOutput { data, reset:true, gap:false, .. } if data.is_empty())
         );
         cancel.cancel();
     }

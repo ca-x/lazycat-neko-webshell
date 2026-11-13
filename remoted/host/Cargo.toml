@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 allocator-api2 = "0.4"
 libghostty-vt = { git = "https://github.com/uzaaft/libghostty-rs", rev = "cd4d497e8c698b27054a677ce19d1bd1a1a4d8bf", default-features = false, features = ["allocator_api"] }
+neko-ghostty = { path = "../ghostty" }
 anyhow = "1"
 base64 = "0.22"
 futures-util = "0.3"
@@ -18,6 +19,7 @@ neko-hc-client = { path = "../../crates/hc-client" }
 neko-remoted-protocol = { path = "../protocol" }
 neko-remoted-transport = { path = "../transport" }
 neko-program-status = { path = "../../crates/program-status" }
+neko-terminal-reply-filter = { path = "../../crates/terminal-reply-filter" }
 portable-pty = "0.9"
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
 serde = { version = "1", features = ["derive"] }

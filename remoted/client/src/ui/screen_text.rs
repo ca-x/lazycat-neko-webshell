@@ -1,10 +1,24 @@
-//! Herdr pane.read returns replacement plain text, not a PTY byte stream.
-//! Normalize LF and bound snapshots without wrapping a long source line silently.
+//! Herdr pane.read serializes replacement rows with ANSI styling, not raw PTY history.
+//! Normalize LF and measure visible cells while preserving bounded escape sequences.
 use nsh_base::TerminalSize;
 use unicode_width::UnicodeWidthChar;
 
 const MAX_COLUMNS: usize = 1000;
 const MAX_ROWS: usize = 1000;
+const MAX_ESCAPE_BYTES: usize = 4096;
+
+#[derive(Default)]
+enum Escape {
+    #[default]
+    None,
+    Start,
+    Intermediate,
+    Csi,
+    String {
+        osc: bool,
+        escaped: bool,
+    },
+}
 
 #[derive(Default)]
 pub struct ScreenText {
@@ -12,12 +26,18 @@ pub struct ScreenText {
     column: usize,
     width: usize,
     row: usize,
+    escape: Escape,
+    pending: String,
+    discarded: bool,
     pub clipped: bool,
 }
 impl ScreenText {
     pub fn push(&mut self, text: &str) -> (String, TerminalSize) {
         let mut output = String::with_capacity(text.len());
         for character in text.chars() {
+            if self.control(character, &mut output) {
+                continue;
+            }
             if self.row >= MAX_ROWS {
                 self.clipped = true;
                 continue;
@@ -49,6 +69,10 @@ impl ScreenText {
                     self.column = end;
                     self.clipped |= end > MAX_COLUMNS;
                 }
+                '\u{8}' => {
+                    self.column = self.column.saturating_sub(1);
+                    output.push(character);
+                }
                 _ => {
                     let end = self.column.saturating_add(character.width().unwrap_or(0));
                     if end <= MAX_COLUMNS {
@@ -70,10 +94,140 @@ impl ScreenText {
             ),
         )
     }
+
+    // Current Herdr ANSI snapshots serialize positioned cells as rows/spaces and
+    // use escapes for styling. Their controls must neither widen a row nor turn
+    // an OSC payload into text when a transport chunk splits the sequence.
+    fn control(&mut self, character: char, output: &mut String) -> bool {
+        if matches!(self.escape, Escape::None) {
+            match character {
+                '\u{1b}' => {
+                    self.escape = Escape::Start;
+                    self.pending.push(character);
+                }
+                '\u{9b}' => {
+                    self.escape = Escape::Csi;
+                    self.pending.push_str("\x1b[");
+                }
+                '\u{9d}' => {
+                    self.escape = Escape::String {
+                        osc: true,
+                        escaped: false,
+                    };
+                    self.pending.push_str("\x1b]");
+                }
+                _ => return false,
+            }
+            return true;
+        }
+        if !self.discarded {
+            if self.pending.len() + character.len_utf8() <= MAX_ESCAPE_BYTES {
+                self.pending.push(character);
+            } else {
+                self.pending.clear();
+                self.discarded = true;
+                self.clipped = true;
+            }
+        }
+        let complete = match self.escape {
+            Escape::Start => {
+                self.escape = match character {
+                    '[' => Escape::Csi,
+                    ']' => Escape::String {
+                        osc: true,
+                        escaped: false,
+                    },
+                    'P' | 'X' | '^' | '_' => Escape::String {
+                        osc: false,
+                        escaped: false,
+                    },
+                    '\u{20}'..='\u{2f}' => Escape::Intermediate,
+                    _ => Escape::None,
+                };
+                matches!(self.escape, Escape::None)
+            }
+            Escape::Intermediate => ('\u{30}'..='\u{7e}').contains(&character),
+            Escape::Csi => ('\u{40}'..='\u{7e}').contains(&character),
+            Escape::String { osc, escaped } => {
+                self.escape = Escape::String {
+                    osc,
+                    escaped: character == '\u{1b}',
+                };
+                (osc && character == '\u{7}')
+                    || character == '\u{9c}'
+                    || (escaped && character == '\\')
+            }
+            Escape::None => unreachable!("an escape was started above"),
+        };
+        if complete {
+            if !self.discarded {
+                output.push_str(&self.pending);
+            }
+            self.pending.clear();
+            self.discarded = false;
+            self.escape = Escape::None;
+        }
+        true
+    }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ansi_snapshot_geometry_counts_cells_not_sgr_or_osc_payloads() {
+        let source = format!(
+            "\x1b]0;{}\x07\x1b[38;2;12;34;56m{}\x1b[0m\nlast",
+            "title".repeat(100),
+            "猫".repeat(60)
+        );
+        let mut screen = ScreenText::default();
+        let (output, size) = screen.push(&source);
+        assert_eq!(output, source.replace('\n', "\r\n"));
+        assert_eq!(size.cols, 120);
+        assert_eq!(size.rows, 24);
+        assert!(!screen.clipped);
+    }
+    #[test]
+    fn split_csi_osc_and_st_sequences_keep_styles_without_leaking_payload_into_geometry() {
+        let source = format!(
+            "\x1b]8;;https://example.test/link\x1b\\\x1b[38;5;1m{}\x1b[0m\x1b]8;;\x1b\\\r\nend",
+            "猫".repeat(50)
+        );
+        let mut screen = ScreenText::default();
+        let mut output = String::new();
+        let mut size = TerminalSize::default();
+        for character in source.chars() {
+            let (chunk, current) = screen.push(&character.to_string());
+            output.push_str(&chunk);
+            size = current;
+            assert!(screen.pending.len() <= MAX_ESCAPE_BYTES);
+        }
+        assert_eq!(output, source);
+        assert_eq!(size.cols, 100);
+        assert!(!screen.clipped);
+    }
+    #[test]
+    fn oversized_controls_are_bounded_discarded_and_never_become_visible_text() {
+        for (prefix, suffix) in [("\x1b[", "m"), ("\x1b]0;", "\x1b\\")] {
+            let mut screen = ScreenText::default();
+            let (first, _) = screen.push(&format!("{prefix}{}", "0".repeat(MAX_ESCAPE_BYTES * 2)));
+            assert!(first.is_empty());
+            assert!(screen.pending.len() <= MAX_ESCAPE_BYTES);
+            let (last, size) = screen.push(&format!("{suffix}ok"));
+            assert_eq!(last, "ok");
+            assert_eq!(size.cols, 80);
+            assert!(screen.clipped);
+        }
+    }
+    #[test]
+    fn a_full_width_styled_source_line_does_not_clip_escape_bytes_as_columns() {
+        let source = "\x1b[31mx\x1b[0m".repeat(MAX_COLUMNS);
+        let mut screen = ScreenText::default();
+        let (output, size) = screen.push(&source);
+        assert_eq!(output, source);
+        assert_eq!(size.cols, MAX_COLUMNS as u16);
+        assert!(!screen.clipped);
+    }
     #[test]
     fn plain_lines_start_at_column_zero_and_split_crlf_stays_single() {
         let mut screen = ScreenText::default();

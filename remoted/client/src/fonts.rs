@@ -8,7 +8,19 @@ const TERMINAL_FAMILY: &str =
     "Hack Nerd Font Mono, Symbols Nerd Font Mono, Maple Mono NF CN, monospace";
 
 pub(crate) fn terminal_family() -> SharedString {
-    TERMINAL_FAMILY.into()
+    crate::preferences::current_context().font_family()
+}
+
+/// Resolve a saved primary family without reading context or reactive state.
+pub(crate) fn resolve_terminal_family(family: &str) -> SharedString {
+    use crate::preferences::font::{HACK, MAPLE, SYSTEM};
+
+    match family {
+        HACK => TERMINAL_FAMILY.into(),
+        MAPLE => format!("{MAPLE}, {HACK}, Symbols Nerd Font Mono, {SYSTEM}").into(),
+        SYSTEM => format!("{SYSTEM}, {HACK}, Symbols Nerd Font Mono, {MAPLE}").into(),
+        family => format!("{family}, {TERMINAL_FAMILY}").into(),
+    }
 }
 
 // Keep the source files shared with WebShell; do not vendor another copy here.
@@ -118,7 +130,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            terminal_family().as_ref(),
+            resolve_terminal_family(crate::preferences::font::HACK).as_ref(),
             format!("{}, monospace", families.join(", "))
         );
         let mut registry = Registry::new();

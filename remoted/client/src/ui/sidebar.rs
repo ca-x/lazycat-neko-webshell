@@ -10,6 +10,8 @@ use nsh_base::theme;
 use nsh_core::prelude::*;
 #[path = "agent_sidebar.rs"]
 mod agent_sidebar;
+#[path = "host_rename.rs"]
+mod host_rename;
 
 pub fn render(ui: Ui) -> impl IntoElement {
     view()
@@ -51,7 +53,14 @@ pub fn render(ui: Ui) -> impl IntoElement {
                     .child(local_device(ui))
                     .child(each(
                         move || ui.model.with(|model| model.bindings.clone()),
-                        |binding| (binding.relay.origin().to_owned(), binding.route.clone()),
+                        |binding| {
+                            (
+                                binding.relay.origin().to_owned(),
+                                binding.route.clone(),
+                                binding.host_key.clone(),
+                                binding.device_id.clone(),
+                            )
+                        },
                         move |binding, _| {
                             view()
                                 .tooltip(tooltip(move || {
@@ -63,35 +72,58 @@ pub fn render(ui: Ui) -> impl IntoElement {
                                         )
                                     })
                                 }))
-                                .child(session_row(
-                                    Icon::Monitor,
-                                    move || {
-                                        binding.with(|binding| {
-                                            ui.model.with(|model| {
-                                                host_names::display_name(model, binding)
-                                            })
-                                        })
-                                    },
-                                    move || {
-                                        binding.with(|binding| {
-                                            ui.model.with(|model| {
-                                                model.active_binding.as_ref() == Some(binding)
-                                            })
-                                        })
-                                    },
-                                    || false,
-                                    move || {
-                                        ui.navigation.settings.set(false);
-                                        ui.navigation.files.set(false);
-                                        let binding = binding.get_untracked();
-                                        if !ui.model.with_untracked(|model| {
-                                            model.ready()
-                                                && model.active_binding.as_ref() == Some(&binding)
-                                        }) {
-                                            ui.send(Command::Reconnect(binding));
-                                        }
-                                        ui.navigation.drawer.set(false);
-                                    },
+                                .child(host_rename::device(
+                                    ui,
+                                    binding,
+                                    view()
+                                        .flex_row()
+                                        .items_center()
+                                        .child(view().flex_1().min_w(px(0.0)).child(session_row(
+                                            Icon::Monitor,
+                                            move || {
+                                                binding.with(|binding| {
+                                                    ui.model.with(|model| {
+                                                        host_names::display_name(model, binding)
+                                                    })
+                                                })
+                                            },
+                                            move || {
+                                                binding.with(|binding| {
+                                                    ui.model.with(|model| {
+                                                        !model.local
+                                                            && model.active_binding.as_ref()
+                                                                == Some(binding)
+                                                    })
+                                                })
+                                            },
+                                            || false,
+                                            move || {
+                                                ui.navigation.settings.set(false);
+                                                ui.navigation.files.set(false);
+                                                let binding = binding.get_untracked();
+                                                if !ui.model.with_untracked(|model| {
+                                                    model.ready()
+                                                        && !model.local
+                                                        && model.active_binding.as_ref()
+                                                            == Some(&binding)
+                                                }) {
+                                                    ui.send(Command::Reconnect(binding));
+                                                }
+                                                ui.navigation.drawer.set(false);
+                                            },
+                                        )))
+                                        .child(when(
+                                            move || {
+                                                binding.with(|binding| {
+                                                    ui.model.with(|model| {
+                                                        !model.local
+                                                            && model.active_binding.as_ref()
+                                                                == Some(binding)
+                                                    })
+                                                })
+                                            },
+                                            move || super::connection::status::render(ui),
+                                        )),
                                 ))
                         },
                     ))
@@ -145,7 +177,6 @@ pub fn render(ui: Ui) -> impl IntoElement {
                 .gap_1()
                 .border_t_1()
                 .border_color(move || theme().border)
-                .child(super::connection::status::render(ui))
                 .child(
                     text(move || ui.model.with(host_names::active_name))
                         .text_xs()

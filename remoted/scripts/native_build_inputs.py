@@ -9,7 +9,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PATHS = (
     'remoted/client', 'remoted/protocol', 'remoted/transport', 'remoted/host', 'remoted/themes',
-    'remoted/ghostty', 'crates/hc-client', 'crates/program-status', 'remoted/scripts',
+    'remoted/ghostty', 'crates/hc-client', 'crates/program-status', 'crates/terminal-reply-filter', 'remoted/scripts',
     'Cargo.toml', 'Cargo.lock', 'remoted/Cargo.toml', 'remoted/Cargo.lock',
     'scripts/export-native-terminal-themes.mjs',
     '.github/workflows/neoko-terminal-desktop.yml',

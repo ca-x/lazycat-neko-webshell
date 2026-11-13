@@ -41,6 +41,20 @@ When adding new behavior:
 
 If a change must touch `main.ts`, keep the edit to orchestration and move reusable logic out in the same change.
 
+## Keep Native Terminal Intent Explicit
+
+- Saved startup backend settings choose initial navigation only. New terminals
+  follow the current section and explicit ordinary backend, never a saved default
+  that overrides the user's current selection.
+- Local input obtains authority for that terminal automatically. Remote input
+  still requires the device's operate grant and that terminal's control lease.
+  Recheck authority before transmitting queued input and discard unsent input
+  when its stream retires or its connection generation changes.
+- Renderers observe the shared VT without answering probes. Kitty support queries
+  belong to the live server reply authority; its query-only parser must not retain
+  image payloads or open terminal-supplied file/shared-memory paths. Publish the
+  original output bytes unchanged for renderers.
+
 ## Keep Herdr Compatibility Directional
 
 Treat `src/herdr_socket_contract.json` as the allowlisted SockAPI surface that

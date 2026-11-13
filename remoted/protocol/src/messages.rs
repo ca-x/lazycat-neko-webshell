@@ -113,6 +113,11 @@ pub enum Operation {
         key: String,
     },
     Resources {},
+    /// Create one ordinary terminal on the approved parent grant's target/user.
+    /// This mutation must never be retried automatically after an ambiguous result.
+    TerminalCreate {
+        grant: String,
+    },
     TerminalAttach {
         grant: String,
         pane: Option<String>,
@@ -240,6 +245,10 @@ pub enum Event {
     Resources {
         resources: Vec<Resource>,
     },
+    /// A fresh grant scoped to the creating device. Attach it with no pane.
+    TerminalCreated {
+        resource: Resource,
+    },
     TerminalAttached {
         stream: String,
         name: String,
@@ -341,6 +350,24 @@ pub fn herdr_allowed(permission: Permission, method: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn terminal_create_accepts_only_a_parent_grant_and_returns_a_resource() {
+        let wire = serde_json::json!({"type": "terminal_create", "grant": "approved"});
+        let operation: Operation = serde_json::from_value(wire.clone()).unwrap();
+        assert!(matches!(&operation, Operation::TerminalCreate { grant } if grant == "approved"));
+        assert_eq!(serde_json::to_value(operation).unwrap(), wire);
+        for field in ["selector", "login", "command", "path", "backend", "session"] {
+            let mut injected = wire.clone();
+            injected[field] = "untrusted".into();
+            assert!(serde_json::from_value::<Operation>(injected).is_err());
+        }
+        let wire = serde_json::json!({"type": "terminal_created", "resource": {
+            "id": "child", "name": "Terminal", "backend": "native",
+            "terminal": true, "herdr": false, "files": false
+        }});
+        let event: Event = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(event).unwrap(), wire);
+    }
     #[test]
     fn terminal_program_status_roundtrips_a_typed_replacement_table() {
         let wire = serde_json::json!({

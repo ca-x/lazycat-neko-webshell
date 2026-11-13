@@ -60,6 +60,8 @@ ${modelOnly ? "" : `mod ui {
     pub mod preferences;
     #[path = ${pathLiteral(join(client, "src/ui/terminal_colors.rs"))}]
     pub mod terminal_colors;
+    #[path = ${pathLiteral(join(client, "src/ui/kitty_image_layer.rs"))}]
+    pub mod kitty_image_layer;
     #[path = ${pathLiteral(join(client, "src/ui/screen_text.rs"))}]
     pub mod screen_text;
     #[path = ${pathLiteral(join(client, "src/ui/terminal_surface.rs"))}]

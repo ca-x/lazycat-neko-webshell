@@ -27,6 +27,7 @@ fn preferences_round_trip_and_preserve_independent_choices() -> Result<()> {
     let mut preferences = Preferences::defaults(catalog);
     preferences.theme_id = "inkstone-xuanmo".into();
     preferences.font_size = 22;
+    preferences.font_family = "JetBrains Mono".into();
     preferences.appearance = Appearance::Light;
     preferences.language = Language::EnUs;
     let encoded = preferences.encode(catalog)?;
@@ -36,6 +37,161 @@ fn preferences_round_trip_and_preserve_independent_choices() -> Result<()> {
         Preferences::decode(None, catalog)?,
         Preferences::defaults(catalog)
     );
+    Ok(())
+}
+
+#[test]
+fn old_documents_keep_embedded_font_steady_block_cursor_and_manual_control() -> Result<()> {
+    let catalog = catalog::Catalog::shared()?;
+    let document =
+        r#"{"version":1,"theme_id":"light","font_size":22,"appearance":"dark","language":"en-US"}"#;
+    let saved = Preferences::decode(Some(document), catalog)?;
+    assert_eq!(saved.font_family, font::HACK);
+    assert_eq!(saved.cursor_style, CursorStyle::Block);
+    assert!(!saved.cursor_blink);
+    assert!(!saved.remote_auto_control);
+    assert_eq!(saved.close_behavior, CloseBehavior::Ask);
+    assert_eq!(saved.font_size, 22);
+    assert_eq!(saved.theme_id, "light");
+    assert_eq!(saved.appearance, Appearance::Dark);
+    assert_eq!(saved.language, Language::EnUs);
+    let context = terminal::Context::new(None);
+    assert_eq!(
+        context.font_family().as_ref(),
+        "Hack Nerd Font Mono, Symbols Nerd Font Mono, Maple Mono NF CN, monospace"
+    );
+    assert_eq!(context.cursor_style(), CursorStyle::Block);
+    assert!(!context.cursor_blink());
+    Ok(())
+}
+
+#[test]
+fn font_families_round_trip_and_resolve_in_preference_order() -> Result<()> {
+    let catalog = catalog::Catalog::shared()?;
+    for family in [
+        font::HACK,
+        font::MAPLE,
+        font::SYSTEM,
+        "JetBrains Mono",
+        "更纱等距 SC",
+    ] {
+        let mut saved = Preferences::defaults(catalog);
+        saved.font_family = family.into();
+        let reloaded = Preferences::decode(Some(&saved.encode(catalog)?), catalog)?;
+        assert_eq!(reloaded, saved);
+        let resolved = crate::fonts::resolve_terminal_family(&reloaded.font_family);
+        assert_eq!(resolved.split(", ").next(), Some(family));
+        for fallback in [
+            font::HACK,
+            font::MAPLE,
+            "Symbols Nerd Font Mono",
+            font::SYSTEM,
+        ] {
+            assert!(
+                resolved.split(", ").any(|name| name == fallback),
+                "{resolved}"
+            );
+        }
+    }
+    let mut saved = Preferences::defaults(catalog);
+    saved.font_family = "a".repeat(font::MAX_FAMILY_BYTES);
+    assert!(saved.encode(catalog).is_ok());
+    Ok(())
+}
+
+#[test]
+fn invalid_font_names_are_rejected_on_load_and_save() -> Result<()> {
+    let catalog = catalog::Catalog::shared()?;
+    for family in [
+        "".into(),
+        " ".into(),
+        " Hack".into(),
+        "Hack ".into(),
+        "Hack\nMono".into(),
+        "Hack\rMono".into(),
+        "Hack\tMono".into(),
+        "Hack\0Mono".into(),
+        "Hack\u{7f}Mono".into(),
+        "Hack\u{85}Mono".into(),
+        "Hack\u{2028}Mono".into(),
+        "Hack\u{2029}Mono".into(),
+        "Hack, monospace".into(),
+        "\"Hack\"".into(),
+        "'Hack'".into(),
+        "Hack\\Mono".into(),
+        "a".repeat(font::MAX_FAMILY_BYTES + 1),
+        "界".repeat(font::MAX_FAMILY_BYTES / 3 + 1),
+    ] {
+        let mut saved = Preferences::defaults(catalog);
+        saved.font_family = family;
+        assert!(
+            saved.encode(catalog).is_err(),
+            "accepted {:?}",
+            saved.font_family
+        );
+        let document = serde_json::to_string(&saved)?;
+        assert!(
+            Preferences::decode(Some(&document), catalog).is_err(),
+            "accepted {document}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn cursor_and_remote_control_settings_round_trip_without_coercing_invalid_values() -> Result<()> {
+    let catalog = catalog::Catalog::shared()?;
+    for style in [
+        CursorStyle::Block,
+        CursorStyle::Beam,
+        CursorStyle::Underline,
+    ] {
+        let mut saved = Preferences::defaults(catalog);
+        saved.cursor_style = style;
+        saved.cursor_blink = true;
+        saved.remote_auto_control = true;
+        let encoded = saved.encode(catalog)?;
+        assert_eq!(Preferences::decode(Some(&encoded), catalog)?, saved);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&encoded)?["cursor_style"],
+            style.as_str()
+        );
+    }
+    for (field, value) in [
+        ("cursor_style", serde_json::json!("bar")),
+        ("cursor_style", serde_json::json!("Block")),
+        ("cursor_style", serde_json::Value::Null),
+        ("cursor_blink", serde_json::json!("true")),
+        ("cursor_blink", serde_json::Value::Null),
+        ("remote_auto_control", serde_json::json!("false")),
+        ("remote_auto_control", serde_json::Value::Null),
+        ("close_behavior", serde_json::json!("minimize")),
+        ("close_behavior", serde_json::json!("Ask")),
+        ("close_behavior", serde_json::Value::Null),
+    ] {
+        let mut document = serde_json::to_value(Preferences::defaults(catalog))?;
+        document[field] = value;
+        assert!(
+            Preferences::decode(Some(&document.to_string()), catalog).is_err(),
+            "accepted {document}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn window_close_behaviors_round_trip_with_stable_values() -> Result<()> {
+    let catalog = catalog::Catalog::shared()?;
+    for behavior in [CloseBehavior::Ask, CloseBehavior::Quit, CloseBehavior::Tray] {
+        let mut saved = Preferences::defaults(catalog);
+        saved.close_behavior = behavior;
+        let encoded = saved.encode(catalog)?;
+        assert_eq!(Preferences::decode(Some(&encoded), catalog)?, saved);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&encoded)?["close_behavior"],
+            behavior.as_str()
+        );
+    }
     Ok(())
 }
 
@@ -258,12 +414,12 @@ fn new_session_labels_and_preference_copy_are_bilingual() {
         ("hc 状态暂不可用。", "hc status is unavailable."),
         ("连接 hc", "Connect hc"),
         ("hc 官方安装指南", "Official hc installation guide"),
-        ("默认会话后端", "Default session backend"),
+        ("启动终端类型", "Startup terminal type"),
         ("原生终端", "Native terminal"),
         ("hc（herdr-core）", "hc (herdr-core)"),
         (
-            "仅用于本机新建会话，不会更改已有会话。",
-            "Used only for new local sessions; existing sessions keep their backend.",
+            "仅决定进入应用或本机工作区时的初始终端类型；新建遵循当前选择的类型。",
+            "Selects the initial terminal type when entering the app or local workspace. New terminals use the currently selected type.",
         ),
     ] {
         assert_eq!(locale::tr(Language::EnUs, "zh-CN", chinese), english);

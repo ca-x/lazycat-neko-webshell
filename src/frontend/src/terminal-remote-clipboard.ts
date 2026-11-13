@@ -258,6 +258,7 @@ export function createTerminalRemoteClipboardBridge(options: {
   let pending = "";
   let suppressedPrefixLength = 0;
   let discardingSequence = false;
+  let discardedEscape = false;
   let writeQueue = Promise.resolve();
   let queuedWrite: { text: string; write: () => Promise<void | boolean> } | undefined;
   let drainingWrites = false;
@@ -268,7 +269,13 @@ export function createTerminalRemoteClipboardBridge(options: {
     if (retainParserState) {
       input = pending + input;
     } else if (pending) {
-      discardingSequence = true;
+      if (OSC_52_PREFIX.startsWith(pending)) {
+        // An undecided ESC may belong to Kitty, SGR, or another display control.
+        suppressedPrefixLength = pending.length;
+      } else {
+        discardingSequence = true;
+        discardedEscape = pending.endsWith("\u001b");
+      }
     }
     pending = "";
     if (suppressedPrefixLength > 0) {
@@ -278,16 +285,21 @@ export function createTerminalRemoteClipboardBridge(options: {
         suppressedPrefixLength = candidate.length;
         return "";
       }
+      input = candidate;
       if (candidate.startsWith(OSC_52_PREFIX)) {
         discardingSequence = true;
-        input = candidate;
       }
     }
     let output = "";
 
     if (discardingSequence) {
+      if (discardedEscape) input = "\u001b" + input;
+      discardedEscape = false;
       const terminator = findOscTerminator(input, 0);
-      if (!terminator) return "";
+      if (!terminator) {
+        discardedEscape = input.endsWith("\u001b");
+        return "";
+      }
       discardingSequence = false;
       input = input.slice(terminator.index + terminator.length);
     }
@@ -311,11 +323,13 @@ export function createTerminalRemoteClipboardBridge(options: {
         const incomplete = input.slice(start);
         if (incomplete.length > maxSequenceLength) {
           discardingSequence = true;
+          discardedEscape = incomplete.endsWith("\u001b");
           options.onError(new Error("remote clipboard payload is too large"));
         } else if (retainParserState) {
           pending = incomplete;
         } else {
           discardingSequence = true;
+          discardedEscape = incomplete.endsWith("\u001b");
         }
         break;
       }
@@ -390,6 +404,7 @@ export function createTerminalRemoteClipboardBridge(options: {
     pending = "";
     suppressedPrefixLength = 0;
     discardingSequence = false;
+    discardedEscape = false;
     queuedWrite = undefined;
   }
 

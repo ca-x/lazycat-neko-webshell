@@ -6,17 +6,21 @@ mod files;
 pub(crate) mod herdr;
 #[cfg(not(target_os = "android"))]
 mod hosting;
+mod kitty_image_layer;
 mod navigation;
 mod preferences;
 mod resources;
 mod screen_text;
 mod session_list;
+#[cfg(not(target_os = "android"))]
+mod settings_popup;
 mod shell;
 mod sidebar;
 mod state;
 mod terminal_colors;
 mod terminal_input;
 mod terminal_observer;
+mod terminal_status_bar;
 mod terminal_surface;
 mod terminal_view;
 #[cfg(test)]
@@ -39,7 +43,7 @@ pub fn App() -> impl IntoElement {
         let terminal = crate::terminal::initialize()?;
         Ok((display, terminal))
     })();
-    let (_display, terminal) = match startup {
+    let (display, terminal) = match startup {
         Ok(startup) => startup,
         Err(error) => {
             return view()
@@ -59,7 +63,17 @@ pub fn App() -> impl IntoElement {
         }
     };
     provide_context(terminal);
+    #[cfg(not(target_os = "android"))]
+    crate::platform::start_desktop_lifecycle(display);
     let ui = state::Ui::start();
+    #[cfg(not(target_os = "android"))]
+    navigation::install_startup_selection(ui, display);
+    let auto_control = computed(move || display.preferences().remote_auto_control);
+    effect(move || {
+        ui.send(crate::controller::Command::ConfigureTerminal {
+            remote_auto_control: auto_control.get(),
+        });
+    });
     provide_context(ui);
     frame().into_element()
 }
@@ -73,7 +87,7 @@ fn frame() -> impl IntoElement {
         attributes.title = Some(crate::preferences::tr("app.name").to_string());
         nsh_core::element::desktop::main_window().set(attributes);
     });
-    nav_stack()
+    let shell = nav_stack()
         .flex_1()
         .bg(move || theme().background)
         .text_color(move || theme().foreground)
@@ -84,6 +98,8 @@ fn frame() -> impl IntoElement {
                 .pop_on_back(move || !ui.secondary())
                 .on_back_press(move || ui.back())
                 .child(shell::body()),
-        )
-        .into_element()
+        );
+    #[cfg(not(target_os = "android"))]
+    let shell = shell.child(settings_popup::render(ui));
+    shell.into_element()
 }

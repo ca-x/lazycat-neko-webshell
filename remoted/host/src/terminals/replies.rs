@@ -65,6 +65,7 @@ struct Output {
 
 pub(super) struct Replies<'a> {
     terminal: Terminal<'a, 'a>,
+    filter: neko_terminal_reply_filter::ReplyOnlyInputFilter,
     output: Rc<RefCell<Output>>,
     budget: &'a Budget,
     failed: bool,
@@ -100,6 +101,7 @@ fn with_budget<R>(
     run: impl FnOnce(&mut Replies<'_>) -> Result<R>,
 ) -> Result<R> {
     dimensions(cols, rows)?;
+    neko_ghostty::initialize_graphics().context("cannot initialize bounded Kitty PNG decoder")?;
     let budget = Budget {
         limit,
         used: Cell::new(0),
@@ -112,6 +114,13 @@ fn with_budget<R>(
     terminal.set_scrollback_max_lines(Some(0))?;
     terminal.set_continuation_max_bytes(SEQUENCE_BYTES)?;
     terminal.set_apc_max_bytes(Some(SEQUENCE_BYTES))?;
+    terminal.set_apc_max_bytes_kitty(Some(neko_terminal_reply_filter::MAX_KITTY_QUERY_BYTES))?;
+    // A nonzero limit keeps support queries enabled. The query-only filter
+    // never admits image transmissions, so no images are retained here.
+    terminal.set_kitty_image_storage_limit(1)?;
+    terminal.set_kitty_image_from_file_allowed(false)?;
+    terminal.set_kitty_image_temp_file_dir(None)?;
+    terminal.set_kitty_image_from_shared_mem_allowed(false)?;
     terminal.set_unknown_max_bytes(0)?;
     terminal.set_clipboard_write_max_bytes(Some(0))?;
     terminal.set_glyph_protocol_enabled(false)?;
@@ -147,6 +156,7 @@ fn with_budget<R>(
     })?;
     let result = run(&mut Replies {
         terminal,
+        filter: neko_terminal_reply_filter::ReplyOnlyInputFilter::default(),
         output,
         budget: &budget,
         failed: false,
@@ -198,7 +208,7 @@ impl Replies<'_> {
             self.failed = true;
             bail!("PTY VT reply input chunk budget exceeded");
         }
-        self.terminal.vt_write(live);
+        self.terminal.vt_write(&self.filter.filter(live));
         self.finish()
     }
 

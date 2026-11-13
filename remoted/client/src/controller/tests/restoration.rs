@@ -265,11 +265,34 @@ async fn eight_confirmed_restores_and_direct_negotiation_do_not_stall_on_real_ca
         .await
         .unwrap();
     let mut operations = Vec::new();
-    for _ in 0..9 {
-        operations.push(requests.recv().await.unwrap().operation);
+    for index in 0..9 {
+        let request = tokio::time::timeout(Duration::from_secs(1), requests.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let attach = matches!(request.operation, Operation::TerminalAttach { .. });
+        operations.push(request.operation);
+        if attach {
+            assert!(
+                actor.outstanding.len() <= 4,
+                "restores must share the paced business lane"
+            );
+            actor
+                .response(Response {
+                    id: request.id,
+                    event: Event::TerminalAttached {
+                        stream: format!("restored-{index}"),
+                        name: "restored".into(),
+                        read_only: false,
+                    },
+                })
+                .await
+                .unwrap();
+        }
     }
     assert!(requests.try_recv().is_err());
-    assert_eq!(actor.outstanding.len(), 8);
+    assert!(actor.outstanding.is_empty());
+    assert_eq!(actor.model.panes.len(), 8);
     burst_through_carrier(operations, false).await;
 }
 

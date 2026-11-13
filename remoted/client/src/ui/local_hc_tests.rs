@@ -39,10 +39,10 @@ fn Fixture() -> impl IntoElement {
         },
         Client::fixture(sender),
     );
-    // The same guidance must accompany the default-HC creation action here too.
     ui.navigation
         .section
-        .set(crate::ui::navigation::Section::Herdr);
+        .set(crate::ui::navigation::Section::Terminal);
+    ui.navigation.ordinary_backend.set(SessionBackend::Hc);
     let count = signal(0);
     spawn(async move {
         while receiver.recv().await.is_some() {
@@ -53,6 +53,16 @@ fn Fixture() -> impl IntoElement {
         .flex_1()
         .child(render(ui))
         .child(text(move || format!("commands {}", count.get())))
+        .child(crate::ui::controls::action(
+            "fixture switch herdr",
+            false,
+            || false,
+            move || {
+                ui.navigation
+                    .section
+                    .set(crate::ui::navigation::Section::Herdr)
+            },
+        ))
         .child(crate::ui::controls::action(
             "fixture reply",
             false,
@@ -89,5 +99,23 @@ fn hc_guidance_follows_the_default_and_waits_for_action_completion() -> Result<(
     app.press("刷新 hc 状态")?;
     app.wait_for("commands 2")?;
     app.wait_for("正在检测 hc…")?;
+    Ok(())
+}
+
+#[test]
+fn saved_hc_startup_type_does_not_show_hc_actions_in_herdr_section() -> Result<(), String> {
+    let mut app = Headless::start(EngineConfig {
+        environment: Environment {
+            os: Os::Linux,
+            locale: Locale::parse("zh-CN").unwrap(),
+            ..Environment::default()
+        },
+        ..EngineConfig::new(Root::of::<Fixture>())
+    })
+    .map_err(|error| error.to_string())?;
+    app.wait_for("本机 hc")?;
+    app.press("fixture switch herdr")?;
+    assert!(!app.shows("本机 hc"));
+    assert!(app.screen().press_target("连接 hc")?.is_none());
     Ok(())
 }

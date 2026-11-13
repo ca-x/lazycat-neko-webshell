@@ -722,6 +722,8 @@ fn spawn_terminal(
     // portable-pty chooses the user's default login shell on Unix, ComSpec on
     // Windows. Environment/cwd changes apply only to this command's child.
     command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
+    command.env("TERM_PROGRAM", "neoko-terminal");
     let mut child = ChildGuard(
         pair.slave
             .spawn_command(command)

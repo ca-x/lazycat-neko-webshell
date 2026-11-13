@@ -85,6 +85,14 @@ impl Buffer {
     pub fn cells(&self, index: usize) -> Vec<crate::terminal::GridCell> {
         self.read(|emulator| emulator.cells(index))
     }
+    pub fn images(
+        &self,
+        visible_rows: std::ops::Range<usize>,
+        cell_width: u32,
+        cell_height: u32,
+    ) -> Vec<neko_ghostty::kitty::Placement> {
+        self.read(|emulator| emulator.images(visible_rows, cell_width, cell_height))
+    }
     pub fn failure(&self) -> Option<crate::terminal::Failure> {
         self.failure.get()
     }
@@ -121,10 +129,11 @@ impl Surface {
     pub fn new() -> Self {
         Self::for_screen(false)
     }
-    pub fn for_screen(plain: bool) -> Self {
+    pub fn for_screen(snapshot: bool) -> Self {
         Self {
             buffer: Buffer::new(),
-            screen: plain.then(|| Rc::new(RefCell::new(super::screen_text::ScreenText::default()))),
+            screen: snapshot
+                .then(|| Rc::new(RefCell::new(super::screen_text::ScreenText::default()))),
         }
     }
     pub fn write(&self, text: String) {
@@ -145,8 +154,12 @@ impl Surface {
         if let Some(screen) = &self.screen {
             *screen.borrow_mut() = super::screen_text::ScreenText::default();
         }
-        // Reset is terminal control, never part of the plain screen's column count.
+        // Reset is terminal control, never part of the snapshot's column count.
         self.buffer.feed(b"\x1bc");
+        if self.screen.is_some() {
+            // Even an empty replacement must forget the previous source geometry.
+            self.buffer.resize(TerminalSize::default());
+        }
         self.buffer.events();
     }
 }
@@ -157,6 +170,39 @@ mod tests {
     use nsh_core::element::Root;
     use nsh_engine::EngineConfig;
     use nsh_testing::Headless;
+
+    #[test]
+    fn ansi_replacement_preserves_real_colors_and_reset_forgets_styles_and_geometry() {
+        use nsh_base::TerminalColor;
+        let runtime = nsh_core::element::reactive::Runtime::default();
+        let _entered = runtime.enter();
+        let surface = Surface::for_screen(true);
+        surface.write("\x1b]0;title with a long payload\x1b".into());
+        surface.write("\\\x1b[38;2;12;34;".into());
+        surface.write(format!("56m\x1b[48;5;4m{}\x1b[0m\nlast", "猫".repeat(60)));
+        assert_eq!(surface.buffer.size.get_untracked().cols, 120);
+        assert!(!surface.buffer.clipped.get_untracked());
+        assert_eq!(surface.buffer.line(0).text().trim_end(), "猫".repeat(60));
+        assert_eq!(surface.buffer.line(1).text().trim_end(), "last");
+        let first = surface.buffer.cells(0).remove(0);
+        assert_eq!(first.style.fg, Some(TerminalColor::Rgb(12, 34, 56)));
+        assert_eq!(first.style.bg, Some(TerminalColor::Indexed(4)));
+        surface.reset();
+        assert_eq!(surface.buffer.size.get_untracked(), TerminalSize::default());
+        assert!(surface.buffer.text().trim().is_empty());
+        surface.write("plain replacement".into());
+        let first = surface.buffer.cells(0).remove(0);
+        assert_ne!(first.style.fg, Some(TerminalColor::Rgb(12, 34, 56)));
+        assert_ne!(first.style.bg, Some(TerminalColor::Indexed(4)));
+        assert!(!surface.buffer.text().contains("猫"));
+        surface.write("\x1b[38;2;".into());
+        surface.reset();
+        surface.write("after incomplete escape".into());
+        assert_eq!(
+            surface.buffer.line(0).text().trim_end(),
+            "after incomplete escape"
+        );
+    }
 
     #[component]
     fn SnapshotFixture() -> impl IntoElement {

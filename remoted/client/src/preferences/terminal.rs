@@ -1,6 +1,6 @@
 //! Reactive appearance for the native terminal cell renderer.
 
-use super::{Ui, catalog::TerminalTheme};
+use super::{CursorStyle, Ui, catalog::TerminalTheme};
 use nsh_base::{TerminalColor, TerminalStyle};
 use nsh_core::prelude::*;
 
@@ -30,6 +30,27 @@ impl Context {
             .unwrap_or_else(|| {
                 super::catalog::Catalog::shared().map_or(14, |catalog| catalog.defaults.font_size)
             })
+    }
+
+    /// Resolved terminal family and bundled fallbacks, tracking acknowledged saves.
+    pub fn font_family(self) -> SharedString {
+        let family = self
+            .ui
+            .map(|ui| ui.preferences().font_family)
+            .unwrap_or_else(super::font::default_family);
+        crate::fonts::resolve_terminal_family(&family)
+    }
+
+    /// Cursor shape from the last acknowledged document, reactive in a binding.
+    pub fn cursor_style(self) -> CursorStyle {
+        self.ui
+            .map(|ui| ui.preferences().cursor_style)
+            .unwrap_or_default()
+    }
+
+    /// Whether to blink the cursor, reactive and false before preferences are installed.
+    pub fn cursor_blink(self) -> bool {
+        self.ui.is_some_and(|ui| ui.preferences().cursor_blink)
     }
 
     /// Row height used by both interactive and read-only terminal surfaces.

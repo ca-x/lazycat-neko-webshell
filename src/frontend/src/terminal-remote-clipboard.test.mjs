@@ -64,6 +64,43 @@ test("blocks remote clipboard reads and disabled remote writes", async () => {
   assert.deepEqual(writes, []);
 });
 
+test("preserves split Kitty graphics and styling while clipboard writes are disabled", () => {
+  const sequence = "\u001b[31mcolor\u001b[0m\u001b_Ga=T,f=100,t=d,q=2,m=1;AAAA\u001b\\\u001b_Gm=0;BBBB\u001b\\after";
+  for (let split = 1; split < sequence.length; split += 1) {
+    const bridge = createTerminalRemoteClipboardBridge({
+      enabled: () => false,
+      writeText: async () => assert.fail("graphics must not write the clipboard"),
+      onError: (error) => assert.fail(String(error)),
+    });
+    const output = bridge.beforeRenderOutput(sequence.slice(0, split))
+      + bridge.beforeRenderOutput(sequence.slice(split));
+    assert.equal(output, sequence, `split at ${split}`);
+  }
+});
+
+test("losing clipboard access during an undecided escape preserves Kitty display bytes", () => {
+  let enabled = true;
+  const bridge = createTerminalRemoteClipboardBridge({
+    enabled: () => enabled,
+    writeText: async () => assert.fail("graphics must not write the clipboard"),
+    onError: (error) => assert.fail(String(error)),
+  });
+  assert.equal(bridge.beforeRenderOutput("\u001b"), "");
+  enabled = false;
+  assert.equal(bridge.beforeRenderOutput("_Ga=T,f=100,t=d,q=2;AAAA\u001b\\visible"), "\u001b_Ga=T,f=100,t=d,q=2;AAAA\u001b\\visible");
+});
+
+test("disabled clipboard strings with split ST terminators do not swallow later graphics", () => {
+  const bridge = createTerminalRemoteClipboardBridge({
+    enabled: () => false,
+    writeText: async () => assert.fail("disabled clipboard must not write"),
+    onError: (error) => assert.fail(String(error)),
+  });
+  assert.equal(bridge.beforeRenderOutput(osc52("ignored", "\u001b\\").slice(0, -1)), "");
+  const graphic = "\u001b_Ga=T,f=100,t=d,q=2;AAAA\u001b\\";
+  assert.equal(bridge.beforeRenderOutput(`\\${graphic}visible`), `${graphic}visible`);
+});
+
 test("does not resume a disabled OSC 52 fragment after clipboard access is enabled", async () => {
   const writes = [];
   let enabled = false;

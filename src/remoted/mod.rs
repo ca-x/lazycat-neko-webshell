@@ -7,5 +7,6 @@ pub(crate) mod http;
 mod peer;
 pub(crate) mod relay;
 mod store;
+mod terminal_creation;
 mod terminals;
 pub(crate) use store::Remoted;

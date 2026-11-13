@@ -15,7 +15,6 @@ fn status(ui: Ui) -> Option<HcStatus> {
 }
 
 pub fn render(ui: Ui) -> impl IntoElement {
-    let preferences = use_context::<crate::preferences::Ui>();
     let pending = signal(None::<(u64, bool)>);
     effect(move || {
         if let Some((revision, _)) = pending.get() {
@@ -35,8 +34,8 @@ pub fn render(ui: Ui) -> impl IntoElement {
     when(
         move || {
             ui.model.with(|model| model.local)
-                && preferences.and_then(|settings| settings.new_session_backend())
-                    == Some(SessionBackend::Hc)
+                && ui.navigation.section.get() == crate::ui::navigation::Section::Terminal
+                && ui.navigation.ordinary_backend.get() == SessionBackend::Hc
         },
         move || {
             view()

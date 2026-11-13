@@ -129,7 +129,7 @@ fn start(os: Os) -> Headless {
     })
     .unwrap();
     app.first_render().unwrap();
-    app.press("terminal-output-card").unwrap();
+    app.press("id:terminal-pane-viewport").unwrap();
     app
 }
 fn input_id(app: &Headless) -> nsh_core::NodeId {
@@ -493,15 +493,11 @@ fn output_pointer(
     let nodes = app.screen().layout_nodes();
     let card = nodes
         .iter()
-        .find(|node| node.test_id.as_deref() == Some("terminal-output-card"))
+        .find(|node| node.test_id.as_deref() == Some("terminal-pane-viewport"))
         .unwrap();
     let row = nodes
         .iter()
-        .position(|node| node.test_id.as_deref() == Some("terminal-grid-row"))
-        .unwrap();
-    let cell = nodes[row..]
-        .iter()
-        .find(|node| node.text.is_some())
+        .find(|node| node.test_id.as_deref() == Some("terminal-grid-row"))
         .unwrap();
     let touch = TouchEvent {
         phase,
@@ -509,7 +505,7 @@ fn output_pointer(
         activated: None,
         points: vec![TouchPoint {
             id: 17,
-            target: cell.id,
+            target: row.id,
             path: if phase == TouchPhase::Start {
                 vec![card.id]
             } else {
@@ -546,11 +542,7 @@ fn tapping_selectable_child_without_a_parent_press_focuses_the_native_input() {
         app.press_key("enter").unwrap();
         assert_eq!(frames(&app), ["x", "\r"], "{os:?}");
         assert_eq!(app.screen().input_text("会话输入").unwrap(), Some("草稿"));
-        assert!(
-            app.screen()
-                .in_selectable_view("id:terminal-grid-row >> nth=0")
-                .unwrap()
-        );
+        assert!(app.screen().matches("id:terminal-selection").unwrap());
     }
 }
 
@@ -570,11 +562,7 @@ fn selection_scroll_and_cancel_touches_do_not_steal_composer_focus() {
         app.press_key("x").unwrap();
         assert!(frames(&app).is_empty());
         assert_eq!(app.screen().input_text("会话输入").unwrap(), Some("草稿x"));
-        assert!(
-            app.screen()
-                .in_selectable_view("id:terminal-grid-row >> nth=0")
-                .unwrap()
-        );
+        assert!(app.screen().matches("id:terminal-selection").unwrap());
     }
 }
 

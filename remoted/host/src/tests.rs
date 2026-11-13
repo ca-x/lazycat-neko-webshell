@@ -120,8 +120,9 @@ pub(crate) fn controlled_shell_child(test: &str) -> bool {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn actual_local_pty_requires_control_and_survives_detach() {
-    if controlled_shell_child("tests::actual_local_pty_requires_control_and_survives_detach") {
+async fn actual_local_pty_is_immediately_writable_and_survives_detach() {
+    if controlled_shell_child("tests::actual_local_pty_is_immediately_writable_and_survives_detach")
+    {
         return;
     }
     let (save, _) = store();
@@ -150,14 +151,17 @@ async fn actual_local_pty_requires_control_and_survives_detach() {
     let input = local
         .request(Operation::TerminalInput {
             stream: stream.clone(),
-            data: protocol::encode(b"printf 'native-before-control\\n'\n"),
+            data: protocol::encode(b"printf 'native-before-control\\n'\r"),
         })
         .await
         .unwrap();
     loop {
         let response = local.receive().await.unwrap();
         if response.id == input {
-            assert!(matches!(response.event, Event::Error { .. }));
+            assert!(
+                matches!(response.event, Event::Ok),
+                "local input must work immediately without acquiring control"
+            );
             break;
         }
     }
@@ -667,9 +671,32 @@ async fn noise_and_local_share_real_pty_control_and_enforce_grants() {
         .await
         .unwrap();
     assert!(
-        matches!(local_reply(&mut local, id).await, Event::Error { .. }),
-        "remote take must remove local control"
+        matches!(local_reply(&mut local, id).await, Event::Ok),
+        "local typing must automatically reclaim this terminal"
     );
+    let id = peer
+        .send(Operation::TerminalInput {
+            stream: stream.clone(),
+            data: protocol::encode(b"remote-must-not-type-before-taking-control\r"),
+        })
+        .await;
+    assert!(
+        matches!(peer.reply(id).await, Event::Error { .. }),
+        "local reclamation must revoke remote input authority"
+    );
+    let id = peer
+        .send(Operation::TerminalControl {
+            stream: stream.clone(),
+            take: true,
+        })
+        .await;
+    assert!(matches!(
+        peer.reply(id).await,
+        Event::TerminalControl {
+            controller: true,
+            ..
+        }
+    ));
 
     let id = peer
         .send(Operation::TerminalInput {
@@ -1541,12 +1568,36 @@ async fn public_v3_host_pair_shared_pty_readonly_revoke_reconnect_lifecycle() {
     let id = local
         .request(Operation::TerminalInput {
             stream: local_stream.clone(),
-            data: protocol::encode(b"must not run\r"),
+            data: protocol::encode(b"printf '%s%s\\n' public_v3_ local_reclaimed\r"),
         })
         .await
         .unwrap();
     assert!(
-        matches!(local_reply(&mut local,id).await,Event::Error {code,..} if code == "REQUEST_FAILED")
+        matches!(local_reply(&mut local, id).await, Event::Ok),
+        "local input must reclaim the shared PTY immediately"
+    );
+    let id = peer
+        .send(Operation::TerminalInput {
+            stream: stream.clone(),
+            data: protocol::encode(b"must not run\r"),
+        })
+        .await;
+    assert!(matches!(peer.reply(id).await, Event::Error { .. }));
+    let id = peer
+        .send(Operation::TerminalControl {
+            stream: stream.clone(),
+            take: true,
+        })
+        .await;
+    assert!(
+        matches!(
+            peer.reply(id).await,
+            Event::TerminalControl {
+                controller: true,
+                ..
+            }
+        ),
+        "remote input requires reacquiring control after local input"
     );
     let id = peer
         .send(Operation::TerminalInput {

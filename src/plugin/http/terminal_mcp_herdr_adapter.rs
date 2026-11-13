@@ -150,6 +150,71 @@ impl HerdrTerminalAdapter {
         ))
     }
 
+    /// Read a complete styled viewport, including empty replacements, without delta/history gaps.
+    pub async fn read_ansi(
+        &self,
+        session_id: &str,
+        pane_id: &str,
+        after_sequence: u64,
+        max_bytes: usize,
+    ) -> Result<TerminalReadResult, TerminalMcpError> {
+        let response = self
+            .request(
+                session_id,
+                HerdrTerminalOperation::ReadAnsi {
+                    pane_id: pane_id.to_owned(),
+                },
+            )
+            .await
+            .map_err(map_herdr_error)?;
+        let value = read_result(&response);
+        let data = data_field(value).ok_or_else(|| {
+            TerminalMcpError::new(
+                "BACKEND_OPERATION_FAILED",
+                "Herdr visible read missing text",
+            )
+        })?;
+        if data.len() > max_bytes || bool_field(value, "truncated") {
+            return Err(TerminalMcpError::new(
+                "BACKEND_OPERATION_FAILED",
+                "Herdr visible screen is incomplete or exceeds the snapshot size limit",
+            ));
+        }
+        if value.get("format").is_some_and(|format| format != "ansi")
+            || value
+                .get("source")
+                .is_some_and(|source| source != "visible")
+        {
+            return Err(TerminalMcpError::new(
+                "BACKEND_OPERATION_FAILED",
+                "Herdr did not return the requested visible ANSI screen",
+            ));
+        }
+        // pane.read's revision is not an output-stream sequence. Every successful
+        // read is a replacement; the terminal bridge deduplicates its full bytes.
+        let sequence = after_sequence.checked_add(1).ok_or_else(|| {
+            TerminalMcpError::new(
+                "BACKEND_OPERATION_FAILED",
+                "Herdr screen sequence exhausted",
+            )
+        })?;
+        Ok(TerminalReadResult {
+            session_id: session_id.to_owned(),
+            pane_id: Some(pane_id.to_owned()),
+            frames: vec![TerminalOutputFrame {
+                sequence,
+                data_base64: BASE64_STANDARD.encode(data),
+            }],
+            next_sequence: sequence,
+            last_sequence: sequence,
+            oldest_sequence: Some(sequence),
+            timed_out: false,
+            truncated: false,
+            replay_gap: false,
+            exited: bool_field(value, "exited"),
+        })
+    }
+
     pub async fn send_text(
         &self,
         session_id: &str,
@@ -344,6 +409,80 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[tokio::test]
+    async fn ansi_terminal_reads_preserve_full_styles_and_empty_resets_without_changing_plain_reads()
+     {
+        let state = Arc::new(AppState::new_for_test(":memory:".into()));
+        let source = Arc::new(std::sync::Mutex::new(
+            "\x1b[38;2;12;34;56mRED\x1b[0m".to_owned(),
+        ));
+        let screen = source.clone();
+        let adapter = HerdrTerminalAdapter::with_test_rpc(state, move |_, operation| {
+            let screen = screen.clone();
+            Box::pin(async move {
+                match operation {
+                    HerdrTerminalOperation::ReadAnsi { .. } => Ok(
+                        json!({"read":{"text":screen.lock().unwrap().clone(),"source":"visible","format":"ansi","sequence":999,"truncated":false}}),
+                    ),
+                    HerdrTerminalOperation::Read { .. } => {
+                        Ok(json!({"read":{"text":"RED","source":"recent","format":"text"}}))
+                    }
+                    _ => Err("unexpected operation".into()),
+                }
+            })
+        });
+        let plain = adapter.read("session", "w1:p1", 0, 0, 1024).await.unwrap();
+        assert_eq!(
+            BASE64_STANDARD
+                .decode(&plain.frames[0].data_base64)
+                .unwrap(),
+            b"RED"
+        );
+        let ansi = adapter
+            .read_ansi("session", "w1:p1", 4, 1024)
+            .await
+            .unwrap();
+        assert_eq!(ansi.next_sequence, 5);
+        assert!(!ansi.replay_gap && !ansi.truncated);
+        assert_eq!(
+            BASE64_STANDARD.decode(&ansi.frames[0].data_base64).unwrap(),
+            source.lock().unwrap().as_bytes()
+        );
+        source.lock().unwrap().clear();
+        let empty = adapter
+            .read_ansi("session", "w1:p1", 5, 1024)
+            .await
+            .unwrap();
+        assert_eq!(empty.frames.len(), 1);
+        assert!(empty.frames[0].data_base64.is_empty());
+        assert!(!empty.replay_gap);
+    }
+
+    #[tokio::test]
+    async fn ansi_terminal_reads_reject_partial_and_oversized_snapshots_instead_of_slicing() {
+        let source = Arc::new(std::sync::Mutex::new(
+            json!({"text":"partial","truncated":true}),
+        ));
+        let screen = source.clone();
+        let adapter = HerdrTerminalAdapter::with_test_rpc(
+            Arc::new(AppState::new_for_test(":memory:".into())),
+            move |_, _| {
+                let screen = screen.clone();
+                Box::pin(async move { Ok(json!({"read":screen.lock().unwrap().clone()})) })
+            },
+        );
+        for value in [
+            json!({"text":"partial","truncated":true}),
+            json!({"text":"too long"}),
+            json!({"text":"ok","format":"text"}),
+            json!({"text":"ok","source":"recent"}),
+            json!({}),
+        ] {
+            *source.lock().unwrap() = value;
+            assert!(adapter.read_ansi("session", "w1:p1", 0, 4).await.is_err());
+        }
+    }
 
     #[tokio::test]
     async fn default_adapter_still_rejects_unknown_sessions() {

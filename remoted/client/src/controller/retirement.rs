@@ -16,6 +16,7 @@ impl Actor {
     }
 
     pub(super) fn retire_stream(&mut self, stream: &str) {
+        self.reject_stream_unsent(stream);
         self.remember_retired_stream(stream);
         self.model.panes.retain(|pane| pane.stream != stream);
         self.attachments.remove(stream);

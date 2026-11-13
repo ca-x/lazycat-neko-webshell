@@ -249,6 +249,7 @@ fn WorkspaceFixture() -> impl IntoElement {
                 })
                 .child(text("path-direct")),
         )
+        .child(crate::ui::sidebar::render(ui))
         .child(crate::ui::workspace::render(ui))
 }
 

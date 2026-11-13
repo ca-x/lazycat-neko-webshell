@@ -8,6 +8,8 @@ use desktop as host;
 
 use anyhow::{Context, Result, bail, ensure};
 #[cfg(not(target_os = "android"))]
+pub(crate) use desktop::start_desktop_lifecycle;
+#[cfg(not(target_os = "android"))]
 pub use desktop::{initialize, start_services};
 use serde_json::{Value, json};
 use std::path::PathBuf;

@@ -1,9 +1,8 @@
 //! Composition only. Hidden session surfaces remain mounted across secondary routes.
 use super::{
-    connection, controls::action, file_view, session_list, state::Ui, terminal_view,
+    connection, file_view, session_list, state::Ui, terminal_status_bar, terminal_view,
     workspace_header,
 };
-use crate::controller::Command;
 use nsh_core::prelude::*;
 
 pub fn render(ui: Ui) -> impl IntoElement {
@@ -16,35 +15,12 @@ pub fn render(ui: Ui) -> impl IntoElement {
             view()
                 .flex_1()
                 .min_h(px(0.0))
-                .style_when(move || !ui.navigation.settings.get(), |s| s.hidden())
-                .child(
-                    view()
-                        .px_4()
-                        .py_2()
-                        .flex_row()
-                        .gap_2()
-                        .child(action(
-                            "返回会话",
-                            false,
-                            || false,
-                            move || ui.navigation.settings.set(false),
-                        ))
-                        .child(when(
-                            move || ui.model.with(|m| m.ready()),
-                            move || {
-                                action(
-                                    "断开连接",
-                                    false,
-                                    || false,
-                                    move || ui.send(Command::Disconnect),
-                                )
-                            },
-                        )),
-                )
+                .style_when(move || !ui.navigation.inline_settings(), |s| s.hidden())
+                .child(connection::actions(ui))
                 .child(connection::render(ui)),
         )
         .child(when(
-            move || !ui.navigation.settings.get() && ui.navigation.files.get(),
+            move || !ui.navigation.inline_settings() && ui.navigation.files.get(),
             move || file_view::render(ui),
         ))
         .child(
@@ -52,7 +28,7 @@ pub fn render(ui: Ui) -> impl IntoElement {
                 .flex_1()
                 .min_h(px(0.0))
                 .style_when(
-                    move || ui.navigation.settings.get() || ui.navigation.files.get(),
+                    move || ui.navigation.inline_settings() || ui.navigation.files.get(),
                     |s| s.hidden(),
                 )
                 .child(when(
@@ -65,4 +41,12 @@ pub fn render(ui: Ui) -> impl IntoElement {
                     move |p, _| terminal_view::render(ui, p),
                 )),
         )
+        .child(when(
+            move || {
+                !ui.navigation.inline_settings()
+                    && !ui.navigation.files.get()
+                    && ui.model.with(|model| model.ready())
+            },
+            move || terminal_status_bar::render(ui),
+        ))
 }

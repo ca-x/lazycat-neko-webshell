@@ -176,14 +176,14 @@ mod unix {
         let request = local
             .request(Operation::TerminalInput {
                 stream: stream.clone(),
-                data: protocol::encode(b"denied"),
+                data: protocol::encode(b"typed"),
             })
             .await
             .unwrap();
-        assert!(matches!(
-            response(&mut local, request).await,
-            Event::Error { .. }
-        ));
+        assert!(
+            matches!(response(&mut local, request).await, Event::Ok),
+            "a local HC terminal accepts input immediately after attach"
+        );
         let request = local
             .request(Operation::TerminalControl {
                 stream: stream.clone(),
@@ -481,8 +481,19 @@ mod unix {
             }
         }
         fixture.mode("burst");
-        let (_slow, _) = attach(&host, &created.grant).await;
-        tokio::time::timeout(Duration::from_secs(6), async {
+        // Exercise a consumer that actually stops draining. LocalSession now
+        // propagates backpressure and its bounded response queue absorbs part
+        // of the burst before this attachment-level delivery budget applies.
+        let (events, _slow) = tokio::sync::mpsc::channel(1);
+        host.0
+            .core
+            .hc
+            .attach(&created.grant, "slow fixture".into(), events, false)
+            .await
+            .unwrap();
+        // An undrained receiver exhausts the three-second output drain and
+        // then the separate three-second final notification deadline.
+        tokio::time::timeout(Duration::from_secs(8), async {
             loop {
                 if host.0.core.hc.attachments.lock().unwrap().is_empty() {
                     break;
@@ -862,12 +873,28 @@ mod unix {
                     Event::Error { .. } | Event::TerminalExit { .. } => {
                         panic!("large metadata escaped the hc stream")
                     }
+                    Event::TerminalControl {
+                        controller: true, ..
+                    } => {
+                        panic!("failed initial status must never claim control")
+                    }
                     _ => {}
                 }
             }
         })
         .await
         .unwrap();
+        assert!(
+            host.0
+                .core
+                .hc
+                .attachments
+                .lock()
+                .unwrap()
+                .get(&stream)
+                .is_none_or(|item| !item.controller || item.cancel.is_cancelled()),
+            "failed attachment retained control"
+        );
         let id = local
             .request(Operation::Ping {
                 nonce: "still connected".into(),
@@ -923,13 +950,25 @@ mod unix {
             .await
             .unwrap();
         let (mut local, stream) = attach(&host, &created.grant).await;
+        let mut ready_status = false;
+        let mut ready_control = false;
         loop {
-            if let Event::TerminalProgramStatus { records, .. } =
-                local.receive().await.unwrap().event
-                && records
-                    .iter()
-                    .any(|record| record.state == ProgramState::Done)
-            {
+            match local.receive().await.unwrap().event {
+                Event::TerminalProgramStatus { records, .. } => {
+                    ready_status |= records
+                        .iter()
+                        .any(|record| record.state == ProgramState::Done);
+                }
+                Event::TerminalControl {
+                    stream: controlled,
+                    controller: true,
+                } => {
+                    assert_eq!(controlled, stream);
+                    ready_control = true;
+                }
+                _ => {}
+            }
+            if ready_status && ready_control {
                 break;
             }
         }
@@ -981,6 +1020,15 @@ mod unix {
                     }
                     // Initial output/status may already be queued before resource withdrawal.
                     Event::TerminalOutput { .. } | Event::TerminalProgramStatus { .. } => {}
+                    Event::TerminalControl {
+                        stream: controlled,
+                        controller: false,
+                    } => {
+                        assert_eq!(
+                            controlled, stream,
+                            "foreign control crossed the session boundary"
+                        );
+                    }
                     other => panic!("unexpected event after withdrawal: {other:?}"),
                 }
             }

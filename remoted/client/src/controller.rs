@@ -27,6 +27,9 @@ pub mod interaction;
 mod latency;
 #[cfg(not(target_os = "android"))]
 mod local_workspace;
+mod request_flow;
+#[cfg(test)]
+mod request_flow_tests;
 mod retirement;
 mod retry;
 #[cfg(test)]
@@ -176,6 +179,9 @@ impl Model {
 
 #[derive(Debug)]
 pub enum Command {
+    ConfigureTerminal {
+        remote_auto_control: bool,
+    },
     #[doc(hidden)]
     Scoped {
         generation: u64,
@@ -251,6 +257,10 @@ impl Client {
             .sender
             .try_reserve()
             .map_err(|_| anyhow::anyhow!("操作队列繁忙或连接已关闭，请稍后重试"))?;
+        if matches!(command, Command::ConfigureTerminal { .. }) {
+            permit.send(command);
+            return Ok(());
+        }
         #[cfg(not(target_os = "android"))]
         if matches!(command, Command::Host(_)) {
             permit.send(command);
@@ -276,6 +286,9 @@ impl Client {
 
     /// Sends a workspace action only to the connection shown by the originating UI.
     pub fn send_for(&self, generation: u64, command: Command) -> Result<()> {
+        if matches!(command, Command::ConfigureTerminal { .. }) {
+            return self.send(command);
+        }
         #[cfg(not(target_os = "android"))]
         if matches!(command, Command::Host(_)) {
             return self.send(command);
@@ -385,6 +398,9 @@ enum ReconnectMode {
 }
 
 enum Pending {
+    Create {
+        grant: String,
+    },
     Input(u64),
     RetiredAttach,
     Ordinary,
@@ -436,6 +452,7 @@ struct Actor {
     retry: Retry,
     latency: latency::Latency,
     unknown_outcome: bool,
+    remote_auto_control: bool,
     attachments: HashMap<String, Attachment>,
     restoring: HashMap<String, Restoration>,
     retired_streams: VecDeque<String>,
@@ -450,6 +467,7 @@ struct Actor {
     identity: Option<Identity>,
     output: HashMap<String, OutputState>,
     outstanding: HashMap<u64, Outstanding>,
+    requests: request_flow::Requests,
     updates: mpsc::Sender<Update>,
     prepare_tx: mpsc::Sender<PreparedResult>,
     prepare_rx: mpsc::Receiver<PreparedResult>,
@@ -478,6 +496,7 @@ impl Actor {
             retry: Retry::default(),
             latency: latency::Latency::default(),
             unknown_outcome: false,
+            remote_auto_control: false,
             attachments: HashMap::new(),
             restoring: HashMap::new(),
             retired_streams: VecDeque::new(),
@@ -489,6 +508,7 @@ impl Actor {
             identity: None,
             output: HashMap::new(),
             outstanding: HashMap::new(),
+            requests: request_flow::Requests::default(),
             updates,
             prepare_tx,
             prepare_rx,
@@ -522,9 +542,11 @@ impl Actor {
         if let Some(session) = &self.session {
             model.connection_kind = session.connection_kind();
         }
-        model.opening = self.outstanding.values().any(|request| {
-            matches!(&request.kind, Pending::Attach(_) | Pending::Restore { .. })
-                || matches!(&request.kind, Pending::Herdr { method, .. } if method == "session.snapshot")
+        model.opening = self.pending_requests().any(|kind| {
+            matches!(
+                kind,
+                Pending::Create { .. } | Pending::Attach(_) | Pending::Restore { .. }
+            ) || matches!(kind, Pending::Herdr { method, .. } if method == "session.snapshot")
         });
         let _ = self.updates.send(Update::Model(Box::new(model))).await;
     }
@@ -674,6 +696,7 @@ impl Actor {
 
     async fn disconnected(&mut self) {
         self.clear_latency();
+        self.reject_unsent();
         self.model.interaction.interrupted();
         if self.retry.enabled {
             self.capture_restoration();
@@ -779,6 +802,7 @@ impl Actor {
     }
 
     fn clear_workspace(&mut self) {
+        self.reject_unsent();
         self.model.remote_host_name.clear();
         self.model.interaction = interaction::History::default();
         self.output.clear();
@@ -999,7 +1023,7 @@ impl Actor {
         self.cancelling = false;
     }
 
-    async fn request(&mut self, operation: Operation, kind: Pending) -> Result<()> {
+    async fn transmit(&mut self, operation: Operation, kind: Pending) -> Result<()> {
         ensure!(self.outstanding.len() < 64, "待确认请求过多");
         let approval = matches!(kind, Pending::Identify);
         let scope = self.scope.clone();
@@ -1015,6 +1039,13 @@ impl Actor {
         let id = match result {
             Ok(id) => id,
             Err(error) => {
+                #[cfg(not(target_os = "android"))]
+                if error.is::<neoko_terminal_host::RequestNotQueued>() {
+                    if let Pending::Input(id) = kind {
+                        self.model.interaction.reject(id);
+                    }
+                    return Err(error.context("操作尚未发送，请等待终端处理当前输入"));
+                }
                 self.unknown_outcome = true;
                 self.disconnected().await;
                 return Err(error.context("发送失败，操作结果可能未知；未自动重试"));
@@ -1031,6 +1062,13 @@ impl Actor {
     }
 
     async fn command(&mut self, command: Command) -> Result<()> {
+        if let Command::ConfigureTerminal {
+            remote_auto_control,
+        } = command
+        {
+            self.remote_auto_control = remote_auto_control;
+            return Ok(());
+        }
         #[cfg(not(target_os = "android"))]
         let command = match command {
             Command::Host(action) => {
@@ -1080,6 +1118,7 @@ impl Actor {
         );
         self.model.error.clear();
         match command {
+            Command::ConfigureTerminal { .. } => bail!("终端偏好不接受工作区命令封装"),
             Command::Scoped { .. } => bail!("不接受嵌套工作区命令"),
             #[cfg(not(target_os = "android"))]
             Command::Host(_) => bail!("主机设置不接受工作区命令封装"),
@@ -1219,25 +1258,26 @@ impl Actor {
                 }
                 self.validate(&operation)?;
                 let kind = match &operation {
+                    Operation::TerminalCreate { grant } => {
+                        ensure!(!self.pending_requests().any(|kind| matches!(kind, Pending::Create { grant: pending } if pending == grant)), "正在为此主机新建终端，请等待");
+                        ensure!(
+                            self.model.panes.len() + self.opening_panes() < 8,
+                            "最多打开 8 个终端"
+                        );
+                        Pending::Create {
+                            grant: grant.clone(),
+                        }
+                    }
                     Operation::TerminalAttach { grant, pane } => {
                         ensure!(
-                            self.model.panes.len()
-                                + self
-                                    .outstanding
-                                    .values()
-                                    .filter(|request| matches!(
-                                        request.kind,
-                                        Pending::Attach(_) | Pending::Restore { .. }
-                                    ))
-                                    .count()
-                                < 8,
+                            self.model.panes.len() + self.opening_panes() < 8,
                             "最多打开 8 个终端"
                         );
                         let attachment = Attachment {
                             grant: grant.clone(),
                             pane: pane.clone(),
                         };
-                        ensure!(!self.outstanding.values().any(|request| matches!(&request.kind, Pending::Attach(active) | Pending::Restore { attachment: active, .. } if active == &attachment)), "此终端正在打开，请等待");
+                        ensure!(!self.pending_requests().any(|kind| matches!(kind, Pending::Attach(active) | Pending::Restore { attachment: active, .. } if active == &attachment)), "此终端正在打开，请等待");
                         ensure!(
                             pane.is_none()
                                 || !self
@@ -1310,6 +1350,18 @@ impl Actor {
         ensure!(self.model.ready(), "主机尚未就绪");
         match operation {
             Operation::Resources {} => Ok(()),
+            Operation::TerminalCreate { grant } => {
+                ensure!(self.model.writable(), "设备只有只读授权");
+                ensure!(
+                    self.model
+                        .resources
+                        .iter()
+                        .any(|resource| resource.id == *grant
+                            && (resource.terminal || resource.herdr)),
+                    "新建终端的目标未授权"
+                );
+                Ok(())
+            }
             Operation::TerminalAttach { grant, pane } => {
                 self.resource(grant, if pane.is_some() { "herdr" } else { "terminal" })
             }
@@ -1347,7 +1399,7 @@ impl Actor {
                 ensure!(
                     self.model.writable()
                         && self.model.panes.iter().any(|pane| &pane.stream == stream
-                            && pane.controller
+                            && (self.model.local || pane.controller)
                             && !pane.read_only
                             && pane.live()),
                     "终端为只读，请先取得控制权"
@@ -1462,6 +1514,12 @@ impl Actor {
     }
 
     async fn response(&mut self, response: Response) -> Result<bool> {
+        let changed = self.process_response(response).await?;
+        self.flush_requests().await?;
+        Ok(changed)
+    }
+
+    async fn process_response(&mut self, response: Response) -> Result<bool> {
         self.last_received = Instant::now();
         let kind_changed = self.refresh_latency(Instant::now());
         let mut changed = true;
@@ -1598,6 +1656,31 @@ impl Actor {
                     changed = true;
                 }
             }
+            Event::TerminalCreated { resource } => {
+                ensure!(
+                    matches!(pending, Some(Pending::Create { .. })),
+                    "未请求的终端创建回复"
+                );
+                ensure!(
+                    resource.terminal
+                        && !resource.herdr
+                        && !resource.id.is_empty()
+                        && resource.id.len() <= 256,
+                    "主机返回的终端资源无效"
+                );
+                let grant = resource.id.clone();
+                if !self.model.resources.iter().any(|item| item.id == grant) {
+                    self.model.resources.push(resource);
+                }
+                self.request(
+                    Operation::TerminalAttach {
+                        grant: grant.clone(),
+                        pane: None,
+                    },
+                    Pending::Attach(Attachment { grant, pane: None }),
+                )
+                .await?;
+            }
             Event::TerminalAttached {
                 stream,
                 name,
@@ -1639,7 +1722,7 @@ impl Actor {
                     herdr_pane_id,
                     herdr_grant,
                     programs: Vec::new(),
-                    stream,
+                    stream: stream.clone(),
                     name,
                     controller: false,
                     read_only,
@@ -1647,8 +1730,20 @@ impl Actor {
                     unavailable: None,
                     gap: false,
                 });
+                if !self.model.local
+                    && self.remote_auto_control
+                    && !read_only
+                    && self.model.writable()
+                {
+                    self.request(
+                        Operation::TerminalControl { stream, take: true },
+                        Pending::Ordinary,
+                    )
+                    .await?;
+                }
             }
             Event::TerminalUnavailable { stream, message } => {
+                self.reject_stream_unsent(&stream);
                 self.attachments.remove(&stream);
                 self.restoring.remove(&stream);
                 if let Some(mut output) = self.output.remove(&stream) {
@@ -1725,8 +1820,15 @@ impl Actor {
                     .iter_mut()
                     .find(|pane| pane.stream == stream)
                 {
-                    changed = !pane.gap && (gap || missing);
-                    pane.gap |= gap || missing;
+                    let next_gap = if reset {
+                        gap
+                    } else {
+                        pane.gap || gap || missing
+                    };
+                    changed = pane.gap != next_gap;
+                    // A complete authoritative replacement repairs an old loss.
+                    // Missing older snapshot revisions are not missing screen bytes.
+                    pane.gap = next_gap;
                 }
                 self.updates
                     .send(Update::Output {
@@ -1739,6 +1841,7 @@ impl Actor {
                     .context("界面已关闭")?;
             }
             Event::TerminalExit { stream, code } => {
+                self.reject_stream_unsent(&stream);
                 self.attachments.remove(&stream);
                 self.restoring.remove(&stream);
                 if let Some(output) = self.output.get_mut(&stream) {

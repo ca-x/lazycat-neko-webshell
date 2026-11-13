@@ -1,6 +1,9 @@
 //! Desktop credentials and a UI-thread bridge to NSH native dialogs.
 mod credentials;
 mod files;
+mod lifecycle;
+
+pub(crate) use lifecycle::start_desktop_lifecycle;
 
 use super::*;
 use std::{

@@ -71,6 +71,39 @@ impl Output {
     }
 }
 impl Hc {
+    /// A completed attach remains a valid stream identity even if its reader
+    /// fails before local focus can be confirmed. Retire it through the normal
+    /// stream event after TerminalAttached, never as a fabricated controller.
+    pub async fn acquire_on_attach(&self, stream: &str, subscriber: &str) {
+        if let Err(error) = self.control(stream, subscriber, true).await {
+            let attachment = {
+                let mut attachments = self.attachments.lock().expect("hc attachments lock");
+                if attachments
+                    .get(stream)
+                    .is_some_and(|item| item.subscriber == subscriber)
+                {
+                    attachments.remove(stream)
+                } else {
+                    None
+                }
+            };
+            if let Some(attachment) = attachment {
+                attachment.cancel.cancel();
+                let event = unavailable(
+                    stream,
+                    format!(
+                        "hc initial control failed: {error}; reattach the same resource, do not create another terminal"
+                    ),
+                );
+                // Reader retirement may already be queued. Session ownership
+                // drops any duplicate after the first final stream event.
+                tokio::spawn(async move {
+                    let _ = notify(&attachment.events, event).await;
+                });
+            }
+        }
+    }
+
     pub async fn attach(
         self: &Arc<Self>,
         grant: &str,

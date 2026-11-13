@@ -296,6 +296,7 @@ impl Hc {
     }
     pub async fn control(&self, stream: &str, subscriber: &str, take: bool) -> Result<bool> {
         let (done, reply) = oneshot::channel();
+        let changed;
         {
             let mut attachments = self.attachments.lock().expect("hc attachments lock");
             let chosen = attachments.get(stream).context("hc stream not found")?;
@@ -304,6 +305,7 @@ impl Hc {
                 "hc stream is not owned"
             );
             ensure!(!take || !chosen.read_only, "hc stream is read-only");
+            changed = chosen.controller != take;
             let grant = chosen.grant.clone();
             for (id, item) in attachments
                 .iter_mut()
@@ -316,13 +318,16 @@ impl Hc {
                 };
                 if controller != item.controller {
                     item.controller = controller;
-                    if item
-                        .events
-                        .try_send(Event::TerminalControl {
-                            stream: id.clone(),
-                            controller,
-                        })
-                        .is_err()
+                    // The chosen attachment's focus is provisional until its
+                    // worker confirms the send. Never advertise failed control.
+                    if id != stream
+                        && item
+                            .events
+                            .try_send(Event::TerminalControl {
+                                stream: id.clone(),
+                                controller,
+                            })
+                            .is_err()
                     {
                         item.controller = false;
                         item.cancel.cancel();
@@ -349,8 +354,39 @@ impl Hc {
                 anyhow::bail!("hc command queue full");
             }
         }
-        reply.await.context("hc control worker stopped")??;
-        Ok(self.controlled(stream, subscriber))
+        let result = reply
+            .await
+            .context("hc control worker stopped")
+            .and_then(|result| result);
+        let mut attachments = self.attachments.lock().expect("hc attachments lock");
+        let chosen = attachments
+            .get_mut(stream)
+            .filter(|item| item.subscriber == subscriber);
+        if let Err(error) = result {
+            if let Some(chosen) = chosen {
+                chosen.controller = false;
+                chosen.cancel.cancel();
+            }
+            return Err(error);
+        }
+        let Some(chosen) = chosen else {
+            return Ok(false);
+        };
+        let controller = chosen.controller && !chosen.read_only && !chosen.cancel.is_cancelled();
+        if changed
+            && chosen
+                .events
+                .try_send(Event::TerminalControl {
+                    stream: stream.into(),
+                    controller,
+                })
+                .is_err()
+        {
+            chosen.controller = false;
+            chosen.cancel.cancel();
+            anyhow::bail!("hc control event queue full or stopped");
+        }
+        Ok(controller)
     }
     pub async fn input(&self, stream: &str, subscriber: &str, data: Vec<u8>) -> Result<()> {
         ensure!(data.len() <= 16384, "hc input exceeds limit");

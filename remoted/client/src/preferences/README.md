@@ -42,12 +42,11 @@ The persisted fields are `version: 1`, `theme_id: String`, `font_size: u8`
 of `System`, rather than snapshots of the current locale or color scheme.
 The default backend serializes as `native/hc/herdr`. Older documents without the
 field use Native; invalid values remain explicit load errors. The desktop setting
-only affects new local sessions and is hidden on remote-only Android.
+only selects the initial type on entering the app or local workspace and is hidden on remote-only Android. New sessions follow the currently selected section and ordinary backend.
 
-Use `Ui::new_session_backend() -> Option<SessionBackend>` in the local creation
-controls. `Loading` and `LoadFailed` return `None`, so creation can stay disabled
+Use `Ui::startup_backend() -> Option<SessionBackend>` only for initial navigation selection and to check whether settings have loaded. `Loading` and `LoadFailed` return `None`, so creation can stay disabled
 until storage is readable. `Ready`, `Saving` and `SaveFailed` return the last
-acknowledged value; pending writes never change the backend used for creation.
+acknowledged value; saving a preference never overrides an explicit current selection.
 Existing sessions keep their own backend.
 
 ## Translation API

@@ -204,10 +204,8 @@ async fn run_inner(
                 let becoming_ready = matches!(message.event, Event::Ready { .. });
                 if becoming_ready { ready = true; }
                 link.send(&channel.encrypt(&protocol::pack(&message)?)?).await?;
-                if becoming_ready {
-                    if let Some(name) = reported_host_name() {
-                        response(link, &mut channel, 0, Event::HostInfo { name }).await?;
-                    }
+                if becoming_ready && let Some(name) = reported_host_name() {
+                    response(link, &mut channel, 0, Event::HostInfo { name }).await?;
                 }
             }
             _ = ticks.tick(), if ready => {

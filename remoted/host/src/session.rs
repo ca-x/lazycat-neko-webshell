@@ -45,11 +45,18 @@ impl Drop for Detach {
         self.core.hc.detach_all(&self.subscriber);
     }
 }
-fn send(tx: &mpsc::Sender<Response>, id: u64, event: Event) -> Result<()> {
+async fn send(
+    tx: &mpsc::Sender<Response>,
+    id: u64,
+    event: Event,
+    cancel: &CancellationToken,
+) -> Result<()> {
     let response = Response { id, event };
     protocol::pack(&response)?;
-    tx.try_send(response)
-        .context("business response queue full or closed")
+    tokio::select! {
+        () = cancel.cancelled() => bail!("session closed"),
+        result = tx.send(response) => result.context("business response receiver closed"),
+    }
 }
 pub(crate) async fn serve(
     core: Arc<Core>,
@@ -95,7 +102,9 @@ async fn serve_inner(
                 permission: device.map_or(Permission::Operate, |d| d.permission),
                 resources: resources(core, device)?,
             },
-        )?;
+            cancel,
+        )
+        .await?;
     }
     let (events, mut incoming) = mpsc::channel(32);
     let mut streams = HashMap::<String, StreamGrant>::new();
@@ -107,6 +116,18 @@ async fn serve_inner(
                 let request = request.context("business input closed")?;
                 ensure!(request.id > last && request.id > 0, "request ID replay");
                 last = request.id;
+                if let Operation::TerminalCreate { grant } = request.operation {
+                    // Creation acquires state itself; ordinary dispatch below
+                    // intentionally holds it across existing resource operations.
+                    let mut outcome_unknown = false;
+                    let event = match core.create_granted_terminal(principal, &grant, cancel, &mut outcome_unknown).await {
+                        Ok(resource) => Event::TerminalCreated { resource },
+                        Err(_) => Event::Error { code: "REQUEST_FAILED".into(),
+                            message: "Terminal creation unavailable or not authorized; refresh resources before retrying".into(), outcome_unknown },
+                    };
+                    send(responses, request.id, event, cancel).await?;
+                    continue;
+                }
                 let outcome_unknown = matches!(request.operation, Operation::TerminalInput { .. } | Operation::TerminalResize { .. } | Operation::Herdr { .. });
                 let state = core.state.lock().await;
                 ensure!(!cancel.is_cancelled(), "session cancelled");
@@ -121,7 +142,8 @@ async fn serve_inner(
                 // Do not dequeue replay/live output until the attached response is queued.
                 let event = result.unwrap_or_else(|_| Event::Error { code: "REQUEST_FAILED".into(),
                     message: "Operation unavailable, invalid or not authorized".into(), outcome_unknown });
-                send(responses, request.id, event)?;
+                drop(state);
+                send(responses, request.id, event, cancel).await?;
             }
             event = incoming.recv() => {
                 let event = event.context("terminal event stream closed")?;
@@ -144,7 +166,8 @@ async fn serve_inner(
                         continue;
                     }
                 }
-                send(responses, 0, event)?;
+                drop(state);
+                send(responses, 0, event, cancel).await?;
             }
 
         }
@@ -206,6 +229,9 @@ async fn dispatch(
                         pane: None,
                     },
                 );
+                if access.local {
+                    core.hc.acquire_on_attach(&stream, subscriber).await;
+                }
                 return Ok(Event::TerminalAttached {
                     stream,
                     name,
@@ -229,6 +255,9 @@ async fn dispatch(
                         pane,
                     },
                 );
+                if access.local {
+                    acquire(core, subscriber, &stream).await?;
+                }
                 return Ok(Event::TerminalAttached {
                     stream,
                     name,
@@ -247,6 +276,9 @@ async fn dispatch(
                     pane: None,
                 },
             );
+            if access.local {
+                acquire(core, subscriber, &attachment.stream).await?;
+            }
             Ok(Event::TerminalAttached {
                 stream: attachment.stream,
                 name: attachment.name,
@@ -269,6 +301,9 @@ async fn dispatch(
             check_stream(&stream, streams, resources)?;
             ensure!(write, "read-only device");
             let data = protocol::decode(&data, 16_384)?;
+            if access.local {
+                acquire(core, subscriber, &stream).await?;
+            }
             if core.herdr.is_stream(&stream, subscriber) {
                 core.herdr.input(&stream, subscriber, data).await?;
             } else if core.hc.is_stream(&stream, subscriber) {
@@ -288,6 +323,9 @@ async fn dispatch(
                 !core.herdr.is_stream(&stream, subscriber),
                 "Herdr pane size belongs to its layout; terminal resize is unsupported"
             );
+            if access.local {
+                acquire(core, subscriber, &stream).await?;
+            }
             if core.hc.is_stream(&stream, subscriber) {
                 core.hc.resize(&stream, subscriber, cols, rows).await?;
             } else {
@@ -347,10 +385,23 @@ async fn dispatch(
             })?;
             Ok(Event::Herdr { data })
         }
-        // No remote shell creation, filesystem paths or caller-selected Herdr endpoints.
+        // Creation is staged before the state guard. No filesystem paths or
+        // caller-selected Herdr endpoints are accepted here.
         _ => bail!("unsupported operation"),
     }
 }
+async fn acquire(core: &Core, subscriber: &str, stream: &str) -> Result<()> {
+    let acquired = if core.herdr.is_stream(stream, subscriber) {
+        core.herdr.control(stream, subscriber, true)?
+    } else if core.hc.is_stream(stream, subscriber) {
+        core.hc.control(stream, subscriber, true).await?
+    } else {
+        core.terminals.control(stream, subscriber, true)?
+    };
+    ensure!(acquired, "local terminal is unavailable");
+    Ok(())
+}
+
 fn check_stream(
     stream: &str,
     streams: &HashMap<String, StreamGrant>,
@@ -363,4 +414,27 @@ fn check_stream(
         "stream is not authorized"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod flow_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_full_response_queue_waits_for_consumption_instead_of_ending_the_session() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let cancel = CancellationToken::new();
+        send(&tx, 1, Event::Ok, &cancel).await.unwrap();
+        let sending = {
+            let cancel = cancel.clone();
+            tokio::spawn(async move { send(&tx, 2, Event::Ok, &cancel).await })
+        };
+        tokio::task::yield_now().await;
+        assert!(!sending.is_finished(), "a slow UI must exert backpressure");
+        assert!(!cancel.is_cancelled());
+        assert_eq!(rx.recv().await.unwrap().id, 1);
+        sending.await.unwrap().unwrap();
+        assert_eq!(rx.recv().await.unwrap().id, 2);
+        assert!(!cancel.is_cancelled());
+    }
 }

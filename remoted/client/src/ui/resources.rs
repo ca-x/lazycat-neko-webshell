@@ -400,34 +400,61 @@ pub(super) fn open_pane(ui: Ui, id: &str) {
     ui.navigation.show_session();
 }
 
-fn local_actions(ui: Ui) -> impl IntoElement {
+/// Creation follows the current explicit section, never a startup default.
+#[cfg(not(target_os = "android"))]
+pub(super) fn creation_backend(ui: Ui) -> neko_remoted_protocol::messages::SessionBackend {
+    use neko_remoted_protocol::messages::SessionBackend;
+    match ui.navigation.section.get() {
+        Section::Herdr => SessionBackend::Herdr,
+        Section::Terminal => match ui.navigation.ordinary_backend.get() {
+            SessionBackend::Hc => SessionBackend::Hc,
+            SessionBackend::Native | SessionBackend::Herdr => SessionBackend::Native,
+        },
+    }
+}
+
+pub(super) fn local_actions(ui: Ui) -> impl IntoElement {
     #[cfg(not(target_os = "android"))]
     {
+        let preferences = use_context::<crate::preferences::Ui>();
+        let enabled = move || {
+            preferences
+                .and_then(|settings| settings.startup_backend())
+                .is_some()
+                && ui.model.with(|model| {
+                    use neko_remoted_protocol::messages::SessionBackend;
+                    model.local
+                        && model.writable()
+                        && !model.opening
+                        && !model.host_busy
+                        && match creation_backend(ui) {
+                            SessionBackend::Native => true,
+                            SessionBackend::Hc => model.host.as_ref().is_some_and(|host| {
+                                host.hc.status == neoko_terminal_host::HcStatus::Ready
+                            }),
+                            SessionBackend::Herdr => model.host.as_ref().is_some_and(|host| {
+                                host.herdr.status == neoko_terminal_host::HerdrStatus::Ready
+                            }),
+                        }
+                })
+        };
         when(
-            move || ui.model.with(|m| m.local && m.ready()),
+            move || ui.model.with(|model| model.local && model.ready()),
             move || {
-                let preferences = use_context::<crate::preferences::Ui>();
                 icon_action(
                     Icon::Add,
-                    move || match preferences.and_then(|settings| settings.new_session_backend()) {
-                        Some(neko_remoted_protocol::messages::SessionBackend::Hc) => "新建 hc 终端",
-                        Some(neko_remoted_protocol::messages::SessionBackend::Herdr) => {
-                            "新建 Herdr 会话"
-                        }
-                        _ => "新建终端",
+                    move || match creation_backend(ui) {
+                        neko_remoted_protocol::messages::SessionBackend::Hc => "新建 hc 终端",
+                        neko_remoted_protocol::messages::SessionBackend::Herdr => "新建 Herdr 会话",
+                        neko_remoted_protocol::messages::SessionBackend::Native => "新建终端",
                     },
                     || false,
+                    move || !enabled(),
                     move || {
-                        ui.model.with(|m| m.opening || m.host_busy)
-                            || preferences
-                                .and_then(|settings| settings.new_session_backend())
-                                .is_none()
-                    },
-                    move || {
-                        if let Some(backend) =
-                            preferences.and_then(|settings| settings.new_session_backend())
-                        {
-                            ui.send(Command::CreateLocalSession { backend });
+                        if enabled() {
+                            ui.send(Command::CreateLocalSession {
+                                backend: creation_backend(ui),
+                            });
                         }
                     },
                 )

@@ -1,83 +1,115 @@
-//! A selectable fixed grid for the shared VT buffer and its source geometry.
+//! A native viewport canvas observes Ghostty without answering VT probes.
 
 use super::{terminal_colors::colors, terminal_surface::Buffer};
-use crate::preferences::{current_context, tr};
-use crate::terminal::GridCell;
+use crate::preferences::current_context;
 use nsh_core::prelude::*;
+use std::{rc::Rc, time::Duration};
 
-/// Observers preserve source geometry. Only the active controller may fit a PTY to its viewport.
+#[path = "terminal_drawing.rs"]
+mod drawing;
+#[path = "terminal_geometry.rs"]
+mod geometry;
+#[path = "terminal_menu.rs"]
+mod menu;
+#[path = "terminal_selection.rs"]
+mod selection;
+#[path = "terminal_viewport.rs"]
+mod viewport;
+
+#[cfg(test)]
+#[path = "terminal_observer_tests.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "terminal_test_support.rs"]
+pub(crate) mod test_support;
+
+use selection::Interaction;
+
+/// Observe source geometry without terminal input actions (also used by fixtures).
+#[cfg(test)]
 pub fn render(
     buffer: Buffer,
     size: Signal<Option<(u16, u16)>>,
     resize: impl Fn() -> bool + 'static,
 ) -> impl IntoElement {
+    render_interactive(buffer, size, resize, computed(|| false), |_| {})
+}
+
+/// Only the active controller may fit a PTY; paste remains owned by its input adapter.
+pub fn render_interactive(
+    buffer: Buffer,
+    size: Signal<Option<(u16, u16)>>,
+    resize: impl Fn() -> bool + 'static,
+    writable: Memo<bool>,
+    paste: impl Fn(String) + 'static,
+) -> impl IntoElement {
     let appearance = current_context();
-    let viewport = signal((px(0.0), px(0.0)));
-    let family = crate::fonts::terminal_family;
-    let cell_width = computed(move || {
-        let family = family();
-        let font_size = appearance.font_size();
-        let css = format!("{font_size}px {family}");
-        measure_text(&css, "0000000000") / 10.0
-    });
-    let layout_buffer = buffer.clone();
+    let viewport = signal((0.0, 0.0));
+    let fonts = computed(drawing::Fonts::measure);
+    let grid = computed(move || fonts.with(|fonts| fonts.grid));
+    let selection = Interaction::new(grid);
+    selection.observe(buffer.clone());
+    let layout = buffer.clone();
     effect(move || {
         let (width, height) = viewport.get();
-        if !resize() || width.0 <= 1.0 || height.0 <= 1.0 {
-            return;
+        if resize()
+            && let Some(fitted) = grid.get().fit(width, height)
+        {
+            layout.resize(fitted);
+            size.set(Some((fitted.cols, fitted.rows)));
         }
-        let cell = cell_width.get().0;
-        if cell <= 0.0 {
-            return;
-        }
-        let cols = (width.0 / cell).floor().clamp(2.0, 1000.0) as u16;
-        let rows = (height.0 / appearance.line_height())
-            .floor()
-            .clamp(2.0, 1000.0) as u16;
-        layout_buffer.resize(nsh_base::TerminalSize::new(cols, rows));
-        size.set(Some((cols, rows)));
     });
-    let count = buffer.clone();
-    let rows = buffer.clone();
+    let blink = signal(true);
+    let updates = buffer.clone();
+    effect(move || {
+        updates.revision.get();
+        blink.set(true);
+        if appearance.cursor_blink() && !reduce_motion() {
+            // One clock per terminal, disposed/restarted on output or preference changes.
+            let task = set_interval(Duration::from_millis(600), move || {
+                blink.update(|on| *on = !*on)
+            });
+            cleanup(move || task.cancel());
+        }
+    });
     let geometry = buffer.clone();
+    let content_width = computed(move || {
+        (f32::from(geometry.size.get().cols) * grid.get().cell_width)
+            .max(viewport.get().0 - 2.0 * geometry::PADDING)
+    });
     let height = buffer.clone();
+    let viewport_height = computed(move || {
+        (viewport.get().1 - 2.0 * geometry::PADDING)
+            .max(0.0)
+            .min(height.line_count() as f32 * grid.get().row_height)
+    });
     let failures = buffer.clone();
     let failure = computed(move || failures.failure());
-    let content_width = computed(move || {
-        px((geometry.size.get().cols as f32 * cell_width.get().0).max(viewport.get().0.0))
-    });
-    let list = virtual_list(
-        move || count.line_count(),
-        move |position| row(rows.clone(), position, cell_width, content_width),
-    )
-    .test_id("terminal-observer")
-    .label(move || tr("终端输出，可选择和复制"))
-    .alignment(ListAlignment::Bottom)
-    .follow_end(move || px(appearance.line_height()))
-    .estimated_item_size(move || px(appearance.line_height()))
-    .selectable(true)
-    // This is the horizontal scroll's child: a zero flex basis collapses the
-    // initial width and leaves GTK list cells without layout. Keep source columns.
-    .w(move || Length::from(content_width.get()))
-    .flex_shrink(0.0)
-    // Bottom alignment follows real scrollback; capping the viewport at the
-    // content height keeps a short fixed screen at the top of a taller window.
-    .max_h(move || px(height.line_count() as f32 * appearance.line_height()))
-    .min_h(px(0.0))
-    .overflow_hidden()
-    .font_family(family)
-    .text_size(move || px(appearance.font_size() as f32))
-    .text_color(move || appearance.foreground())
-    .bg(move || appearance.background());
+    let content_rows = viewport::render(
+        buffer.clone(),
+        fonts,
+        content_width,
+        viewport_height,
+        selection,
+        blink,
+    );
+    let content = scroll()
+        .horizontal()
+        .test_id("terminal-observer-horizontal")
+        .flex_1()
+        .min_h(px(0.0))
+        .on_scroll(move |event: &ScrollEvent| selection.offset_x.set(event.offset.x.0))
+        .child(content_rows);
+    let content = selection.wrap(buffer.clone(), content);
+    let copy = buffer.clone();
     view()
         .flex_1()
         .min_h(px(0.0))
         .overflow_hidden()
         .bg(move || appearance.background())
         .on_layout(move |bounds: &Bounds<Points>| {
-            if bounds.size.width.0 > 0.0 && bounds.size.height.0 > 0.0 {
-                viewport.set((bounds.size.width, bounds.size.height));
-            }
+            viewport.set((bounds.size.width.0, bounds.size.height.0));
         })
         .child(when(
             move || failure.get().is_some(),
@@ -94,202 +126,39 @@ pub fn render(
             },
         ))
         .child(
-            scroll()
-                .horizontal()
-                .test_id("terminal-observer-horizontal")
+            view()
                 .flex_1()
                 .min_h(px(0.0))
-                .child(list),
+                .p(px(geometry::PADDING))
+                .child(menu::wrap(
+                    buffer,
+                    selection,
+                    writable,
+                    Rc::new(paste),
+                    content,
+                )),
         )
-}
-
-fn row(
-    buffer: Buffer,
-    position: Position,
-    width: Memo<Points>,
-    content_width: Memo<Points>,
-) -> impl IntoElement {
-    let appearance = current_context();
-    let lines = buffer.clone();
-    let cells = computed(move || visible_cells(lines.cells(position.index())));
-    let cursor = computed(move || {
-        let cursor = buffer.cursor()?;
-        let first = buffer
-            .line_count()
-            .saturating_sub(buffer.size.get().rows as usize);
-        (position.index() == first + cursor.row as usize).then_some(cursor.col)
-    });
-    view()
-        .w(move || Length::from(content_width.get()))
-        .h(move || px(appearance.line_height()))
-        .flex_shrink(0.0)
-        .justify_center()
-        .test_id("terminal-grid-row")
-        .label(move || {
-            cells
-                .get()
-                .iter()
-                .map(|cell| cell.text.as_str())
-                .collect::<String>()
-        })
-        .child(each(
-            move || cells.get(),
-            |cell| cell.column,
-            move |cell, _| cell_view(cell, width),
-        ))
         .child(when(
-            move || cursor.get().is_some(),
+            move || selection.selected.get().active,
             move || {
                 view()
                     .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(move || Length::from(width.get() * cursor.get().unwrap_or(0) as f32))
-                    .w(move || Length::from(width.get()))
-                    .test_id("terminal-observer-cursor")
-                    .bg(move || appearance.cursor())
-                    .opacity(0.25)
-                    .pointer_events(PointerEvents::None)
+                    .top_2()
+                    .right_2()
+                    .flex_row()
+                    .gap_1()
+                    .child(super::controls::action("复制", false, || false, {
+                        let copy = copy.clone();
+                        move || selection.copy(&copy)
+                    }))
+                    .child(super::controls::action(
+                        "取消",
+                        false,
+                        || false,
+                        move || {
+                            selection.selected.set(selection::Selection::default());
+                        },
+                    ))
             },
         ))
-}
-
-/// Omit unpainted trailing slots, while keeping internal spaces and all styled cells.
-/// Every remaining text is a complete native grapheme, never a Rust `char` fragment.
-fn visible_cells(mut cells: Vec<GridCell>) -> Vec<GridCell> {
-    let end = cells
-        .iter()
-        .rposition(|cell| cell.text != " " || cell.style != nsh_base::TerminalStyle::default())
-        .map_or(0, |index| index + 1);
-    if end == 0 {
-        // Empty lines still participate in native selection. An empty text
-        // preserves the line break without copying padding spaces.
-        cells.truncate(1);
-        if let Some(cell) = cells.first_mut() {
-            cell.text.clear();
-        }
-    } else {
-        cells.truncate(end);
-    }
-    cells
-}
-
-fn cell_view(cell: ReadSignal<GridCell>, width: Memo<Points>) -> AnyElement {
-    let appearance = current_context();
-    let glyph = text(move || cell.with(|cell| cell.text.clone()))
-        .continues_text(move || cell.with(|cell| cell.column != 0))
-        .font_family(mono)
-        .text_size(move || px(appearance.font_size() as f32))
-        .text_left()
-        .writing_direction(WritingDirection::Ltr)
-        .number_of_lines(1u32)
-        .text_overflow(nsh_core::EllipsizeMode::Clip)
-        .w(move || Length::from(width.get() * cell.with(|cell| cell.width) as f32))
-        .select_text()
-        .selection_color(move || appearance.selection())
-        .text_color(move || {
-            colors(cell.with(|cell| cell.style))
-                .0
-                .unwrap_or_else(|| appearance.foreground())
-        })
-        .font_weight(FontWeight::NORMAL)
-        .style_when(
-            move || cell.with(|cell| cell.style.bold),
-            |style| style.font_weight(FontWeight::BOLD),
-        )
-        .style_when(
-            move || cell.with(|cell| cell.style.italic),
-            |style| style.italic(),
-        )
-        .style_when(
-            move || cell.with(|cell| cell.style.underline),
-            |style| style.underline(),
-        )
-        .style_when(
-            move || cell.with(|cell| cell.style.strikethrough),
-            |style| style.line_through(),
-        )
-        .opacity(move || {
-            cell.with(|cell| {
-                if cell.style.hidden {
-                    0.0_f32
-                } else if cell.style.dim {
-                    0.6_f32
-                } else {
-                    1.0_f32
-                }
-            })
-        });
-    view()
-        .absolute()
-        .top_0()
-        .bottom_0()
-        .left(move || Length::from(width.get() * cell.with(|cell| cell.column) as f32))
-        .w(move || Length::from(width.get() * cell.with(|cell| cell.width) as f32))
-        .overflow_hidden()
-        .justify_center()
-        .bg(move || {
-            colors(cell.with(|cell| cell.style))
-                .1
-                .unwrap_or_else(|| appearance.background().opacity(0.0))
-        })
-        .child(glyph)
-        .into_element()
-}
-
-fn mono() -> SharedString {
-    crate::fonts::terminal_family()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use nsh_base::{TerminalEmulator, TerminalSize};
-    use nsh_core::selection::{SelectionModel, SelectionTexts};
-
-    struct Selection(Vec<(usize, GridCell)>);
-    impl SelectionTexts for Selection {
-        fn len(&self) -> usize {
-            self.0.len()
-        }
-        fn content(&self, index: usize) -> &str {
-            &self.0[index].1.text
-        }
-        fn frame(&self, index: usize) -> Bounds<Points> {
-            let (row, cell) = &self.0[index];
-            Bounds::new(
-                Point::new(px(cell.column as f32 * 8.0), px(*row as f32 * 18.0)),
-                Size::new(px(cell.width as f32 * 8.0), px(18.0)),
-            )
-        }
-        fn offset_at(&self, _: usize, _: Point<Points>) -> u32 {
-            0
-        }
-        fn continues(&self, index: usize) -> bool {
-            self.0[index].1.column != 0
-        }
-    }
-
-    #[test]
-    fn native_selection_copies_cells_with_wide_graphemes_and_preserves_blank_lines() {
-        for blank_lines in [1, 2, 4] {
-            let source = format!("one猫e\u{301}{}two", "\r\n".repeat(blank_lines + 1));
-            let expected = format!("one猫e\u{301}{}two", "\n".repeat(blank_lines + 1));
-            let mut emulator =
-                crate::terminal::GhosttyEmulator::new(TerminalSize::new(80, 10), 0).unwrap();
-            emulator.feed(source.as_bytes());
-            let texts = Selection(
-                (0..blank_lines + 2)
-                    .flat_map(|row| {
-                        visible_cells(emulator.cells(row))
-                            .into_iter()
-                            .map(move |cell| (row, cell))
-                    })
-                    .collect(),
-            );
-            let mut selection = SelectionModel::default();
-            assert!(selection.select_all(&texts));
-            assert_eq!(selection.text(&texts), expected);
-        }
-    }
 }

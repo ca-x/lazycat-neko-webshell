@@ -57,6 +57,10 @@ impl Actor {
 
     pub(super) async fn create_local_session(&mut self, backend: SessionBackend) -> Result<()> {
         ensure!(self.model.local && self.model.ready(), "请先选择本机工作区");
+        ensure!(
+            self.model.panes.len() + self.opening_panes() < 8,
+            "最多打开 8 个终端"
+        );
         let host = self.host.clone().context("本机终端服务不可用")?;
         let generation = self.model.generation;
         let scope = self.scope.clone();

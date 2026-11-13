@@ -6,6 +6,7 @@ mod peer;
 mod relay;
 mod session;
 mod state;
+mod terminal_creation;
 pub mod terminals;
 
 use anyhow::{Context, Result, ensure};
@@ -246,23 +247,34 @@ pub struct LocalSession {
     cancel: CancellationToken,
     next: u64,
 }
+
+/// The operation was rejected before it entered the local transport.
+#[derive(Debug)]
+pub struct RequestNotQueued;
+impl fmt::Display for RequestNotQueued {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("local request was not queued; the receiver is busy or closed")
+    }
+}
+impl std::error::Error for RequestNotQueued {}
+
 impl LocalSession {
     pub async fn request(&mut self, operation: Operation) -> Result<u64> {
         ensure!(!self.cancel.is_cancelled(), "local session closed");
+        let permit = self.requests.try_reserve().map_err(|_| RequestNotQueued)?;
         let id = self.next;
-        self.next = self.next.checked_add(1).context("request IDs exhausted")?;
+        let next = self.next.checked_add(1).context("request IDs exhausted")?;
         let request = neko_remoted_protocol::messages::Request { id, operation };
         neko_remoted_protocol::pack(&request)?;
-        self.requests
-            .try_send(request)
-            .context("local request queue full or closed")?;
+        self.next = next;
+        permit.send(request);
         Ok(id)
     }
     pub async fn receive(&mut self) -> Result<Response> {
         tokio::select! {
             biased;
-            () = self.cancel.cancelled() => anyhow::bail!("local session closed"),
             response = self.responses.recv() => response.context("local session closed"),
+            () = self.cancel.cancelled() => anyhow::bail!("local session closed"),
         }
     }
     pub async fn close(self) {

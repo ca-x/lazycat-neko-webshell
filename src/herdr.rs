@@ -527,6 +527,10 @@ pub(crate) enum HerdrTerminalOperation {
     Read {
         pane_id: String,
     },
+    /// Authoritative styled viewport for terminal clients; MCP reads remain plaintext.
+    ReadAnsi {
+        pane_id: String,
+    },
     WaitForOutput {
         pane_id: String,
         after_sequence: u64,
@@ -598,6 +602,11 @@ pub(crate) fn terminal_mcp_operation_request(
         HerdrTerminalOperation::Read { pane_id } => (
             "pane.read",
             json!({ "pane_id": pane_id, "source": "recent" }),
+            Some(pane_id),
+        ),
+        HerdrTerminalOperation::ReadAnsi { pane_id } => (
+            "pane.read",
+            json!({ "pane_id": pane_id, "source": "visible", "format": "ansi", "strip_ansi": false }),
             Some(pane_id),
         ),
         HerdrTerminalOperation::WaitForOutput {
@@ -2428,6 +2437,27 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn terminal_ansi_reads_request_complete_visible_styling_without_changing_mcp_reads() {
+        let (method, params, pane) =
+            terminal_mcp_operation_request(HerdrTerminalOperation::ReadAnsi {
+                pane_id: "w1:p1".into(),
+            })
+            .unwrap();
+        assert_eq!(method, "pane.read");
+        assert_eq!(pane.as_deref(), Some("w1:p1"));
+        assert_eq!(
+            params,
+            json!({"pane_id":"w1:p1","source":"visible","format":"ansi","strip_ansi":false})
+        );
+        let (_, plain, pane) = terminal_mcp_operation_request(HerdrTerminalOperation::Read {
+            pane_id: "w1:p1".into(),
+        })
+        .unwrap();
+        assert_eq!(pane.as_deref(), Some("w1:p1"));
+        assert_eq!(plain, json!({"pane_id":"w1:p1","source":"recent"}));
     }
 
     #[test]

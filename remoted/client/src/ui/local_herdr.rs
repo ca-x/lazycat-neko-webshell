@@ -16,13 +16,10 @@ fn status(ui: Ui) -> Option<HerdrStatus> {
 }
 
 pub fn render(ui: Ui) -> impl IntoElement {
-    let preferences = use_context::<crate::preferences::Ui>();
     when(
         move || {
             ui.model.with(|model| model.local)
-                && (ui.navigation.section.get() == super::Section::Herdr
-                    || preferences.and_then(|settings| settings.new_session_backend())
-                        == Some(neko_remoted_protocol::messages::SessionBackend::Herdr))
+                && ui.navigation.section.get() == super::Section::Herdr
         },
         move || {
             view()

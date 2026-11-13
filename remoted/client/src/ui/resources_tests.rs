@@ -3,7 +3,8 @@ use crate::{
     controller::{Client, Model, Phase},
     preferences::{Preferences, catalog::Catalog},
 };
-use neko_remoted_protocol::messages::SessionBackend;
+use neko_remoted_protocol::messages::{Permission, SessionBackend};
+use neoko_terminal_host::{HcSnapshot, HcStatus, HerdrSnapshot, HerdrStatus, HostSnapshot};
 use nsh_core::{
     element::Root,
     platform::{Environment, Locale, Os},
@@ -17,15 +18,44 @@ fn fixture(backend: SessionBackend, local: bool, section: Section) -> impl IntoE
     values.language = crate::preferences::Language::ZhCn;
     crate::preferences::Ui::from_loaded(values).unwrap();
     let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+    let hc = HcSnapshot {
+        status: HcStatus::Ready,
+        ..HcSnapshot::default()
+    };
+    let herdr = HerdrSnapshot {
+        status: HerdrStatus::Ready,
+        ..HerdrSnapshot::default()
+    };
     let ui = Ui::new(
         Model {
             local,
             phase: Phase::Ready,
+            permission: Some(Permission::Operate),
+            host: Some(HostSnapshot {
+                revision: 1,
+                hc,
+                herdr,
+                enabled: false,
+                relay: String::new(),
+                status: String::new(),
+                error: String::new(),
+                invitation: None,
+                pending: Vec::new(),
+                devices: Vec::new(),
+                resources: Vec::new(),
+            }),
             ..Model::default()
         },
         Client::fixture(sender),
     );
     ui.navigation.section.set(section);
+    ui.navigation
+        .ordinary_backend
+        .set(if backend == SessionBackend::Hc {
+            SessionBackend::Hc
+        } else {
+            SessionBackend::Native
+        });
     let command = signal(String::new());
     spawn(async move {
         if let Some(value) = receiver.recv().await {
@@ -59,6 +89,11 @@ fn RemoteFixture() -> impl IntoElement {
     fixture(SessionBackend::Hc, false, Section::Terminal)
 }
 
+#[component]
+fn DefaultHerdrOrdinaryFixture() -> impl IntoElement {
+    fixture(SessionBackend::Herdr, true, Section::Terminal)
+}
+
 fn configuration(root: Root) -> EngineConfig {
     EngineConfig {
         environment: Environment {
@@ -71,11 +106,16 @@ fn configuration(root: Root) -> EngineConfig {
 }
 
 #[test]
-fn new_session_action_sends_the_acknowledged_backend_in_both_sections() -> Result<(), String> {
+fn new_session_action_uses_current_section_and_keeps_explicit_hc() -> Result<(), String> {
     for (root, label, expected) in [
         (Root::of::<NativeFixture>(), "新建终端", "Native"),
         (Root::of::<HcFixture>(), "新建 hc 终端", "Hc"),
         (Root::of::<HerdrFixture>(), "新建 Herdr 会话", "Herdr"),
+        (
+            Root::of::<DefaultHerdrOrdinaryFixture>(),
+            "新建终端",
+            "Native",
+        ),
     ] {
         let mut app = Headless::start(configuration(root)).map_err(|error| error.to_string())?;
         app.wait_for(label)?;

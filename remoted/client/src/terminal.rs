@@ -153,6 +153,21 @@ impl GhosttyEmulator {
     pub fn failure(&self) -> Option<Failure> {
         self.0.borrow().failure.clone()
     }
+
+    /// Read image placements across the client's visible global row range.
+    pub(crate) fn images(
+        &self,
+        visible_rows: std::ops::Range<usize>,
+        cell_width: u32,
+        cell_height: u32,
+    ) -> Vec<neko_ghostty::kitty::Placement> {
+        self.0
+            .borrow_mut()
+            .query("render images", |kernel| {
+                kernel.images(visible_rows, cell_width, cell_height)
+            })
+            .unwrap_or_default()
+    }
 }
 
 fn color(color: StyleColor) -> Option<TerminalColor> {
@@ -275,6 +290,7 @@ impl TerminalEmulator for GhosttyEmulator {
 }
 
 pub fn initialize() -> Result<TerminalEmulatorFactory, Error> {
+    neko_ghostty::initialize_graphics()?;
     let mut kernel = Emulator::new(80, 24, 1000)?;
     kernel.line(0)?;
     kernel.cursor()?;
@@ -294,6 +310,24 @@ pub fn factory() -> TerminalEmulatorFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_snapshot_queries_preserve_text_styles_cursor_and_input_modes() {
+        let mut emulator = GhosttyEmulator::new(TerminalSize::new(80, 24), 100).unwrap();
+        assert!(emulator.line(0).text().trim().is_empty());
+        emulator.feed("\x1b[31m唯一猫\x1b[0m\x1b[?2004h".as_bytes());
+        assert!(emulator.images(0..24, 8, 17).is_empty());
+        let line = emulator.line(0);
+        let cursor = emulator.cursor();
+        assert!(line.text().contains("唯一猫"));
+        for (cw, ch) in [(8, 17), (9, 20), (8, 17)] {
+            assert!(emulator.images(0..24, cw, ch).is_empty());
+            assert_eq!(emulator.line(0), line);
+            assert_eq!(emulator.cursor(), cursor);
+            assert!(emulator.modes().bracketed_paste);
+            assert!(emulator.failure().is_none());
+        }
+    }
 
     #[test]
     fn renderer_never_replies_to_queries_including_replay() {

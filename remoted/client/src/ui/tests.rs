@@ -226,8 +226,8 @@ fn ObserverScrollFixture() -> impl IntoElement {
     terminal_observer::render(surface.buffer, signal(None), || false)
 }
 
-fn start<C: Component<Props = ()>>(width: f32, scheme: ColorScheme) -> Headless {
-    let mut app = Headless::start(EngineConfig {
+fn unrendered<C: Component<Props = ()>>(width: f32, scheme: ColorScheme) -> Headless {
+    Headless::start(EngineConfig {
         viewport: Size::new(px(width), px(844.0)),
         environment: Environment {
             os: Os::Android,
@@ -239,9 +239,60 @@ fn start<C: Component<Props = ()>>(width: f32, scheme: ColorScheme) -> Headless 
             Root::of::<C>().tokens(nsh_base::tokens_of(Some(include_str!("theme.json"))).unwrap()),
         )
     })
-    .unwrap();
+    .unwrap()
+}
+
+fn start<C: Component<Props = ()>>(width: f32, scheme: ColorScheme) -> Headless {
+    let mut app = unrendered::<C>(width, scheme);
     app.first_render().unwrap();
     app
+}
+
+fn recorded<C: Component<Props = ()>>(
+    width: f32,
+    scheme: ColorScheme,
+) -> (Headless, terminal_observer::test_support::Canvases) {
+    let mut app = unrendered::<C>(width, scheme);
+    let canvases = terminal_observer::test_support::Canvases::observe(&mut app);
+    app.first_render().unwrap();
+    (app, canvases)
+}
+
+fn copy_first_word(app: &mut Headless) -> String {
+    copy_first_word_checked(app, |_| {})
+}
+
+fn copy_first_word_checked(app: &mut Headless, selected: impl FnOnce(&Headless)) -> String {
+    let target = app
+        .screen()
+        .layout_nodes()
+        .into_iter()
+        .find(|node| node.test_id.as_deref() == Some("terminal-selection"))
+        .unwrap();
+    let mut held = nsh_core::PressEvent::default();
+    held.position = nsh_core::Point::new(px(4.0), px(3.0));
+    held.page_position = target.bounds.origin + held.position;
+    held.clicks = 2;
+    app.engine().control().dispatch_event(
+        target.id,
+        nsh_core::EventKind::PressDown,
+        nsh_core::EventPayload::Press(held),
+    );
+    app.engine().control().dispatch_event(
+        target.id,
+        nsh_core::EventKind::LongPress,
+        nsh_core::EventPayload::Press(held),
+    );
+    app.wait_for("text:复制").unwrap();
+    selected(app);
+    app.press("text:复制").unwrap();
+    let copied = app
+        .screen()
+        .clipboard()
+        .expect("selected terminal text was copied")
+        .to_owned();
+    app.press("取消").unwrap();
+    copied
 }
 
 #[component]
@@ -389,21 +440,34 @@ fn readonly_and_uncontrolled_panes_reject_edits_but_keep_selectable_output() {
         app.wait_for("terminal-observer").unwrap();
         assert!(!app.screen().enabled("terminal-native-input").unwrap());
         assert!(app.type_text("terminal-native-input", "x").is_err());
-        assert!(
-            app.screen()
-                .in_selectable_view("terminal-observer")
-                .unwrap()
-        );
+        assert!(app.screen().matches("id:terminal-selection").unwrap());
     }
 }
 
 #[test]
 fn terminal_control_switch_preserves_ansi_state_without_duplicate_feed_or_query_replies() {
-    let mut app = start::<TerminalModesFixture>(390.0, ColorScheme::Dark);
+    let (mut app, canvases) = recorded::<TerminalModesFixture>(390.0, ColorScheme::Dark);
     app.wait_for("terminal-observer").unwrap();
     app.press("测试追加输出").unwrap();
-    app.wait_for("唯一猫").unwrap();
-    assert!(app.screen().in_selectable_view("唯一猫").unwrap());
+    assert!(canvases.text(&app).contains("唯一猫"));
+    assert_eq!(
+        canvases.glyph(&app, "唯").color,
+        nsh_core::color::rgb(0xf38ba8).into()
+    );
+    assert_eq!(
+        copy_first_word_checked(&mut app, |app| {
+            let theme = crate::preferences::catalog::Catalog::shared()
+                .unwrap()
+                .find("catppuccin-mocha")
+                .unwrap();
+            assert!(canvases.has_fill(
+                app,
+                nsh_core::color::rgb(theme.selection_background).into(),
+                3.0 * canvases.glyph(app, "唯").width.0
+            ));
+        }),
+        "唯一猫"
+    );
     app.press("测试读取缓冲").unwrap();
     app.wait_until("colored VT snapshot", Duration::from_secs(3), |screen| {
         screen
@@ -544,15 +608,11 @@ fn forgetting_a_binding_is_explicitly_local_and_sends_the_exact_binding() {
 
 #[test]
 fn readonly_observer_has_real_scrollback_and_selectable_rows_without_an_input() {
-    let mut app = start::<ObserverScrollFixture>(390.0, ColorScheme::Light);
+    let (mut app, canvases) = recorded::<ObserverScrollFixture>(390.0, ColorScheme::Light);
     app.wait_for("terminal-observer").unwrap();
     app.scroll("terminal-observer", px(-180.0)).unwrap();
-    assert!(app.screen().texts().join("").contains("ROW-"));
-    assert!(
-        app.screen()
-            .in_selectable_view("id:terminal-grid-row >> nth=0")
-            .unwrap()
-    );
+    assert!(canvases.text(&app).contains("ROW-"));
+    assert!(app.screen().matches("id:terminal-selection").unwrap());
     assert_eq!(
         app.screen()
             .input_text("远程终端；取得控制权后可输入")
@@ -770,7 +830,7 @@ fn observer_keeps_source_columns_and_horizontal_scroll_after_zero_size_mount() -
         list.bounds,
         viewport.bounds,
     );
-    assert!(app.screen().in_selectable_view("PLAIN screen output")?);
+    assert_eq!(copy_first_word(&mut app), "PLAIN");
     app.scroll("terminal-observer-horizontal", px(120.0))?;
     let scrolled = app.screen().layout_nodes();
     let moved = scrolled
@@ -780,7 +840,7 @@ fn observer_keeps_source_columns_and_horizontal_scroll_after_zero_size_mount() -
     assert!(moved.bounds.origin.x < list.bounds.origin.x);
     app.set_viewport(Size::new(px(1200.0), px(1000.0)))?;
     app.wait_for("PLAIN screen output")?;
-    assert!(app.screen().in_selectable_view("PLAIN screen output")?);
+    assert_eq!(copy_first_word(&mut app), "PLAIN");
     Ok(())
 }
 
@@ -797,29 +857,21 @@ fn UnicodeGridFixture() -> impl IntoElement {
 
 #[test]
 fn native_grid_keeps_cjk_combining_and_emoji_at_ghostty_columns() -> Result<(), String> {
-    let mut app = start::<UnicodeGridFixture>(1000.0, ColorScheme::Dark);
+    let (mut app, canvases) = recorded::<UnicodeGridFixture>(1000.0, ColorScheme::Dark);
     app.wait_for("terminal-observer")?;
-    let nodes = app.screen().layout_nodes();
-    let glyph = |want: &str| {
-        nodes
-            .iter()
-            .find(|node| {
-                node.text
-                    .as_ref()
-                    .is_some_and(|text| text.text.text == want)
-            })
-            .ok_or_else(|| format!("missing grapheme {want:?}"))
-    };
     // Compare the same source column across independent rows. This remains
     // valid when the native platform rounds the measured cell width to pixels.
     for (left, right) in [("A", "B"), ("C", "D"), ("Z", "Y")] {
         assert!(
-            (glyph(left)?.bounds.origin.x.0 - glyph(right)?.bounds.origin.x.0).abs() < 0.5,
+            (canvases.glyph(&app, left).x - canvases.glyph(&app, right).x).abs() < 0.5,
             "{left} and {right} must occupy the same native column"
         );
     }
-    assert!(glyph("e\u{301}")?.bounds.size.width.0 > 0.0);
-    assert!(glyph("👩‍👩‍👧‍👦")?.bounds.size.width.0 > 0.0);
-    assert!(app.screen().in_selectable_view("text:A")?);
+    assert!(canvases.glyph(&app, "e\u{301}").width.0 > 0.0);
+    let font = canvases.glyph(&app, "猫").font;
+    assert_eq!(font.size.0, 14.0);
+    assert!(font.family.unwrap().contains("Maple Mono NF CN"));
+    assert!(canvases.glyph(&app, "👩‍👩‍👧‍👦").width.0 > 0.0);
+    assert!(app.screen().matches("id:terminal-selection")?);
     Ok(())
 }

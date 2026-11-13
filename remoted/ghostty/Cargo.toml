@@ -7,4 +7,6 @@ publish = false
 [workspace]
 
 [dependencies]
-libghostty-vt = { git = "https://github.com/uzaaft/libghostty-rs", rev = "cd4d497e8c698b27054a677ce19d1bd1a1a4d8bf", default-features = false }
+libghostty-vt = { git = "https://github.com/uzaaft/libghostty-rs", rev = "cd4d497e8c698b27054a677ce19d1bd1a1a4d8bf", default-features = false, features = ["kitty-graphics", "png"] }
+base64 = "0.22"
+png = "0.18"

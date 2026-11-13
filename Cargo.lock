@@ -2334,7 +2334,7 @@ dependencies = [
 
 [[package]]
 name = "lazycat-neko-webshell"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -2361,6 +2361,7 @@ dependencies = [
  "neko-program-status",
  "neko-remoted-protocol",
  "neko-remoted-transport",
+ "neko-terminal-reply-filter",
  "ngrok",
  "portable-pty",
  "quinn",
@@ -2691,6 +2692,10 @@ dependencies = [
  "webrtc",
  "zeroize",
 ]
+
+[[package]]
+name = "neko-terminal-reply-filter"
+version = "0.1.0"
 
 [[package]]
 name = "ngrok"

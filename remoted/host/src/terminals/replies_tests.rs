@@ -1,6 +1,36 @@
 use super::*;
 
 #[test]
+fn kitty_queries_reply_once_without_storing_images_or_accepting_local_file_mediums() {
+    with(80, 24, |replies| {
+        assert!(replies.observe(b"\x1b_Ga=q,i=31,f=24,s=1,v=1;")?.is_empty());
+        assert_eq!(replies.observe(b"AAAA\x1b\\")?, b"\x1b_Gi=31;OK\x1b\\");
+        assert!(
+            replies
+                .observe(b"\x1b_Ga=T,i=1,f=24,s=1,v=1;AAAA\x1b\\")?
+                .is_empty()
+        );
+        let payload = [b'A'; INPUT_BYTES];
+        assert!(replies.observe(b"\x1b_Ga=T,f=100;")?.is_empty());
+        for _ in 0..64 {
+            assert!(replies.observe(&payload)?.is_empty());
+        }
+        assert!(replies.observe(b"\x1b\\")?.is_empty());
+        assert_eq!(
+            replies.observe(b"\x1b[5n")?,
+            b"\x1b[0n",
+            "image payload must not exhaust the reply VT allocator"
+        );
+        let denied = replies.observe(b"\x1b_Ga=q,i=32,t=f,f=100;L2V0Yy9wYXNzd2Q=\x1b\\")?;
+        assert!(
+            denied.starts_with(b"\x1b_Gi=32;") && !denied.windows(3).any(|bytes| bytes == b";OK")
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn ghostty_answers_fragmented_da_dsr_and_cursor_once() {
     with(80, 24, |replies| {
         assert!(replies.observe(b"\x1b[")?.is_empty());
