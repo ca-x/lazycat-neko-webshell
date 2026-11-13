@@ -8,7 +8,7 @@ on:
       desktop_version:
         description: Independent desktop package version (does not change Android)
         required: true
-        default: '0.5.3'
+        default: '0.5.4'
         type: string
 
 permissions:

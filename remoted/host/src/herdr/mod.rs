@@ -455,10 +455,9 @@ impl Herdr {
                 .await
                 .is_err()
             {
-                let _ = events.try_send(Event::Error {
-                    code: "herdr_unavailable".into(),
+                let _ = events.try_send(Event::TerminalUnavailable {
+                    stream: id.clone(),
                     message: "Herdr screen unavailable; refresh local Herdr status".into(),
-                    outcome_unknown: false,
                 });
             }
             host.attachments
@@ -528,7 +527,7 @@ impl Herdr {
                 }
                 previous = Some(text.to_owned());
             }
-            tokio::select! { () = cancel.cancelled() => return Ok(()), () = tokio::time::sleep(Duration::from_millis(250)) => {} }
+            tokio::select! { () = cancel.cancelled() => return Ok(()), () = tokio::time::sleep(Duration::from_millis(50)) => {} }
         }
     }
     pub fn is_stream(&self, stream: &str, subscriber: &str) -> bool {

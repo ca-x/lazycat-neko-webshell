@@ -28,6 +28,7 @@ mod tests;
 pub(crate) mod transfers;
 #[cfg(all(test, target_os = "linux"))]
 mod visual_tests;
+mod window_controls;
 mod workspace;
 mod workspace_header;
 
@@ -63,9 +64,9 @@ pub fn App() -> impl IntoElement {
         }
     };
     provide_context(terminal);
-    #[cfg(not(target_os = "android"))]
-    crate::platform::start_desktop_lifecycle(display);
     let ui = state::Ui::start();
+    #[cfg(not(target_os = "android"))]
+    let lifecycle = crate::platform::start_desktop_lifecycle(display, ui.navigation.settings);
     #[cfg(not(target_os = "android"))]
     navigation::install_startup_selection(ui, display);
     let auto_control = computed(move || display.preferences().remote_auto_control);
@@ -75,6 +76,13 @@ pub fn App() -> impl IntoElement {
         });
     });
     provide_context(ui);
+    #[cfg(not(target_os = "android"))]
+    return view()
+        .flex_1()
+        .child(frame())
+        .child(lifecycle)
+        .into_element();
+    #[cfg(target_os = "android")]
     frame().into_element()
 }
 

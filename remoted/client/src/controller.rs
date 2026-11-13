@@ -22,6 +22,7 @@ use std::{
 use tokio::sync::mpsc;
 
 mod connection_scope;
+mod herdr_live;
 mod host_names;
 pub mod interaction;
 mod latency;
@@ -35,6 +36,7 @@ mod retry;
 #[cfg(test)]
 mod stream_unavailable_tests;
 mod workspace_channel;
+mod workspaces;
 use connection_scope::ConnectionScope;
 use retry::Retry;
 use workspace_channel::WorkspaceChannel;
@@ -84,6 +86,8 @@ impl Pane {
 
 #[derive(Clone, Debug, Default)]
 pub struct Model {
+    /// UI activation epoch; independent from this workspace's connection generation.
+    pub activation: u64,
     pub interaction: interaction::History,
     pub phase: Phase,
     /// Local workspace selection is independent of the outbound host service.
@@ -179,6 +183,11 @@ impl Model {
 
 #[derive(Debug)]
 pub enum Command {
+    #[doc(hidden)]
+    Activate {
+        epoch: u64,
+        globals: Box<Model>,
+    },
     ConfigureTerminal {
         remote_auto_control: bool,
     },
@@ -229,6 +238,18 @@ pub enum Command {
 }
 
 pub enum Update {
+    WorkspaceModel {
+        workspace: u64,
+        selected: Option<u64>,
+        model: Box<Model>,
+    },
+    WorkspaceOutput {
+        workspace: u64,
+        generation: u64,
+        stream: String,
+        text: String,
+        reset: bool,
+    },
     Model(Box<Model>),
     Output {
         generation: u64,
@@ -355,9 +376,7 @@ pub fn start() -> (Client, mpsc::Receiver<Update>) {
                 .enable_all()
                 .build()
             {
-                Ok(runtime) => {
-                    runtime.block_on(Actor::with_scope(updates, actor_scope).run(commands))
-                }
+                Ok(runtime) => runtime.block_on(workspaces::run(updates, actor_scope, commands)),
                 Err(error) => {
                     let _ = failure.blocking_send(Update::Model(Box::new(Model {
                         error: error.to_string(),
@@ -379,7 +398,7 @@ pub fn start() -> (Client, mpsc::Receiver<Update>) {
     )
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Attachment {
     grant: String,
     pane: Option<String>,
@@ -403,6 +422,10 @@ enum Pending {
     },
     Input(u64),
     RetiredAttach,
+    Control {
+        stream: String,
+        take: bool,
+    },
     Ordinary,
     Attach(Attachment),
     Restore {
@@ -413,6 +436,9 @@ enum Pending {
     Herdr {
         grant: String,
         method: String,
+    },
+    HerdrRefresh {
+        grant: String,
     },
     Files(String),
     TransferStart,
@@ -453,6 +479,8 @@ struct Actor {
     latency: latency::Latency,
     unknown_outcome: bool,
     remote_auto_control: bool,
+    control_choices: HashMap<Attachment, bool>,
+    control_loaded: bool,
     attachments: HashMap<String, Attachment>,
     restoring: HashMap<String, Restoration>,
     retired_streams: VecDeque<String>,
@@ -485,7 +513,9 @@ struct Actor {
 impl Actor {
     #[cfg(test)]
     fn new(updates: mpsc::Sender<Update>) -> Self {
-        Self::with_scope(updates, Arc::new(ConnectionScope::default()))
+        let mut actor = Self::with_scope(updates, Arc::new(ConnectionScope::default()));
+        actor.control_loaded = true; // Fixtures inject control choices without the user's keyring.
+        actor
     }
 
     fn with_scope(updates: mpsc::Sender<Update>, scope: Arc<ConnectionScope>) -> Self {
@@ -497,6 +527,8 @@ impl Actor {
             latency: latency::Latency::default(),
             unknown_outcome: false,
             remote_auto_control: false,
+            control_choices: HashMap::new(),
+            control_loaded: false,
             attachments: HashMap::new(),
             restoring: HashMap::new(),
             retired_streams: VecDeque::new(),
@@ -551,7 +583,7 @@ impl Actor {
         let _ = self.updates.send(Update::Model(Box::new(model))).await;
     }
 
-    async fn run(mut self, mut commands: mpsc::Receiver<Command>) {
+    async fn initialize(&mut self) {
         match storage::last_relay().await {
             Ok(relay) => self.model.relay = relay,
             Err(error) => self.model.error = format!("无法恢复 Relay 设置：{error:#}"),
@@ -595,6 +627,9 @@ impl Actor {
                 self.publish().await;
             }
         }
+    }
+
+    async fn run(mut self, mut commands: mpsc::Receiver<Command>) {
         let mut deadline = tokio::time::interval(Duration::from_secs(1));
         loop {
             enum Incoming {
@@ -634,6 +669,7 @@ impl Actor {
                     Ok(())
                 }
                 Incoming::Tick => {
+                    self.refresh_herdr().await;
                     match self.latency_tick(Instant::now()).await {
                         Ok(true) => self.publish().await,
                         Ok(false) => {}
@@ -884,8 +920,10 @@ impl Actor {
     async fn connect_binding(&mut self, binding: Binding, mode: ReconnectMode) -> Result<()> {
         let target = binding.clone();
         let relay = binding.relay.clone();
+        // Identity initialization owns a durable transaction, independent of a
+        // cancellable network handshake or the currently selected workspace.
+        let identity = storage::identity().await?;
         self.reconnect_with(binding, mode, network::check_relay(&relay), async move {
-            let identity = storage::identity().await?;
             let key = protocol::decode32(&target.host_key)?;
             let session = Session::connect(&target.relay, &target.route, &identity, &key).await?;
             Ok((identity, session))
@@ -905,6 +943,10 @@ impl Actor {
             self.model.bindings.contains(&binding),
             "该配对已不存在或身份已变化，请从设备列表重新选择"
         );
+        if self.model.active_binding.as_ref() != Some(&binding) {
+            self.control_choices.clear();
+            self.control_loaded = cfg!(test);
+        }
         self.disconnected().await;
         let restoring = if matches!(mode, ReconnectMode::Retry)
             && self.model.active_binding.as_ref() == Some(&binding)
@@ -1062,6 +1104,13 @@ impl Actor {
     }
 
     async fn command(&mut self, command: Command) -> Result<()> {
+        if let Command::Activate { epoch, globals } = command {
+            self.model.activation = epoch;
+            self.model.bindings = globals.bindings;
+            self.model.aliases = globals.aliases;
+            self.model.host_names = globals.host_names;
+            return Ok(());
+        }
         if let Command::ConfigureTerminal {
             remote_auto_control,
         } = command
@@ -1118,7 +1167,9 @@ impl Actor {
         );
         self.model.error.clear();
         match command {
-            Command::ConfigureTerminal { .. } => bail!("终端偏好不接受工作区命令封装"),
+            Command::ConfigureTerminal { .. } | Command::Activate { .. } => {
+                bail!("内部命令不接受工作区命令封装")
+            }
             Command::Scoped { .. } => bail!("不接受嵌套工作区命令"),
             #[cfg(not(target_os = "android"))]
             Command::Host(_) => bail!("主机设置不接受工作区命令封装"),
@@ -1138,6 +1189,13 @@ impl Actor {
                     self.disconnected().await;
                 }
                 self.model.bindings = storage::forget(&binding).await?;
+                if let Err(error) = storage::control::forget(&binding).await {
+                    self.model.error = format!("控制偏好清理失败：{error:#}");
+                }
+                if self.model.active_binding.as_ref() == Some(&binding) {
+                    self.control_choices.clear();
+                    self.control_loaded = cfg!(test);
+                }
                 self.model.aliases.retain(&self.model.bindings);
                 self.model.host_names.retain(&self.model.bindings);
                 if self.model.active_binding.as_ref() == Some(&binding) {
@@ -1191,35 +1249,39 @@ impl Actor {
                 self.model.phase = Phase::Connecting;
                 self.publish().await;
                 let scope = self.scope.clone();
-                let result = scope
-                    .during(generation, async {
-                        self.identity = Some(storage::identity().await?);
-                        let session = Session::pair(
-                            &relay,
-                            &code,
-                            self.identity.as_ref().context("设备身份缺失")?,
-                        )
-                        .await?;
-                        self.model.fingerprint = protocol::fingerprint(session.host_key());
-                        self.binding = Some(Binding {
-                            relay,
-                            route: code.route().into(),
-                            host_key: protocol::encode(session.host_key()),
-                            device_id: String::new(),
-                        });
-                        self.session = Some(session.into());
-                        self.model.panes.clear();
-                        self.model.phase = Phase::AwaitingApproval;
-                        self.handshake_deadline = Some(Instant::now() + Duration::from_secs(150));
-                        self.request(
-                            Operation::Identify {
-                                name: name.trim().into(),
-                            },
-                            Pending::Identify,
-                        )
+                let result = async {
+                    self.identity = Some(storage::identity().await?);
+                    scope
+                        .during(generation, async {
+                            let session = Session::pair(
+                                &relay,
+                                &code,
+                                self.identity.as_ref().context("设备身份缺失")?,
+                            )
+                            .await?;
+                            self.model.fingerprint = protocol::fingerprint(session.host_key());
+                            self.binding = Some(Binding {
+                                relay,
+                                route: code.route().into(),
+                                host_key: protocol::encode(session.host_key()),
+                                device_id: String::new(),
+                            });
+                            self.session = Some(session.into());
+                            self.model.panes.clear();
+                            self.model.phase = Phase::AwaitingApproval;
+                            self.handshake_deadline =
+                                Some(Instant::now() + Duration::from_secs(150));
+                            self.request(
+                                Operation::Identify {
+                                    name: name.trim().into(),
+                                },
+                                Pending::Identify,
+                            )
+                            .await
+                        })
                         .await
-                    })
-                    .await;
+                }
+                .await;
                 if result.is_err() {
                     self.disconnected().await;
                     self.model.phase = Phase::RelayReady;
@@ -1245,11 +1307,10 @@ impl Actor {
             Command::SubmitInput { stream, text } => self.submit_input(stream, text).await?,
             Command::Request(operation) => {
                 if let Operation::TerminalDetach { stream } = &operation
-                    && self
-                        .model
-                        .panes
-                        .iter()
-                        .any(|pane| &pane.stream == stream && pane.unavailable.is_some())
+                    && self.model.panes.iter().any(|pane| {
+                        &pane.stream == stream
+                            && (!self.model.ready() || pane.unavailable.is_some())
+                    })
                 {
                     // The host already retired this attachment. Closing its retained
                     // view is local and must not require a live channel or close core's PTY.
@@ -1294,6 +1355,10 @@ impl Actor {
                     },
                     Operation::FileList { grant, .. } => Pending::Files(grant.clone()),
                     Operation::TerminalDetach { stream } => Pending::Detach(stream.clone()),
+                    Operation::TerminalControl { stream, take } => Pending::Control {
+                        stream: stream.clone(),
+                        take: *take,
+                    },
                     _ => Pending::Ordinary,
                 };
                 self.request(operation, kind).await?;
@@ -1709,6 +1774,29 @@ impl Actor {
                 };
                 let herdr_pane_id = attachment.pane.clone();
                 let herdr_grant = (kind == PaneKind::Herdr).then(|| attachment.grant.clone());
+                if !self.model.local
+                    && !self.control_loaded
+                    && let Some(binding) = &self.model.active_binding
+                {
+                    match storage::control::load(binding).await {
+                        Ok(choices) => {
+                            self.control_choices.extend(
+                                choices
+                                    .into_iter()
+                                    .map(|(grant, pane, take)| (Attachment { grant, pane }, take)),
+                            );
+                            self.control_loaded = true;
+                        }
+                        Err(error) => {
+                            self.model.notice = format!("无法读取终端控制偏好：{error:#}")
+                        }
+                    }
+                }
+                let auto_control = self
+                    .control_choices
+                    .get(&attachment)
+                    .copied()
+                    .unwrap_or(self.remote_auto_control);
                 self.attachments.insert(stream.clone(), attachment);
                 self.output.insert(
                     stream.clone(),
@@ -1730,11 +1818,7 @@ impl Actor {
                     unavailable: None,
                     gap: false,
                 });
-                if !self.model.local
-                    && self.remote_auto_control
-                    && !read_only
-                    && self.model.writable()
-                {
+                if !self.model.local && auto_control && !read_only && self.model.writable() {
                     self.request(
                         Operation::TerminalControl { stream, take: true },
                         Pending::Ordinary,
@@ -1791,6 +1875,28 @@ impl Actor {
                     .find(|pane| pane.stream == stream)
                     .context("未知终端控制事件")?;
                 pane.controller = controller;
+                if let Some(Pending::Control {
+                    stream: requested,
+                    take,
+                }) = pending
+                    && requested == stream
+                    && take == controller
+                    && !self.model.local
+                    && let Some(attachment) = self.attachments.get(&stream)
+                {
+                    self.control_choices.insert(attachment.clone(), take);
+                    if let Some(binding) = &self.model.active_binding
+                        && let Err(error) = storage::control::remember(
+                            binding,
+                            &attachment.grant,
+                            attachment.pane.as_deref(),
+                            take,
+                        )
+                        .await
+                    {
+                        self.model.notice = format!("控制已生效，但偏好保存失败：{error:#}");
+                    }
+                }
             }
             Event::TerminalOutput {
                 stream,
@@ -1866,19 +1972,36 @@ impl Actor {
                 }
             }
             Event::Herdr { data } => {
-                let Some(Pending::Herdr { grant, method }) = pending else {
-                    bail!("未请求的 Herdr 回复");
+                let (grant, method, background) = match pending {
+                    Some(Pending::Herdr { grant, method }) => (grant, method, false),
+                    Some(Pending::HerdrRefresh { grant }) => {
+                        (grant, "session.snapshot".into(), true)
+                    }
+                    _ => bail!("未请求的 Herdr 回复"),
                 };
+                if background && self.model.herdr_grant != grant {
+                    return Ok(kind_changed);
+                }
+                if background {
+                    let snapshot = crate::ui::herdr::snapshot(&data);
+                    let recovered = self.model.notice.starts_with("Herdr 刷新失败：");
+                    if recovered {
+                        self.model.notice.clear();
+                    }
+                    changed = recovered || snapshot != self.model.herdr_workspace;
+                }
                 if matches!(method.as_str(), "session.snapshot" | "pane.list") {
                     self.model.herdr_grant = grant.clone();
                     self.model.herdr_panes = crate::ui::herdr::panes(&data);
                     self.model.herdr_workspace = crate::ui::herdr::snapshot(&data);
                 }
-                self.model.herdr_response = Some(HerdrResponse {
-                    grant,
-                    method,
-                    data,
-                });
+                if !background {
+                    self.model.herdr_response = Some(HerdrResponse {
+                        grant,
+                        method,
+                        data,
+                    });
+                }
             }
             Event::FileList {
                 path,
@@ -2040,6 +2163,15 @@ impl Actor {
                 message,
                 outcome_unknown,
             } => {
+                if matches!(pending, Some(Pending::HerdrRefresh { .. }))
+                    && matches!(
+                        code.as_str(),
+                        "REQUEST_FAILED" | "QUEUE_FULL" | "DEVICE_BUSY"
+                    )
+                {
+                    self.model.notice = format!("Herdr 刷新失败：{message}");
+                    return Ok(true);
+                }
                 self.unknown_outcome |= outcome_unknown;
                 if matches!(
                     code.as_str(),
@@ -3212,3 +3344,6 @@ mod tests {
         assert!(!model.opening);
     }
 }
+
+#[cfg(test)]
+mod control_tests;

@@ -67,6 +67,7 @@ pub(crate) fn normalize_host_name(name: &str) -> Result<String> {
 }
 
 pub(crate) async fn remember_host_name(binding: &Binding, name: &str) -> Result<HostNames> {
+    let _guard = super::BINDING_WRITER.lock().await;
     remember_with(load_bindings().await?, binding, name, |saved| async move {
         save_bindings(&saved).await
     })

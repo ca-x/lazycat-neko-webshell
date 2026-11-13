@@ -1,4 +1,4 @@
-use super::{controls::hint, state::Ui, terminal_observer, terminal_surface::Surface};
+use super::{controls::hint, state::Ui, terminal_observer};
 use crate::controller::{Command, Pane, PaneKind};
 use crate::preferences::{current_context, tr};
 use neko_remoted_protocol::messages::Operation;
@@ -12,7 +12,10 @@ mod input_adapter;
 
 pub fn render(ui: Ui, pane: ReadSignal<Pane>) -> impl IntoElement {
     let appearance = current_context();
-    let surface = Surface::for_screen(pane.get_untracked().kind == PaneKind::Herdr);
+    let surface = ui.surface(
+        &pane.get_untracked().stream,
+        pane.get_untracked().kind == PaneKind::Herdr,
+    );
     let reference = element_ref();
     let size = signal(None::<(u16, u16)>);
     let writable = computed(move || ui.model.with(|model| model.writable()));

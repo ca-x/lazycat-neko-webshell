@@ -353,6 +353,23 @@ pub(super) fn select_workspace(ui: Ui, workspace: &str) {
 }
 
 pub(super) fn open_pane(ui: Ui, id: &str) {
+    let key = ui.model.with_untracked(|model| {
+        model
+            .herdr_workspace
+            .panes
+            .iter()
+            .find(|pane| pane.pane_id == id)
+            .map(|pane| {
+                if pane.tab_id.is_empty() {
+                    format!("pane:{}:{}", model.herdr_grant, pane.pane_id)
+                } else {
+                    format!("tab:{}:{}", model.herdr_grant, pane.tab_id)
+                }
+            })
+    });
+    if let Some(key) = key {
+        ui.reopen_tab(&key);
+    }
     let target = ui.model.with_untracked(|model| {
         if !model.ready()
             || model.opening

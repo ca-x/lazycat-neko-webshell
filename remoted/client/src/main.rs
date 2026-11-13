@@ -23,6 +23,14 @@ fn main() -> impl std::process::Termination {
         platform::AppSource::Rust(neko_remoted_client::root()),
         platform::AppOptions {
             title: "neoko-terminal".to_owned(),
+            #[cfg(target_os = "windows")]
+            icon: std::env::current_exe()
+                .ok()
+                .and_then(|exe| {
+                    exe.parent()
+                        .map(|directory| directory.join("neoko-terminal.ico"))
+                })
+                .filter(|path| path.is_file()),
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             app_id: "community.lazycat.neko.remoted".to_owned(),
             size: (1100, 760),

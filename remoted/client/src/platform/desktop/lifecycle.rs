@@ -4,21 +4,26 @@
 mod linux;
 
 use crate::preferences::{CloseBehavior, Language, SaveState, Ui};
-use nsh_base::{AlertDialogOptions, alert_dialog};
+mod prompt;
 use nsh_core::{
-    desktop::WindowAttributes,
-    element::{ImageSrc, desktop},
+    desktop::{CloseReason, WindowAttributes},
+    element::desktop,
     prelude::*,
 };
-use std::{future::Future, time::Duration};
+use prompt::Prompt;
+use std::{future::Future, rc::Rc, time::Duration};
+
+// Shared with window_controls: the root owns both native and keyboard close requests.
+type CloseRequest = Rc<dyn Fn(CloseReason)>;
 
 /// Install once in the root owner after preferences have been initialized.
-pub(crate) fn start_desktop_lifecycle(preferences: Ui) {
-    let lifecycle = Lifecycle::new();
+pub(crate) fn start_desktop_lifecycle(preferences: Ui, settings: Signal<bool>) -> impl IntoElement {
+    let mut lifecycle = Lifecycle::new();
+    lifecycle.settings = Some(settings);
     let mut attributes = WindowAttributes::default();
     attributes.close_on_press = Some(false);
     desktop::main_window().set(attributes);
-    desktop::main_window().on_close_press(move |_| {
+    let close: CloseRequest = Rc::new(move |_| {
         lifecycle.close(
             preferences.preferences().close_behavior,
             Labels::new(preferences.preferences().language),
@@ -26,7 +31,10 @@ pub(crate) fn start_desktop_lifecycle(preferences: Ui) {
             tray_available,
         );
     });
+    provide_context(close.clone());
+    desktop::main_window().on_close_press(move |reason| close(reason));
     effect(move || lifecycle.install_tray(Labels::new(preferences.preferences().language)));
+    lifecycle.render()
 }
 
 async fn remember(preferences: Ui, choice: CloseBehavior) -> Result<(), String> {
@@ -52,6 +60,9 @@ struct Lifecycle {
     generation: Signal<u64>,
     busy: Signal<bool>,
     hidden: Signal<bool>,
+    prompt: Signal<Option<Prompt>>,
+    settings: Option<Signal<bool>>,
+    reply: Stored<Option<tokio::sync::oneshot::Sender<Option<String>>>>,
 }
 
 impl Lifecycle {
@@ -61,16 +72,17 @@ impl Lifecycle {
             generation: signal(0),
             busy: signal(false),
             hidden: signal(false),
+            prompt: signal(None),
+            settings: None,
+            reply: stored(None),
         }
     }
 
     fn install_tray(self, labels: Labels) {
         desktop::set_tray(
             desktop::tray()
-                .icon(ImageSrc::svg_markup(include_str!(
-                    "../../ui/icons/TerminalSquare.svg"
-                )))
-                .tooltip("neoko-terminal")
+                .icon(super::app_icon::source())
+                .tooltip(crate::preferences::tr("app.name").to_string())
                 .on_click(move |_| self.restore())
                 .menu([
                     desktop::MenuItem::new(labels.restore).on_select(move || self.restore()),
@@ -81,6 +93,7 @@ impl Lifecycle {
     }
 
     fn restore(self) {
+        self.answer(None);
         self.generation.update(|generation| *generation += 1);
         self.busy.set(false);
         self.hidden.set(false);
@@ -118,7 +131,7 @@ impl Lifecycle {
                     return;
                 }
                 let choice = if behavior == CloseBehavior::Ask {
-                    let answer = labels.choice(available).show().await;
+                    let answer = self.show(labels.choice(available)).await;
                     if self.generation.get_untracked() != generation {
                         return;
                     }
@@ -132,11 +145,11 @@ impl Lifecycle {
                     };
                     if let Err(error) = save(choice).await {
                         if self.generation.get_untracked() == generation {
-                            let _ = alert_dialog()
-                                .title(labels.save_failed)
-                                .description(error)
-                                .cancel("ok", labels.ok)
-                                .show()
+                            let _ = self
+                                .show(
+                                    Prompt::new(labels.save_failed, error)
+                                        .button("ok", labels.ok, false),
+                                )
                                 .await;
                             if self.generation.get_untracked() == generation {
                                 self.busy.set(false);
@@ -167,13 +180,12 @@ impl Lifecycle {
                         // The first decision already explains this actual fallback. A saved
                         // Tray policy needs the same feedback when no tray is available.
                         if !current_available && (behavior != CloseBehavior::Ask || available) {
-                            let answer = alert_dialog()
-                                .title(labels.fallback_title)
-                                .description(labels.fallback)
-                                .cancel("cancel", labels.cancel)
-                                .action("minimize", labels.minimize)
-                                .close_on_escape(true)
-                                .show()
+                            let answer = self
+                                .show(
+                                    Prompt::new(labels.fallback_title, labels.fallback)
+                                        .button("cancel", labels.cancel, false)
+                                        .button("minimize", labels.minimize, false),
+                                )
                                 .await;
                             if self.generation.get_untracked() != generation {
                                 return;
@@ -219,11 +231,11 @@ impl Lifecycle {
                 }
                 if !available {
                     self.restore();
-                    let _ = alert_dialog()
-                        .title(labels.fallback_title)
-                        .description(labels.restored)
-                        .cancel("ok", labels.ok)
-                        .show()
+                    let _ = self
+                        .show(
+                            Prompt::new(labels.fallback_title, labels.restored)
+                                .button("ok", labels.ok, false),
+                        )
                         .await;
                     return;
                 }
@@ -301,20 +313,16 @@ impl Labels {
         }
     }
 
-    fn choice(self, available: bool) -> AlertDialogOptions {
+    fn choice(self, available: bool) -> Prompt {
         let description = if available {
             self.body.to_owned()
         } else {
             format!("{}\n\n{}", self.body, self.fallback)
         };
-        alert_dialog()
-            .title(self.title)
-            .description(description)
-            .cancel("cancel", self.cancel)
-            .action("tray", self.tray)
-            .destructive("quit", self.quit)
-            .close_on_escape(true)
-            .close_on_backdrop_press(false)
+        Prompt::new(self.title, description)
+            .button("cancel", self.cancel, false)
+            .button("tray", self.tray, false)
+            .button("quit", self.quit, true)
     }
 }
 

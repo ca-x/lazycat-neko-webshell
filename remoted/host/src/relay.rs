@@ -171,7 +171,7 @@ async fn connection(
         biased;
         () = cancel.cancelled() => return Ok(()),
         result = tokio::time::timeout(DEADLINE, tokio_tungstenite::connect_async_tls_with_config(
-            request, Some(config), false, Some(Connector::Rustls(Arc::new(tls))))) => result.context("Relay connect timed out")??,
+            request, Some(config), true, Some(Connector::Rustls(Arc::new(tls))))) => result.context("Relay connect timed out")??,
     };
     ensure!(
         response

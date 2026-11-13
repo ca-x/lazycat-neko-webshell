@@ -7,8 +7,14 @@ mod reported_hosts;
 pub use reported_hosts::HostNames;
 pub(crate) use reported_hosts::{normalize_host_name, remember_host_name};
 
+pub(crate) mod control;
+pub(crate) mod snapshots;
+
 const IDENTITY: &str = "remoted.identity.v1";
 const BINDINGS: &str = "remoted.bindings.v1";
+static BINDING_WRITER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static IDENTITY_WRITER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 const LAST_RELAY: &str = "remoted.last-relay.v1";
 
 pub async fn last_relay() -> Result<Option<RelayAddress>> {
@@ -43,6 +49,7 @@ struct Secret {
 }
 
 pub async fn identity() -> Result<Identity> {
+    let _guard = IDENTITY_WRITER.lock().await;
     if let Some(value) = crate::platform::secure_get(IDENTITY).await? {
         let saved: Secret =
             serde_json::from_str(&value).context("设备身份存储损坏；请勿覆盖现有身份")?;
@@ -227,7 +234,8 @@ async fn load_bindings() -> Result<SavedBindings> {
     decode_bindings(crate::platform::secure_get(BINDINGS).await?.as_deref())
 }
 async fn save_bindings(saved: &SavedBindings) -> Result<()> {
-    crate::platform::secure_set(BINDINGS, &serde_json::to_string(saved)?).await
+    let encoded = serde_json::to_string(saved)?;
+    snapshots::persist(saved, crate::platform::secure_set(BINDINGS, &encoded)).await
 }
 pub(crate) async fn preferences() -> Result<Preferences> {
     let saved = load_bindings().await?;
@@ -246,6 +254,7 @@ pub(crate) async fn preferences() -> Result<Preferences> {
 }
 
 pub(crate) async fn rename_binding(binding: &Binding, alias: &str) -> Result<HostAliases> {
+    let _guard = BINDING_WRITER.lock().await;
     rename_with(load_bindings().await?, binding, alias, |saved| async move {
         save_bindings(&saved).await
     })
@@ -284,6 +293,7 @@ where
 
 /// Persists only an existing exact host identity; never creates or migrates a binding.
 pub(crate) async fn select_binding(binding: &Binding) -> Result<()> {
+    let _guard = BINDING_WRITER.lock().await;
     let mut saved = load_bindings().await?;
     validate(binding)?;
     ensure!(
@@ -296,6 +306,7 @@ pub(crate) async fn select_binding(binding: &Binding) -> Result<()> {
     save_bindings(&saved).await
 }
 pub(crate) async fn stop_auto_connect() -> Result<()> {
+    let _guard = BINDING_WRITER.lock().await;
     let mut saved = load_bindings().await?;
     saved.auto_connect = false;
     save_bindings(&saved).await
@@ -312,6 +323,7 @@ pub(crate) fn validate(binding: &Binding) -> Result<()> {
 }
 
 pub async fn remember(binding: Binding) -> Result<Vec<Binding>> {
+    let _guard = BINDING_WRITER.lock().await;
     let mut saved = load_bindings().await?;
     saved.bindings = remember_in(saved.bindings, binding.clone())?;
     saved.aliases.retain(&saved.bindings);
@@ -332,6 +344,7 @@ fn remember_in(mut saved: Vec<Binding>, binding: Binding) -> Result<Vec<Binding>
 }
 
 pub async fn forget(binding: &Binding) -> Result<Vec<Binding>> {
+    let _guard = BINDING_WRITER.lock().await;
     let mut saved = load_bindings().await?;
     saved.bindings = forget_from(saved.bindings, binding);
     saved.aliases.retain(&saved.bindings);
@@ -366,6 +379,7 @@ pub(crate) async fn local_workspace() -> Result<Option<bool>> {
 /// Saves the local selection together with the existing remote reconnect preference.
 #[cfg(not(target_os = "android"))]
 pub(crate) async fn select_local_workspace() -> Result<()> {
+    let _guard = BINDING_WRITER.lock().await;
     let mut saved = load_bindings().await?;
     saved.local = Some(true);
     save_bindings(&saved).await

@@ -128,9 +128,10 @@ def main():
             with (contents / "Info.plist").open("wb") as handle:
                 plistlib.dump({"CFBundleIdentifier": APP_ID, "CFBundleName": "neoko-terminal", "CFBundleDisplayName": "neoko-terminal",
                               "CFBundleDevelopmentRegion": "en", "CFBundleLocalizations": ["en", "zh", "zh-Hans", "zh-Hant"],
-                              "CFBundleExecutable": BINARY, "CFBundlePackageType": "APPL", "CFBundleShortVersionString": args.version,
+                              "CFBundleExecutable": BINARY, "CFBundlePackageType": "APPL", "CFBundleIconFile": "AppIcon.icns", "CFBundleShortVersionString": args.version,
                               "CFBundleVersion": args.version, "LSMinimumSystemVersion": os.environ.get("MACOSX_DEPLOYMENT_TARGET", "14.0"),
                               "NSHighResolutionCapable": True}, handle)
+            shutil.copy2(CLIENT / "assets/icons/neoko-terminal.icns", resources / "AppIcon.icns")
             for locale, name in (("en", BINARY), ("zh", CHINESE_NAME), ("zh-Hans", CHINESE_NAME), ("zh-Hant", CHINESE_NAME)):
                 localized = resources / f"{locale}.lproj"
                 localized.mkdir()
@@ -147,6 +148,7 @@ def main():
             native_build_inputs.verify_zip(package, f"{app.name}/Contents/Resources")
         else:
             shutil.copy2(binary, stage / binary.name)
+            shutil.copy2(CLIENT / "assets/icons/neoko-terminal.ico", stage / "neoko-terminal.ico")
             (stage / "build-info.json").write_text(json.dumps(info, indent=2) + "\n")
             package = args.out / f"{stem}.zip"
             with zipfile.ZipFile(package, "w", zipfile.ZIP_DEFLATED) as archive:

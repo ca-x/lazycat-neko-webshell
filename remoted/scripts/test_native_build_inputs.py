@@ -130,6 +130,8 @@ class NativeBuildInputsTests(unittest.TestCase):
         outer = json.loads(next(destination.glob('*.build-info.json')).read_text())
         with zipfile.ZipFile(archive) as package:
             self.assertEqual(json.loads(package.read('build-info.json')), outer)
+            self.assertEqual(package.read('neoko-terminal.ico'),
+                             (inputs.ROOT / 'client/assets/icons/neoko-terminal.ico').read_bytes())
         self.assertEqual(outer['desktop_version'], '0.4.0')
         self.assertIn('ghostty_source_revision', outer)
         self.assertIn('ghostty_wrapper_revision', outer)

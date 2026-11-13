@@ -1,4 +1,5 @@
 //! Desktop credentials and a UI-thread bridge to NSH native dialogs.
+mod app_icon;
 mod credentials;
 mod files;
 mod lifecycle;
@@ -57,6 +58,15 @@ pub fn initialize() -> Result<File> {
 
 /// Starts NSH dialog handling in the root UI owner; workers never call UI APIs.
 pub fn start_services() {
+    // NSH initializes GTK on the native main thread and mounts this root on its
+    // engine thread. Queue GTK work rather than initializing it here or calling
+    // it from the engine; headless UI tests never initialize GTK.
+    #[cfg(target_os = "linux")]
+    if nsh_platform_linux::gtk4::is_initialized() {
+        nsh_platform_linux::gtk4::glib::idle_add_once(|| {
+            nsh_platform_linux::gtk4::Window::set_default_icon_name(SERVICE);
+        });
+    }
     use nsh_core::{
         element::{pick_paths, pick_save_path, spawn},
         file_dialog::{OpenDialog, SaveDialog},

@@ -17,6 +17,7 @@ pub fn render(ui: Ui) -> impl IntoElement {
         .child(
             view()
                 .test_id("workspace-tab-bar")
+                .window_drag(os().is_desktop())
                 .flex_row()
                 .items_center()
                 .gap_1()
@@ -78,7 +79,8 @@ pub fn render(ui: Ui) -> impl IntoElement {
                             },
                         )
                     },
-                )),
+                ))
+                .child(super::window_controls::render()),
         )
         .child(when(
             move || ui.model.with(|model| !model.error.is_empty()),

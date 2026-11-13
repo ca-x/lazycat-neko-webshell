@@ -115,7 +115,7 @@ pub(super) fn foreground(
         );
     }
     let cursor = paint.cursor.map(|col| cursor_cell(cells, col));
-    if let Some((col, width)) = cursor {
+    if let Some((col, width)) = cursor.filter(|_| paint.cursor_style == CursorStyle::Block) {
         let (x, y, w, h) = cursor_bounds(grid, col, width, paint.cursor_style);
         painter = painter.fill_color(paint.cursor_color).fill_rect(x, y, w, h);
     }
@@ -165,6 +165,15 @@ pub(super) fn foreground(
         }
         painter = painter.restore();
     }
+    if paint.cursor_style != CursorStyle::Block
+        && let Some((col, width)) = cursor
+    {
+        let (x, y, w, h) = cursor_bounds(grid, col, width, paint.cursor_style);
+        painter = painter
+            .global_alpha(1.0)
+            .fill_color(paint.cursor_color)
+            .fill_rect(x, y, w, h);
+    }
     painter
 }
 
@@ -176,7 +185,7 @@ fn cursor_bounds(
 ) -> (f32, f32, f32, f32) {
     let x = column as f32 * grid.cell_width;
     let width = width as f32 * grid.cell_width;
-    let stroke = (grid.row_height / 12.0).round().max(1.0);
+    let stroke = (grid.row_height / 12.0).round().max(2.0);
     match style {
         CursorStyle::Block => (x, 0.0, width, grid.row_height),
         CursorStyle::Beam => (x, 0.0, stroke.min(width), grid.row_height),

@@ -2,19 +2,22 @@ use super::*;
 use nsh_core::{
     Command, EventKind, EventPayload, PayloadValue, ROOT_ID,
     desktop::{DesktopCommand, MenuItem, Tray, WindowRequest},
-    element::{DialogButtonStyle, Root},
+    element::Root,
     platform::{Environment, Locale, Os},
 };
 use nsh_engine::EngineConfig;
-use nsh_testing::{DialogAnswer, Headless};
+use nsh_testing::Headless;
 
 #[component]
 fn Fixture() -> impl IntoElement {
-    let lifecycle = Lifecycle::new();
+    let settings = signal(false);
+    let mut lifecycle = Lifecycle::new();
+    lifecycle.settings = Some(settings);
     let policy = signal(CloseBehavior::Ask);
     let available = signal(true);
     let saved = signal(0_u32);
     let acknowledgement = signal(None::<bool>);
+    let reject_immediately = signal(false);
     let pending = signal(false);
     let pulses = signal(0_u32);
     let labels = Labels::new(Language::EnUs);
@@ -22,17 +25,21 @@ fn Fixture() -> impl IntoElement {
     let mut attributes = WindowAttributes::default();
     attributes.close_on_press = Some(false);
     desktop::main_window().set(attributes);
-    desktop::main_window().on_close_press(move |_| {
+    let close = move || {
         lifecycle.close(
             policy.get_untracked(),
             labels,
             move |choice| async move {
                 pending.set(true);
-                while acknowledgement.get_untracked().is_none() {
+                while !reject_immediately.get_untracked()
+                    && acknowledgement.get_untracked().is_none()
+                {
                     timer(Duration::from_millis(10)).await;
                 }
                 pending.set(false);
-                if acknowledgement.get_untracked() == Some(true) {
+                if !reject_immediately.get_untracked()
+                    && acknowledgement.get_untracked() == Some(true)
+                {
                     policy.set(choice);
                     saved.update(|count| *count += 1);
                     Ok(())
@@ -42,7 +49,8 @@ fn Fixture() -> impl IntoElement {
             },
             move || std::future::ready(available.get_untracked()),
         );
-    });
+    };
+    desktop::main_window().on_close_press(move |_| close());
     spawn(async move {
         loop {
             timer(Duration::from_millis(40)).await;
@@ -50,6 +58,28 @@ fn Fixture() -> impl IntoElement {
         }
     });
     view()
+        .child(lifecycle.render())
+        .child(text(move || format!("close busy={}", lifecycle.busy.get())))
+        .child(
+            nsh_base::button()
+                .on_press(move || settings.set(true))
+                .child(text("Open settings")),
+        )
+        .child(
+            desktop::window()
+                .id("settings")
+                .parent("main")
+                .title("Settings fixture")
+                .open(settings)
+                .on_open_change(move |event| settings.set(event.open))
+                .content(move || {
+                    view().child(text("Settings fixture")).child(
+                        nsh_base::button()
+                            .on_press(close)
+                            .child(text("Close main from settings")),
+                    )
+                }),
+        )
         .child(text("Mounted terminal"))
         .child(text(move || {
             format!(
@@ -69,6 +99,11 @@ fn Fixture() -> impl IntoElement {
             nsh_base::button()
                 .on_press(move || acknowledgement.set(Some(false)))
                 .child(text("Reject save")),
+        )
+        .child(
+            nsh_base::button()
+                .on_press(move || reject_immediately.set(true))
+                .child(text("Reject saves immediately")),
         )
         .child(
             nsh_base::button()
@@ -102,6 +137,59 @@ fn app() -> Headless {
     app.wait_for("Mounted terminal")
         .expect("fixture is mounted");
     app
+}
+
+#[component]
+fn SavedQuitFixture() -> impl IntoElement {
+    let catalog = crate::preferences::catalog::Catalog::shared().expect("bundled preferences");
+    let mut preferences = crate::preferences::Preferences::defaults(catalog);
+    preferences.close_behavior = CloseBehavior::Quit;
+    let preferences = Ui::from_loaded(preferences).expect("loaded preferences");
+    let lifecycle = start_desktop_lifecycle(preferences, signal(false));
+    let close = use_context::<CloseRequest>().expect("production lifecycle provides close policy");
+    view().child(lifecycle).child(
+        nsh_base::button()
+            .on_press(move || close(CloseReason::CloseButton))
+            .child(text("Request close policy")),
+    )
+}
+
+#[test]
+fn production_close_context_and_native_close_share_the_saved_quit_policy() -> Result<(), String> {
+    for trigger in ["enter", "space", "native"] {
+        let mut app = Headless::start(EngineConfig {
+            clock: nsh_core::time::Clock::manual(std::time::SystemTime::UNIX_EPOCH),
+            environment: Environment {
+                os: Os::Linux,
+                locale: Locale::EN_US,
+                ..Default::default()
+            },
+            ..EngineConfig::new(Root::of::<SavedQuitFixture>())
+        })
+        .map_err(|error| error.to_string())?;
+        app.wait_for("Request close policy")?;
+        if trigger == "native" {
+            app.press_window_close("main")?;
+        } else {
+            app.press_key("tab")?;
+            app.press_key(trigger)?;
+        }
+        assert_eq!(
+            app.screen()
+                .commands()
+                .iter()
+                .filter(|(_, command)| matches!(
+                    command,
+                    Command::Desktop(command) if matches!(**command, DesktopCommand::Quit)
+                ))
+                .count(),
+            1,
+            "{trigger} must request one policy-controlled quit"
+        );
+        assert!(app.screen().dialogs().is_empty());
+        assert!(!app.shows("Close neoko-terminal?"));
+    }
+    Ok(())
 }
 
 fn quit_requested(app: &Headless) -> bool {
@@ -150,25 +238,117 @@ fn tray_action(app: &mut Headless, label: &str) -> Result<(), String> {
 fn first_close_has_one_semantic_native_decision_and_cancel_does_not_save() -> Result<(), String> {
     let mut app = app();
     app.press_window_close("main")?;
-    let dialog = app.pending_dialog().expect("first close prompts");
-    assert_eq!(dialog.buttons.len(), 3);
-    assert_eq!(dialog.buttons[0].style, DialogButtonStyle::Cancel);
-    assert_eq!(dialog.buttons[2].style, DialogButtonStyle::Destructive);
-    assert!(dialog.message.as_deref().unwrap().contains("remembered"));
+    app.wait_for("Close neoko-terminal?")?;
+    assert!(app.shows("Cancel"));
+    assert!(app.shows("Minimize to tray"));
+    assert!(app.shows("Quit"));
+    assert_eq!(app.screen().count("role:alertdialog")?, 1);
     app.press_window_close("main")?;
     assert_eq!(
-        app.screen().dialogs().len(),
+        app.screen()
+            .texts()
+            .iter()
+            .filter(|text| **text == "Close neoko-terminal?")
+            .count(),
         1,
         "repeated close does not stack prompts"
     );
-    app.answer_dialog(DialogAnswer::Press("Cancel".into()))?;
+    app.press("Cancel")?;
     app.wait_for("policy=Ask;saved=0;pending=false")?;
+    assert_eq!(app.screen().count("role:alertdialog")?, 0);
     assert!(app.window_state("main")?.unwrap().visible);
     assert!(!quit_requested(&app));
     app.press_window_close("main")?;
-    app.answer_dialog(DialogAnswer::Dismiss)?;
+    app.press_key("escape")?;
     assert!(app.window_state("main")?.unwrap().visible);
     app.wait_for("policy=Ask;saved=0;pending=false")?;
+    Ok(())
+}
+
+#[test]
+fn closing_settings_does_not_start_or_block_the_main_close_policy() -> Result<(), String> {
+    let mut app = app();
+    app.press("Open settings")?;
+    app.wait_for("Settings fixture")?;
+    app.press_window_close("settings")?;
+    assert!(app.window_state("settings")?.is_none());
+    app.wait_for("close busy=false")?;
+    assert!(!app.shows("Close neoko-terminal?"));
+    assert!(!quit_requested(&app));
+    app.press_window_close("main")?;
+    app.wait_for("Close neoko-terminal?")?;
+    app.press("Cancel")?;
+    app.wait_for("close busy=false")?;
+    Ok(())
+}
+
+#[test]
+fn main_prompt_survives_settings_owner_disposal_and_cancel_allows_another_close()
+-> Result<(), String> {
+    let mut app = app();
+    app.press("Open settings")?;
+    app.wait_for("Settings fixture")?;
+    app.press("Close main from settings")?;
+    app.wait_for("Close neoko-terminal?")?;
+    assert!(app.window_state("settings")?.is_none());
+    app.wait_for("close busy=true")?;
+    app.press("Cancel")?;
+    app.wait_for("close busy=false")?;
+    assert!(app.window_state("main")?.unwrap().visible);
+    app.press("Open settings")?;
+    app.wait_for("Settings fixture")?;
+    app.press_window_close("main")?;
+    app.wait_for("Close neoko-terminal?")?;
+    assert!(app.window_state("settings")?.is_none());
+    app.press_key("escape")?;
+    app.wait_for("close busy=false")?;
+    app.wait_for("policy=Ask;saved=0;pending=false")?;
+    assert!(!app.shows("Close neoko-terminal?"));
+    assert!(!quit_requested(&app));
+    Ok(())
+}
+
+#[test]
+fn immediate_save_failure_after_settings_disposal_remains_cancelable() -> Result<(), String> {
+    let mut app = app();
+    app.press("Reject saves immediately")?;
+    app.press("Open settings")?;
+    app.wait_for("Settings fixture")?;
+    app.press("Close main from settings")?;
+    app.wait_for("Close neoko-terminal?")?;
+    app.press("Quit")?;
+    app.wait_for("Test storage refused the write")?;
+    assert!(app.window_state("settings")?.is_none());
+    assert!(app.window_state("main")?.unwrap().visible);
+    assert!(!quit_requested(&app));
+    app.press("OK")?;
+    app.wait_for("close busy=false")?;
+    app.press_window_close("main")?;
+    app.wait_for("Close neoko-terminal?")?;
+    app.press("Cancel")?;
+    app.wait_for("close busy=false")?;
+    app.wait_for("policy=Ask;saved=0;pending=false")?;
+    Ok(())
+}
+
+#[test]
+fn fallback_from_settings_owner_clears_busy_on_escape() -> Result<(), String> {
+    let mut app = app();
+    app.press("Saved Tray")?;
+    app.press("Remove tray host")?;
+    app.press("Open settings")?;
+    app.wait_for("Settings fixture")?;
+    app.press("Close main from settings")?;
+    app.wait_for("System tray unavailable")?;
+    assert!(app.window_state("settings")?.is_none());
+    app.press_key("escape")?;
+    app.wait_for("close busy=false")?;
+    assert!(!app.window_state("main")?.unwrap().minimized);
+    app.press_window_close("main")?;
+    app.wait_for("System tray unavailable")?;
+    app.press("Minimize to taskbar")?;
+    assert!(app.window_state("main")?.unwrap().minimized);
+    assert!(!quit_requested(&app));
     Ok(())
 }
 
@@ -176,7 +356,7 @@ fn first_close_has_one_semantic_native_decision_and_cancel_does_not_save() -> Re
 fn tray_choice_waits_for_ack_then_hides_and_native_tray_click_restores() -> Result<(), String> {
     let mut app = app();
     app.press_window_close("main")?;
-    app.answer_dialog(DialogAnswer::Press("Minimize to tray".into()))?;
+    app.press("Minimize to tray")?;
     app.wait_for("policy=Ask;saved=0;pending=true")?;
     assert!(
         app.window_state("main")?.unwrap().visible,
@@ -186,16 +366,21 @@ fn tray_choice_waits_for_ack_then_hides_and_native_tray_click_restores() -> Resu
     app.press("Acknowledge save")?;
     app.run_for(Duration::from_millis(40))?;
     assert!(!app.window_state("main")?.unwrap().visible);
-    assert_eq!(
-        app.screen().dialogs().len(),
-        1,
-        "no extra remember confirmation"
+    assert!(
+        app.screen().dialogs().is_empty(),
+        "the main-window decision must not create a platform alert"
     );
+    assert!(!app.shows("Close neoko-terminal?"));
     app.run_for(Duration::from_millis(140))?;
     let click = tray(&app).click;
     assert_ne!(click, 0);
     select(&mut app, click)?;
     app.wait_for("policy=Tray;saved=1;pending=false")?;
+    assert_eq!(
+        app.screen().count("role:alertdialog")?,
+        0,
+        "the acknowledged choice must not leave another confirmation"
+    );
     assert_ne!(
         app.screen().texts().join("\n"),
         before,
@@ -219,16 +404,15 @@ fn tray_choice_waits_for_ack_then_hides_and_native_tray_click_restores() -> Resu
 fn failed_remember_never_quits_or_applies_the_policy() -> Result<(), String> {
     let mut app = app();
     app.press_window_close("main")?;
-    app.answer_dialog(DialogAnswer::Press("Quit".into()))?;
+    app.press("Quit")?;
     app.wait_for("policy=Ask;saved=0;pending=true")?;
     assert!(!quit_requested(&app));
     app.press("Reject save")?;
     app.run_for(Duration::from_millis(40))?;
-    let dialog = app.pending_dialog().expect("storage failure is explicit");
-    assert!(dialog.message.as_deref().unwrap().contains("refused"));
+    app.wait_for("Test storage refused the write")?;
     assert!(app.window_state("main")?.unwrap().visible);
     assert!(!quit_requested(&app));
-    app.answer_dialog(DialogAnswer::Press("OK".into()))?;
+    app.press("OK")?;
     app.wait_for("policy=Ask;saved=0;pending=false")?;
     Ok(())
 }
@@ -258,15 +442,8 @@ fn unconfirmed_tray_falls_back_to_taskbar_without_chaining_first_close_prompts()
     let mut app = app();
     app.press("Remove tray host")?;
     app.press_window_close("main")?;
-    assert!(
-        app.pending_dialog()
-            .unwrap()
-            .message
-            .as_deref()
-            .unwrap()
-            .contains("taskbar")
-    );
-    app.answer_dialog(DialogAnswer::Press("Minimize to tray".into()))?;
+    assert!(app.screen().texts().join(" ").contains("taskbar"));
+    app.press("Minimize to tray")?;
     app.press("Acknowledge save")?;
     app.run_for(Duration::from_millis(40))?;
     let window = app.window_state("main")?.unwrap();
@@ -274,7 +451,7 @@ fn unconfirmed_tray_falls_back_to_taskbar_without_chaining_first_close_prompts()
     assert!(!app.screen().commands().iter().any(|(_, command)| {
         matches!(command, Command::Desktop(command) if matches!(**command, DesktopCommand::Request(WindowRequest::Hide)))
     }), "fallback must minimize rather than hide the window");
-    assert_eq!(app.screen().dialogs().len(), 1);
+    assert!(!app.shows("Close neoko-terminal?"));
     assert!(!quit_requested(&app));
     tray_action(&mut app, "Show terminal")?;
     let window = app.window_state("main")?.unwrap();
@@ -286,7 +463,7 @@ fn unconfirmed_tray_falls_back_to_taskbar_without_chaining_first_close_prompts()
 fn restoration_invalidates_an_inflight_close() -> Result<(), String> {
     let mut app = app();
     app.press_window_close("main")?;
-    app.answer_dialog(DialogAnswer::Press("Minimize to tray".into()))?;
+    app.press("Minimize to tray")?;
     app.wait_for("policy=Ask;saved=0;pending=true")?;
     tray_action(&mut app, "Show terminal")?;
     app.press("Acknowledge save")?;
@@ -313,14 +490,7 @@ fn losing_the_linux_tray_host_restores_the_hidden_window() -> Result<(), String>
         .dispatch_event(remove, EventKind::Press, EventPayload::Map(Vec::new()));
     app.run_for(Duration::from_millis(2200))?;
     assert!(app.window_state("main")?.unwrap().visible);
-    assert!(
-        app.pending_dialog()
-            .unwrap()
-            .message
-            .as_deref()
-            .unwrap()
-            .contains("restored")
-    );
+    assert!(app.screen().texts().join(" ").contains("restored"));
     assert!(!quit_requested(&app));
     Ok(())
 }
@@ -385,7 +555,7 @@ fn NativeFixture() -> impl IntoElement {
         NATIVE_PHASE.store(0, std::sync::atomic::Ordering::SeqCst);
         desktop::quit();
     });
-    view().child(text(move || {
+    view().child(lifecycle.render()).child(text(move || {
         format!("Task-owned terminal work {}", pulses.get())
     }))
 }

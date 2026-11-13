@@ -5,6 +5,7 @@
 
 #[path = "preferences/catalog.rs"]
 pub mod catalog;
+mod cursor;
 #[path = "preferences/font.rs"]
 pub(crate) mod font;
 #[path = "preferences/io.rs"]
@@ -182,6 +183,9 @@ pub struct Preferences {
     /// Whether the cursor blinks; older documents retain a steady cursor.
     #[serde(default)]
     pub cursor_blink: bool,
+    /// Explicit #RRGGBB cursor color; absent uses a visible theme cursor.
+    #[serde(default)]
+    pub cursor_color: Option<String>,
     /// Interface appearance, independently of terminal theme.
     pub appearance: Appearance,
     /// Interface language; `system` keeps following the platform locale.
@@ -207,6 +211,7 @@ impl Preferences {
             font_size: catalog.defaults.font_size,
             cursor_style: CursorStyle::Block,
             cursor_blink: false,
+            cursor_color: None,
             appearance: Appearance::System,
             language: Language::System,
             default_backend: SessionBackend::Native,
@@ -227,6 +232,9 @@ impl Preferences {
             (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&self.font_size),
             "Terminal font size must be {MIN_FONT_SIZE}–{MAX_FONT_SIZE}"
         );
+        if let Some(color) = &self.cursor_color {
+            cursor::validate(color)?;
+        }
         if let Some(key) = font::validation_error(&self.font_family) {
             bail!("{}", locale::tr(Language::EnUs, "en-US", key));
         }

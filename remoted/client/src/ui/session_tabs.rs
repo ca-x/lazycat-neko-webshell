@@ -177,6 +177,11 @@ pub fn render(ui: Ui) -> impl IntoElement {
                                 &resources::current_workspace(ui),
                                 &ui.active.get(),
                             )
+                            .into_iter()
+                            .filter(|entry| {
+                                !entry.streams.is_empty() || !ui.tab_dismissed(&entry.key)
+                            })
+                            .collect::<Vec<_>>()
                         })
                     },
                     |entry| entry.key.clone(),
@@ -310,14 +315,22 @@ pub fn render(ui: Ui) -> impl IntoElement {
                                             )
                                         },
                                         || false,
-                                        move || entry.with(|entry| entry.streams.is_empty()),
-                                        move || actions::detach(ui, &entry.get_untracked().streams),
+                                        || false,
+                                        move || {
+                                            let entry = entry.get_untracked();
+                                            ui.dismiss_tab(&entry.key);
+                                            actions::detach(ui, &entry.streams);
+                                        },
                                     )),
                             )
                             .child(super::super::terminal_view::interaction::menu_action(
                                 "关闭此窗格连接",
-                                move || entry.with(|entry| entry.streams.is_empty()),
-                                move || actions::detach(ui, &entry.get_untracked().streams),
+                                || false,
+                                move || {
+                                    let entry = entry.get_untracked();
+                                    ui.dismiss_tab(&entry.key);
+                                    actions::detach(ui, &entry.streams);
+                                },
                             ))
                     },
                 ))),

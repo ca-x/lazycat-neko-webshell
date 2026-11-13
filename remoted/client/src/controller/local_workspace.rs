@@ -37,14 +37,13 @@ impl Actor {
         self.publish().await;
         let scope = self.scope.clone();
         let generation = self.model.generation;
-        let local = scope
-            .during(generation, async {
-                if persist {
-                    storage::select_local_workspace().await?;
-                }
-                host.local().await
-            })
-            .await?;
+        // A keyring write may already be running in spawn_blocking. Finish its
+        // transaction before releasing the binding writer to a newer selection.
+        if persist {
+            storage::select_local_workspace().await?;
+        }
+        ensure!(scope.current() == generation, "设备选择已变化");
+        let local = scope.during(generation, host.local()).await?;
         self.session = Some(WorkspaceChannel::Local(local));
         self.model.phase = Phase::Ready;
         self.model.permission = Some(Permission::Operate);

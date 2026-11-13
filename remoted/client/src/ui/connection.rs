@@ -115,7 +115,14 @@ pub(super) fn connection_settings(ui: Ui) -> impl IntoElement {
                         move || {
                             address.with(|value| value.trim().is_empty())
                                 || ui.model.with(|model| {
-                                    !matches!(model.phase, Phase::Offline | Phase::RelayReady)
+                                    matches!(
+                                        model.phase,
+                                        Phase::Checking
+                                            | Phase::Connecting
+                                            | Phase::AwaitingApproval
+                                            | Phase::Persisting
+                                            | Phase::AwaitingReady
+                                    )
                                 })
                         },
                         move || {

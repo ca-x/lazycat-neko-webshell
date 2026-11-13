@@ -162,7 +162,7 @@ impl Session {
             .max_frame_size(Some(protocol::MAX_RELAY_MESSAGE));
         let (mut socket, response) = timeout(
             DEADLINE,
-            tokio_tungstenite::connect_async_with_config(request, Some(config), false),
+            tokio_tungstenite::connect_async_with_config(request, Some(config), true),
         )
         .await
         .context("连接中转超时")?
@@ -790,3 +790,6 @@ mod tests {
 #[cfg(test)]
 #[path = "network/flow_control_tests.rs"]
 mod flow_control_tests;
+
+#[cfg(all(test, unix, not(target_os = "android")))]
+mod public_relay_tests;

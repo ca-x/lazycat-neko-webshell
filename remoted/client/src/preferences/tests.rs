@@ -49,6 +49,7 @@ fn old_documents_keep_embedded_font_steady_block_cursor_and_manual_control() -> 
     assert_eq!(saved.font_family, font::HACK);
     assert_eq!(saved.cursor_style, CursorStyle::Block);
     assert!(!saved.cursor_blink);
+    assert_eq!(saved.cursor_color, None);
     assert!(!saved.remote_auto_control);
     assert_eq!(saved.close_behavior, CloseBehavior::Ask);
     assert_eq!(saved.font_size, 22);
@@ -149,6 +150,7 @@ fn cursor_and_remote_control_settings_round_trip_without_coercing_invalid_values
         let mut saved = Preferences::defaults(catalog);
         saved.cursor_style = style;
         saved.cursor_blink = true;
+        saved.cursor_color = Some("#EFA028".into());
         saved.remote_auto_control = true;
         let encoded = saved.encode(catalog)?;
         assert_eq!(Preferences::decode(Some(&encoded), catalog)?, saved);
@@ -158,6 +160,8 @@ fn cursor_and_remote_control_settings_round_trip_without_coercing_invalid_values
         );
     }
     for (field, value) in [
+        ("cursor_color", serde_json::json!("red")),
+        ("cursor_color", serde_json::json!("#abc")),
         ("cursor_style", serde_json::json!("bar")),
         ("cursor_style", serde_json::json!("Block")),
         ("cursor_style", serde_json::Value::Null),

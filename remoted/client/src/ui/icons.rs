@@ -17,6 +17,9 @@ pub enum Icon {
     Refresh,
     Monitor,
     Close,
+    Minimize,
+    Maximize,
+    Restore,
 }
 
 impl Icon {
@@ -33,6 +36,9 @@ impl Icon {
             Self::Add => include_str!("icons/Plus.svg"),
             Self::Refresh => include_str!("icons/RefreshCw.svg"),
             Self::Monitor => include_str!("icons/Monitor.svg"),
+            Self::Minimize => include_str!("icons/Minimize.svg"),
+            Self::Maximize => include_str!("icons/Maximize.svg"),
+            Self::Restore => include_str!("icons/Restore.svg"),
             Self::Close => include_str!("icons/X.svg"),
         }
     }

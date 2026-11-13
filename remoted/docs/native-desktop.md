@@ -5,11 +5,29 @@ neoko-terminal 是独立原生终端，桌面端可直接创建本机终端、hc
 可执行文件与 deb 包改名为 `neoko-terminal`；deb 声明替换旧 `neko-remoted-desktop` 包。
 macOS 目录为 `neoko-terminal.app`；中文系统显示“小橘终端”，英文显示 `neoko-terminal`。Linux 应用菜单也提供中英文名称。
 
-桌面采用独立版本 **0.5.3**，发行源码 tag 为 `neoko-terminal-desktop-v0.5.3`。
+桌面采用独立版本 **0.5.4**，发行源码 tag 为 `neoko-terminal-desktop-v0.5.4`。
 本桌面构件使用共享 crate `0.4.3`，Android 按独立版本更新，既有发布 tag 不变。
 桌面版本进入包名、deb/APP 元数据与 `build-info.json`；`crate_version` 记录共享源码的
 0.4.3。`cargo_binary_sha256` 标识打包前的 Cargo binary（Mac ad-hoc 签名会改变 APP 内的 binary）。
 桌面包通过独立发行流程发布，不使用 Android 的三资产 publisher。
+
+## 0.5.4 交互修正
+
+本机、各个远程主机和配对页面分别持有连接与终端缓冲。切换主机只切换显示，后台输出、
+终端控制状态和会话选择继续保留；明确断开只影响选中的连接。远程终端按设备授权和
+终端身份记录上次确认的控制选择，重新附着时可再次请求控制；只读授权仍不能取得控制。
+
+设置增加光标颜色（`#RRGGBB` 或跟随主题）；主题光标自动保持对比度，竖线和下划线
+至少为 2 个逻辑像素，并在文字之后绘制。主窗口提供最小化、最大化/还原、关闭图标；
+退出确认框固定归主窗口，设置窗口关闭不会使确认流程悬挂。托盘使用小橘品牌图标，
+Linux 窗口使用与安装包 desktop entry 相同的图标标识。Windows ZIP 附带窗口图标
+`neoko-terminal.ico`，macOS APP 注册 `AppIcon.icns`，均从相同品牌 PNG 生成。
+开发者可安装 ImageMagick 后运行 `python3 remoted/client/scripts/generate-app-icons.py` 重建
+已入库的 ICO/ICNS；正常构建只复制这些图标，不依赖 ImageMagick。
+
+Herdr 会话与 Agent 信息后台刷新，不进入前台“正在打开”状态。原生主机的 Herdr 可见
+画面轮询间隔从 250 毫秒缩短至 50 毫秒；Herdr 流失败仅标记该流。客户端和原生主机
+连接 Relay 时启用 TCP_NODELAY，减少小输入包等待；实际交互延迟仍受网络路径影响。
 
 ## 支持范围
 
@@ -55,7 +73,7 @@ Linux 构建依赖（CI 为 Ubuntu 24.04）：
 sudo apt-get install libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   libdbus-1-dev pkg-config dpkg-dev gnome-keyring dbus-x11
 rustup target add x86_64-unknown-linux-gnu
-python3 remoted/client/scripts/build-desktop.py --version 0.5.3 \
+python3 remoted/client/scripts/build-desktop.py --version 0.5.4 \
   --target x86_64-unknown-linux-gnu
 ```
 
@@ -63,7 +81,7 @@ Windows x64 使用 MSVC 和 Windows SDK（GitHub windows-2022 已有）：
 
 ```powershell
 rustup target add x86_64-pc-windows-msvc
-python remoted/client/scripts/build-desktop.py --version 0.5.3 --target x86_64-pc-windows-msvc
+python remoted/client/scripts/build-desktop.py --version 0.5.4 --target x86_64-pc-windows-msvc
 ```
 
 Mac 两个 CPU 分别打独立包；NSH 使用 macOS 14 API，最低系统版本 **14.0**，不是 12/13：
@@ -71,16 +89,16 @@ Mac 两个 CPU 分别打独立包；NSH 使用 macOS 14 API，最低系统版本
 ```sh
 export MACOSX_DEPLOYMENT_TARGET=14.0
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
-python3 remoted/client/scripts/build-desktop.py --version 0.5.3 --target aarch64-apple-darwin
-python3 remoted/client/scripts/build-desktop.py --version 0.5.3 --target x86_64-apple-darwin
+python3 remoted/client/scripts/build-desktop.py --version 0.5.4 --target aarch64-apple-darwin
+python3 remoted/client/scripts/build-desktop.py --version 0.5.4 --target x86_64-apple-darwin
 ```
 
 默认输出 `remoted/client/target/desktop-dist/`，每个目标生成包、独立 build-info 和 SHA-256：
 
-- `neoko-terminal-0.5.3-x86_64-pc-windows-msvc.zip`，内含 EXE、安装说明和许可证。
-- `neoko-terminal-0.5.3-aarch64-apple-darwin.zip`，内含 `neoko-terminal.app`。
-- `neoko-terminal-0.5.3-x86_64-apple-darwin.zip`，独立 Intel APP。
-- `neoko-terminal-0.5.3-x86_64-unknown-linux-gnu.deb`，含 desktop entry、图标、许可证。
+- `neoko-terminal-0.5.4-x86_64-pc-windows-msvc.zip`，内含 EXE、安装说明和许可证。
+- `neoko-terminal-0.5.4-aarch64-apple-darwin.zip`，内含 `neoko-terminal.app`。
+- `neoko-terminal-0.5.4-x86_64-apple-darwin.zip`，独立 Intel APP。
+- `neoko-terminal-0.5.4-x86_64-unknown-linux-gnu.deb`，含 desktop entry、图标、许可证。
 
 Windows 运行前需安装 [Microsoft Visual C++ Redistributable x64](https://aka.ms/vs/17/release/vc_redist.x64.exe)；当前 EXE 导入 `VCRUNTIME140.dll` 和 `VCRUNTIME140_1.dll`，ZIP 未附带这两个运行库。Windows 未签名，可能触发 SmartScreen。Mac **仅 ad-hoc 签名，没有 Developer ID、没有公证**；
 Gatekeeper 可能要求系统设置中的“仍要打开”。不能把 codesign verify 通过称为官方签名或公证。
@@ -100,7 +118,7 @@ Android 使用独立 `neoko-terminal-android-vX.Y.Z` tag，不触发桌面或 We
 ```sh
 # 完成 commit/tag/push 后
 # workflow 必须已存在于默认分支，才能从该 tag 手动 dispatch。
-gh workflow run neoko-terminal-desktop.yml --ref neoko-terminal-desktop-v0.5.3 -f desktop_version=0.5.3
+gh workflow run neoko-terminal-desktop.yml --ref neoko-terminal-desktop-v0.5.4 -f desktop_version=0.5.4
 gh run list --workflow neoko-terminal-desktop.yml --limit 5
 gh run watch RUN_ID --exit-status
 gh run download RUN_ID --dir /tmp/remoted-desktop-ci
@@ -114,7 +132,7 @@ macos-15 runner 上指定 CPU target，两个包都显式构建；不同 runner 
 Linux amd64 deb 必须同时交付。最终 GitHub Release 必须为非 draft、非 prerelease；
 内部构建产物和暂存草稿不能当作发布完成。
 
-公开 Actions 从私有仓库读取构建产物，不重新编译客户端；核对固定 source tag、成功 run
+公开发行仓库的 Actions 从受信任源码仓库读取构建产物（源码仓库已公开），不重新编译客户端；核对固定 source tag、成功 run
 的 head SHA、四个 build-info 的 `source_sha`/`source_dirty=false`、版本、NSH revision、
 target、包内元数据与 SHA-256 后，发布独立 desktop release。校验覆盖 Mac 代码签名页、
 Windows PE x64 与 ZIP 内容、deb 元数据和二进制；发布后回读公开附件。

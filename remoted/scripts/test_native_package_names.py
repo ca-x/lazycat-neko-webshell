@@ -35,7 +35,8 @@ class DesktopPackageNameTests(unittest.TestCase):
         self.client.mkdir()
         (self.root / 'LICENSE').write_bytes((CLIENT.parent / 'LICENSE').read_bytes())
         for name in ('android/licenses/NSH-LICENSE-APACHE', 'android/licenses/NOTICE',
-                     'android/res/drawable/neko.png'):
+                     'android/res/drawable/neko.png', 'assets/icons/neoko-terminal.ico',
+                     'assets/icons/neoko-terminal.icns'):
             destination = self.client / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes((CLIENT / name).read_bytes())
@@ -150,6 +151,11 @@ print(library.g_app_info_get_display_name(application).decode())
                     info = plistlib.loads(archive.read(prefix + 'Info.plist'))
                     self.assertEqual(info['CFBundleIdentifier'], 'community.lazycat.neko.remoted')
                     self.assertEqual(info['CFBundleExecutable'], 'neoko-terminal')
+                    self.assertEqual(info['CFBundleIconFile'], 'AppIcon.icns')
+                    icon = archive.read(prefix + 'Resources/AppIcon.icns')
+                    self.assertEqual(icon[:4], b'icns')
+                    self.assertEqual(icon, (CLIENT / 'assets/icons/neoko-terminal.icns').read_bytes())
+                    self.assertEqual(self.signed_apps[-2]['Contents/Resources/AppIcon.icns'], icon)
                     self.assertEqual(info['CFBundleDisplayName'], 'neoko-terminal')
                     self.assertEqual(info['CFBundleDevelopmentRegion'], 'en')
                     self.assertEqual(set(info['CFBundleLocalizations']), {'en', 'zh', 'zh-Hans', 'zh-Hant'})
@@ -170,6 +176,8 @@ print(library.g_app_info_get_display_name(application).decode())
                 self.assertEqual(archive.read('licenses/fonts/' + name),
                                  (builder.native_fonts.FONT_ROOT / source).read_bytes())
             self.assertEqual(archive.read('neoko-terminal.exe'), self.payload)
+            self.assertEqual(archive.read('neoko-terminal.ico'),
+                             (CLIENT / 'assets/icons/neoko-terminal.ico').read_bytes())
             info = json.loads(archive.read('build-info.json'))
             self.assertEqual(info['signing'], 'unsigned')
             self.assertEqual(info['cargo_binary_sha256'], hashlib.sha256(self.payload).hexdigest())

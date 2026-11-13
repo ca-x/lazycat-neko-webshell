@@ -76,8 +76,24 @@ impl Context {
 
     /// Theme cursor fill for editable and read-only surfaces.
     pub fn cursor(self) -> AdaptiveColor {
-        self.theme()
-            .map_or_else(|| self.foreground(), |theme| color(theme.cursor))
+        if let Some(rgb) = self
+            .ui
+            .and_then(|ui| ui.preferences().cursor_color)
+            .as_deref()
+            .and_then(super::cursor::parse)
+        {
+            return color(rgb);
+        }
+        self.theme().map_or_else(
+            || self.foreground(),
+            |theme| {
+                color(super::cursor::visible(
+                    theme.cursor,
+                    theme.background,
+                    theme.foreground,
+                ))
+            },
+        )
     }
 
     /// Selection highlight for NSH selectable text; native selection keeps its own text color.

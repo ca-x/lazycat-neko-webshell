@@ -74,6 +74,22 @@ impl Navigation {
             value.composer = !value.composer;
         });
     }
+    pub(super) fn presentations(self) -> Vec<(String, bool)> {
+        self.presentations.with_untracked(|values| {
+            values
+                .iter()
+                .map(|(stream, value)| (stream.clone(), value.composer))
+                .collect()
+        })
+    }
+    pub(super) fn restore_presentations(self, values: Vec<(String, bool)>) {
+        self.presentations.set(
+            values
+                .into_iter()
+                .map(|(stream, composer)| (stream, Presentation { composer }))
+                .collect(),
+        );
+    }
     pub fn retain_sessions(self, streams: &[String]) {
         if self
             .presentations

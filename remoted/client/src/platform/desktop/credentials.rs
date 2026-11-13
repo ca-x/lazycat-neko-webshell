@@ -122,6 +122,7 @@ fn request_with_store(store: &impl Store, value: &Value) -> Result<Value> {
             "remoted.identity.v1",
             "remoted.bindings.v1",
             "remoted.last-relay.v1",
+            crate::storage::control::KEY,
             crate::preferences::STORAGE_KEY,
             crate::platform::HOST_IDENTITY_KEY,
         ]
@@ -181,6 +182,7 @@ mod tests {
         for key in [
             crate::preferences::STORAGE_KEY,
             crate::platform::HOST_IDENTITY_KEY,
+            crate::storage::control::KEY,
         ] {
             assert!(
                 request_with_store(&store, &json!({"op":"secureGet","key":key}))
