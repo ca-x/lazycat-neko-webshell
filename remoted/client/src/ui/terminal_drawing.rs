@@ -1,12 +1,10 @@
 //! Row paint commands for a bounded native viewport; Ghostty owns grapheme bounds.
 
 use super::geometry::Grid;
-use crate::ui::kitty_image_layer;
 use crate::{
     preferences::{CursorStyle, current_context},
     terminal::GridCell,
 };
-use neko_ghostty::kitty::{Layer, Placement};
 use nsh_base::TerminalStyle;
 use nsh_core::{
     canvas::{CanvasFont, CanvasOp, CanvasTextAlign, CanvasTextBaseline},
@@ -75,29 +73,15 @@ pub(super) fn cursor_cell(cells: &[GridCell], column: usize) -> (usize, usize) {
         .map_or((column, 1), |cell| (cell.column, cell.width))
 }
 
-/// Resolve text styling separately from geometry, keeping background opacity intact.
-pub(super) fn draw(
+/// Explicit cell backgrounds are painted before the viewport's below-text images.
+pub(super) fn backgrounds(
     cells: &[GridCell],
-    fonts: &Fonts,
-    paint: Paint,
-    images: &[Placement],
-    row: usize,
-    resolve: impl Fn(TerminalStyle) -> (Option<Hsla>, Option<Hsla>),
+    grid: Grid,
+    resolve: impl Fn(TerminalStyle) -> Option<Hsla>,
 ) -> Painter {
-    let grid = fonts.grid;
-    let mut painter = Painter::new()
-        .text_align(CanvasTextAlign::Left)
-        .text_baseline(CanvasTextBaseline::Alphabetic);
-    painter = kitty_image_layer::draw(
-        painter,
-        images,
-        Layer::BelowBackground,
-        row,
-        grid.cell_width,
-        grid.row_height,
-    );
+    let mut painter = Painter::new();
     for cell in cells {
-        if let Some(background) = resolve(cell.style).1 {
+        if let Some(background) = resolve(cell.style) {
             painter = painter.fill_color(background).fill_rect(
                 cell.column as f32 * grid.cell_width,
                 0.0,
@@ -106,14 +90,20 @@ pub(super) fn draw(
             );
         }
     }
-    painter = kitty_image_layer::draw(
-        painter,
-        images,
-        Layer::BelowText,
-        row,
-        grid.cell_width,
-        grid.row_height,
-    );
+    painter
+}
+
+/// Selection, cursor, and glyphs remain above the below-text image layer.
+pub(super) fn foreground(
+    cells: &[GridCell],
+    fonts: &Fonts,
+    paint: Paint,
+    resolve: impl Fn(TerminalStyle) -> (Option<Hsla>, Option<Hsla>),
+) -> Painter {
+    let grid = fonts.grid;
+    let mut painter = Painter::new()
+        .text_align(CanvasTextAlign::Left)
+        .text_baseline(CanvasTextBaseline::Alphabetic);
     if let Some((start, end)) = paint.selected {
         let (start, _) = cursor_cell(cells, start);
         let (end, width) = cursor_cell(cells, end);
@@ -175,14 +165,7 @@ pub(super) fn draw(
         }
         painter = painter.restore();
     }
-    kitty_image_layer::draw(
-        painter,
-        images,
-        Layer::AboveText,
-        row,
-        grid.cell_width,
-        grid.row_height,
-    )
+    painter
 }
 
 fn cursor_bounds(
@@ -205,6 +188,19 @@ fn cursor_bounds(
 mod tests {
     use super::*;
     use nsh_core::{canvas::CanvasOp, color::rgb};
+
+    fn draw(
+        cells: &[GridCell],
+        fonts: &Fonts,
+        paint: Paint,
+        resolve: impl Fn(TerminalStyle) -> (Option<Hsla>, Option<Hsla>),
+    ) -> Painter {
+        let mut painter = backgrounds(cells, fonts.grid, |style| resolve(style).1);
+        for op in foreground(cells, fonts, paint, resolve).finish().ops {
+            painter = painter.op(op);
+        }
+        painter
+    }
 
     fn fonts() -> Fonts {
         Fonts {
@@ -248,7 +244,7 @@ mod tests {
             text: "猫\u{301}".into(),
             style,
         }];
-        let drawing = draw(&cells, &fonts(), paint(), &[], 0, |_| (None, None)).finish();
+        let drawing = draw(&cells, &fonts(), paint(), |_| (None, None)).finish();
         assert!(
             drawing
                 .ops
@@ -277,7 +273,7 @@ mod tests {
             text: "secret".into(),
             style,
         }];
-        let drawing = draw(&cells, &fonts(), paint(), &[], 0, |_| {
+        let drawing = draw(&cells, &fonts(), paint(), |_| {
             (None, Some(rgb(0x333333).into()))
         })
         .finish();
@@ -327,7 +323,7 @@ mod tests {
             let mut paint = paint();
             paint.cursor = Some(3);
             paint.cursor_style = style;
-            let drawing = draw(&cells, &fonts(), paint, &[], 0, |_| (None, None)).finish();
+            let drawing = draw(&cells, &fonts(), paint, |_| (None, None)).finish();
             let rect = drawing
                 .ops
                 .iter()

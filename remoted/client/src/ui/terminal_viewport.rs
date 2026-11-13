@@ -2,6 +2,8 @@
 
 use super::{Buffer, colors, drawing, selection::Interaction};
 use crate::preferences::{current_context, tr};
+use crate::ui::kitty_image_layer;
+use neko_ghostty::kitty::Layer;
 use nsh_core::prelude::*;
 
 pub(super) fn render(
@@ -77,49 +79,77 @@ pub(super) fn render(
             )
         });
         let first = range.get().start;
-        let mut painter = Painter::new();
+        let canvas_height = range.get().len() as f32 * grid.row_height;
+        let mut painter = Painter::new()
+            .save()
+            .begin_path()
+            .rect(Bounds::new(
+                Point::default(),
+                Size::new(px(width.get()), px(canvas_height)),
+            ))
+            .clip();
         rows.with(|rows| {
             fonts.with(|fonts| {
                 images.with(|images| {
-                    for (row, cells) in rows {
-                        let paint = drawing::Paint {
-                            foreground: color(appearance.foreground()),
-                            background: color(appearance.background()),
-                            selection: appearance.selection(),
-                            cursor_color: color(appearance.cursor()),
-                            selected: selection
-                                .selected
-                                .get()
-                                .columns(*row, usize::from(buffer.size.get().cols)),
-                            cursor: cursor
-                                .filter(|(cursor_row, _)| cursor_row == row)
-                                .map(|(_, col)| col),
-                            cursor_style: appearance.cursor_style(),
-                        };
-                        painter = std::mem::take(&mut painter)
-                            .save()
-                            .translate(0.0, (row - first) as f32 * grid.row_height)
-                            .begin_path()
-                            .rect(Bounds::new(
-                                Point::default(),
-                                Size::new(px(width.get()), px(grid.row_height)),
-                            ))
-                            .clip();
-                        for op in drawing::draw(cells, fonts, paint, images, *row, |style| {
-                            let (fg, bg) = colors(style);
-                            (fg.map(color), bg.map(color))
-                        })
-                        .finish()
-                        .ops
-                        {
-                            painter = std::mem::take(&mut painter).op(op);
+                    // Images cross cell boundaries. Painting each placement once avoids
+                    // antialiased seams at fractional device-pixel row boundaries.
+                    for layer in [Layer::BelowBackground, Layer::BelowText, Layer::AboveText] {
+                        painter = kitty_image_layer::draw(
+                            std::mem::take(&mut painter),
+                            images,
+                            layer,
+                            first,
+                            grid.cell_width,
+                            grid.row_height,
+                            canvas_height,
+                        );
+                        if layer == Layer::AboveText {
+                            continue;
                         }
-                        painter = std::mem::take(&mut painter).restore();
+                        for (row, cells) in rows {
+                            let drawing = if layer == Layer::BelowBackground {
+                                drawing::backgrounds(cells, grid, |style| {
+                                    colors(style).1.map(color)
+                                })
+                            } else {
+                                let paint = drawing::Paint {
+                                    foreground: color(appearance.foreground()),
+                                    background: color(appearance.background()),
+                                    selection: appearance.selection(),
+                                    cursor_color: color(appearance.cursor()),
+                                    selected: selection
+                                        .selected
+                                        .get()
+                                        .columns(*row, usize::from(buffer.size.get().cols)),
+                                    cursor: cursor
+                                        .filter(|(cursor_row, _)| cursor_row == row)
+                                        .map(|(_, col)| col),
+                                    cursor_style: appearance.cursor_style(),
+                                };
+                                drawing::foreground(cells, fonts, paint, |style| {
+                                    let (fg, bg) = colors(style);
+                                    (fg.map(color), bg.map(color))
+                                })
+                            };
+                            painter = std::mem::take(&mut painter)
+                                .save()
+                                .translate(0.0, (row - first) as f32 * grid.row_height)
+                                .begin_path()
+                                .rect(Bounds::new(
+                                    Point::default(),
+                                    Size::new(px(width.get()), px(grid.row_height)),
+                                ))
+                                .clip();
+                            for op in drawing.finish().ops {
+                                painter = std::mem::take(&mut painter).op(op);
+                            }
+                            painter = std::mem::take(&mut painter).restore();
+                        }
                     }
                 })
             })
         });
-        painter
+        painter.restore()
     })
     // Retain the existing semantic target for selection/input consumers.
     .test_id("terminal-grid-row")

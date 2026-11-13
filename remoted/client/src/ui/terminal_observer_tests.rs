@@ -37,7 +37,21 @@ fn Fixture() -> impl IntoElement {
             "evict-history",
             false,
             || false,
-            move || evict.write("\r\nreplacement".repeat(1010)),
+            move || {
+                // Ghostty's line limit is approximate and prunes whole pages.
+                // Leave a bounded page margin and prove the selected row is gone.
+                evict.write("\r\nreplacement".repeat(4096));
+                let first = evict
+                    .buffer
+                    .cells(0)
+                    .into_iter()
+                    .map(|cell| cell.text)
+                    .collect::<String>();
+                assert!(
+                    !first.contains("猫e\u{301} tail"),
+                    "fixture did not evict the selected source row"
+                );
+            },
         ))
         .child(controls::action(
             "replace-output",
@@ -225,8 +239,29 @@ fn output_outside_a_finalized_selection_preserves_copy_but_eviction_and_reset_in
             Some("猫e\u{301} tail\nnext\nlast"),
             "unselected output must keep the original selection"
         );
+        assert!(
+            app.screen()
+                .matches("id:terminal-selection-actions")
+                .unwrap(),
+            "unselected output must keep the selection actions visible"
+        );
         app.press(change).unwrap();
+        // Feeding the page margin can keep the debug VT busy beyond five seconds.
+        app.wait_until(
+            &format!(
+                "{change}: selection actions disappear after the selected source cells disappear"
+            ),
+            std::time::Duration::from_secs(30),
+            |screen| matches!(screen.matches("id:terminal-selection-actions"), Ok(false)),
+        )
+        .unwrap();
         app.right_click("id:terminal-selection").unwrap();
+        app.wait_until(
+            "Copy unavailable after the selected source cells disappear",
+            std::time::Duration::from_secs(5),
+            |screen| matches!(screen.press_target("id:terminal-menu-copy"), Ok(None)),
+        )
+        .unwrap();
         assert!(
             app.press("id:terminal-menu-copy").is_err(),
             "{change} must not copy different text under an old selection"
@@ -236,4 +271,54 @@ fn output_outside_a_finalized_selection_preserves_copy_but_eviction_and_reset_in
             Some("猫e\u{301} tail\nnext\nlast")
         );
     }
+}
+
+#[component]
+fn ImageLayersFixture() -> impl IntoElement {
+    let surface = Surface::new();
+    surface.buffer.resize(TerminalSize::new(12, 8));
+    surface.write(
+        concat!(
+            "\x1b[?25l\x1b[41mBG\x1b[0m\x1b[1;1H",
+            "\x1b_Ga=T,f=24,s=1,v=1,c=3,r=4,C=1,z=-2147483648,i=1,q=2;AQID\x1b\\",
+            "\x1b_Ga=T,f=24,s=1,v=1,c=3,r=4,C=1,z=-1,i=2,q=2;AQID\x1b\\",
+            "\x1b_Ga=T,f=24,s=1,v=1,c=3,r=4,C=1,z=0,i=3,q=2;AQID\x1b\\",
+        )
+        .into(),
+    );
+    render(surface.buffer, signal(None), || false)
+}
+
+#[test]
+fn images_cross_rows_once_in_native_layer_order_without_clip_seams() {
+    use nsh_core::canvas::CanvasOp;
+    let mut app = Headless::start(EngineConfig {
+        viewport: Size::new(px(640.0), px(480.0)),
+        ..EngineConfig::new(Root::of::<ImageLayersFixture>())
+    })
+    .unwrap();
+    let canvases = test_support::Canvases::observe(&mut app);
+    app.first_render().unwrap();
+    let rows = canvases.rows(&app);
+    assert_eq!(rows.len(), 1);
+    let drawing = &rows[0].1;
+    let images: Vec<_> = drawing
+        .ops
+        .iter()
+        .enumerate()
+        .filter_map(|(i, op)| matches!(op, CanvasOp::DrawImage { .. }).then_some(i))
+        .collect();
+    assert_eq!(images.len(), 3, "one draw per placement across all rows");
+    let background = drawing
+        .ops
+        .iter()
+        .position(|op| matches!(op, CanvasOp::FillRect(_)))
+        .unwrap();
+    let glyph = drawing
+        .ops
+        .iter()
+        .position(|op| matches!(op, CanvasOp::FillText { .. }))
+        .unwrap();
+    assert!(images[0] < background && background < images[1]);
+    assert!(images[1] < glyph && glyph < images[2]);
 }

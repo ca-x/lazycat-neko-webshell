@@ -1,4 +1,4 @@
-//! Native Kitty image compositing for row canvases, including fractional cell metrics.
+//! Native Kitty images are composited once per viewport, including fractional cell metrics.
 
 use neko_ghostty::kitty::{Layer, Placement};
 use nsh_core::{
@@ -7,7 +7,7 @@ use nsh_core::{
     prelude::*,
 };
 
-/// Paint one native image layer in the canvas of a global scrollback row.
+/// Paint one image layer relative to the viewport's first global scrollback row.
 pub(super) fn draw(
     mut painter: Painter,
     placements: &[Placement],
@@ -15,6 +15,7 @@ pub(super) fn draw(
     row: usize,
     cell_width: f32,
     row_height: f32,
+    viewport_height: f32,
 ) -> Painter {
     if !cell_width.is_finite() || !row_height.is_finite() || cell_width <= 0.0 || row_height <= 0.0
     {
@@ -41,7 +42,7 @@ pub(super) fn draw(
             || !y.is_finite()
             || !width.is_finite()
             || !height.is_finite()
-            || y >= row_height
+            || y >= viewport_height
             || y + height <= 0.0
         {
             continue;
@@ -100,6 +101,7 @@ mod tests {
             11,
             8.5,
             20.0,
+            20.0,
         )
         .finish();
         let CanvasOp::DrawImage {
@@ -126,6 +128,7 @@ mod tests {
                 Layer::AboveText,
                 11,
                 8.5,
+                20.0,
                 20.0
             )
             .finish()
@@ -139,6 +142,7 @@ mod tests {
                 Layer::BelowText,
                 12,
                 8.5,
+                20.0,
                 20.0
             )
             .finish()

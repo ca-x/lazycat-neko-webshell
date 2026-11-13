@@ -142,6 +142,7 @@ pub fn render_interactive(
             move || selection.selected.get().active,
             move || {
                 view()
+                    .test_id("terminal-selection-actions")
                     .absolute()
                     .top_2()
                     .right_2()
