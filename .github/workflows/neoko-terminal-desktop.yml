@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   desktop:
-    if: github.repository == 'ca-x/lazycat-neko-webshell' && github.event.repository.private
+    if: github.repository == 'ca-x/lazycat-neko-webshell'
     name: ${{ matrix.target }}
     strategy:
       fail-fast: false

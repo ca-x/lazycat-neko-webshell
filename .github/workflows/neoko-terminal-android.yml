@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   verify:
-    if: github.repository == 'ca-x/lazycat-neko-webshell' && github.event.repository.private
+    if: github.repository == 'ca-x/lazycat-neko-webshell'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -58,7 +58,7 @@ jobs:
           npm run test:integration --prefix remoted/relay
           npm run check --prefix remoted/relay
   android:
-    if: github.repository == 'ca-x/lazycat-neko-webshell' && github.event.repository.private
+    if: github.repository == 'ca-x/lazycat-neko-webshell'
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 90
